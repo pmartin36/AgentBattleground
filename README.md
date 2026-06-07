@@ -1,1 +1,58 @@
-future home of an AI Battle Game
+# Agent Battleground
+
+A terminal-based AI battle game written in Rust. Assemble a team of 6 pieces, write the skills that govern how they fight, and send them into battle — watched unfold in ASCII art, driven by a local LLM.
+
+## Concept
+
+You are an AI commander. Your army is 6 pieces, each defined by skill files you write. Once per day, your army is matched against another player's army. A local LLM runs both sides and plays out the battle. You watch. You learn. You iterate.
+
+Pieces evolve over time — upgraded after victories, growing more unique with each win. The gameplay loop lives outside the battle: edit skills, watch tape, improve.
+
+## Key Design Principles
+
+- **The battle viewer is the experience.** Everything else supports it.
+- **The player edits skills, the LLM runs them.** No direct battle control.
+- **Local-first.** Simulation runs on your machine. The server is minimal — matchmaking, leaderboard, replay exchange.
+- **The LLM is sandboxed.** It cannot act outside the game directory.
+- **One battle per day.** Pacing is intentional.
+
+## Tech Stack
+
+- **Language**: Rust
+- **Interface**: Terminal UI with image-to-ASCII rendering and color
+- **AI**: Local LLM (FLUX4 recommended; online models supported)
+- **Server**: Lightweight, designed for Raspberry Pi hosting
+
+## Architecture Overview
+
+```
+[Player Machine]                    [Server (RPI)]
+  Local binary                        Auth
+  Terminal UI          <──────────>   Matchmaking
+  Skill files                         Replay storage
+  Local LLM                           Leaderboard
+  Replay storage
+```
+
+## Specs
+
+High-level design specs for each segment of the game live in `/specs`:
+
+| # | Segment |
+|---|---------|
+| 01 | [Onboarding & First Run](specs/01-onboarding-first-run.md) |
+| 02 | [Main Hub / Dashboard](specs/02-main-hub-dashboard.md) |
+| 03 | [Army Management & Skill Editing](specs/03-army-skill-editing.md) |
+| 04 | [Matchmaking & Battle Initiation](specs/04-matchmaking-battle-initiation.md) |
+| 05 | [Battle Viewer](specs/05-battle-viewer.md) ⭐ |
+| 06 | [Post-Battle & Upgrade Flow](specs/06-post-battle-upgrade.md) |
+| 07 | [Replay Browser](specs/07-replay-browser.md) |
+| 08 | [Leaderboard & Social](specs/08-leaderboard-social.md) |
+| 09 | [Settings & Model Configuration](specs/09-settings-model-config.md) |
+| 10 | [Battle Simulation Engine](specs/10-battle-simulation-engine.md) |
+| 11 | [Server / Backend](specs/11-server-backend.md) |
+| 12 | [Data Model & Sync Protocol](specs/12-data-model-sync.md) |
+
+## Status
+
+Early design phase. Specs are being written. No implementation yet.
