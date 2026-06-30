@@ -9,9 +9,11 @@
 //! replace `fill`/`label` in place. Do not extend the solid-fill approach.
 
 pub mod anim;
+pub mod composite;
 pub mod convert;
 pub mod grid;
 pub use anim::AnimatedSprite;
+pub use composite::{composite, Placement};
 pub use convert::convert;
 pub use grid::{draw_grid, Cell, Grid};
 
