@@ -97,6 +97,20 @@ Generation engine: **stable-diffusion.cpp** (pure C/C++, GGUF-quantized, ggml fa
 ## Current Implementation State
 Only an M1 **placeholder** exists in the `render` crate: a solid-color braille `fill` plus a centered `label`, used to make scene switching visible (see `14-scene-architecture`). None of the conversion, compositing, depth-sort, or animation described above is built yet. The placeholder is marked as such in-crate and is not the rendering model to extend.
 
+## Validation
+The renderer is validated in three tiers of increasing difficulty. Each tier pairs an automated **golden test** (the gate) with a switchable **debug demo scene** (the eyeball check). The prototypes in `experiments/ascii_test/` are the **oracle** — a tier's output must match the corresponding prototype for the same input.
+
+| Tier | Exercises | Golden test (gate) | Demo scene |
+|---|---|---|---|
+| 1 · static sprite | `convert`: alpha cutout, luma threshold, color, fit-to-area aspect | `convert(fixture, area)` grid matches the `downrez` reference | `RenderStatic` |
+| 2 · animated sprite | + GIF decode, per-frame grids, frame timing | frame count + a chosen frame's grid match the `anim` reference | `RenderAnim` |
+| 3 · overlapping animating sprites, alpha 0/1 | + `composite`, depth/occlusion, binary-cutout transparency | near sprite occludes far at overlap; draw order matches camera `depth_key` | `RenderComposite` |
+
+- **Golden tests** are headless `render`-crate tests (no terminal/display) — the CI gate.
+- **Demo scenes** are **debug-build-only** (gated like `--inspect`), registered into the scene catalog so they are switchable from the inspector / `1`–`4` keys; they do not ship in the real game's scene list.
+- Tier 3 uses **binary alpha (0/1)** only — translucent blending is out of v1 scope (see *Decisions (v1)*); it is the integration test for what v1 actually ships.
+- Fixtures (a small PNG-with-alpha, a short GIF) are committed under the `render` crate's test assets so the golden tests are self-contained.
+
 ## Open Questions / TBDs
 - Per-piece upgrade visuals — how do sprites evolve across the two fidelities?
 - Battlefield representation (grid vs. free-form) and how sprites map onto it — see spec 05.
