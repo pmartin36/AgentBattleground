@@ -6,7 +6,7 @@ members = [
     "crates/game",
     "crates/inspector",
 ]
-exclude = ["ascii_test", "creature_lab"]
+exclude = ["experiments"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
