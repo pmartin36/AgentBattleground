@@ -9,6 +9,12 @@ The shared visual layer that turns image/sprite assets into terminal output. Eve
 - Multi-sprite compositing for crowds and battlefields
 - The renderer contract that scenes build against
 
+## Decisions (v1)
+- **No synthetic grain.** Sprites render as clean colored braille; conversion is deterministic. (Resolves the earlier grain/no-grain contradiction in favor of clean.)
+- **Cell-level compositing, binary alpha.** Sprites are pre-rendered to braille grids and painted back-to-front; alpha is a per-dot cutout (lit or transparent), not translucency. Sub-cell RGBA blending between overlapping translucent sprites is a future refinement.
+- **`convert` fits within a target area** (cols×rows), preserving source aspect, centered.
+- **Truecolor only.** 24-bit RGB terminals are assumed; no 256-color fallback in v1.
+
 ## Key Details
 
 ### Braille Cell Technique
@@ -23,8 +29,8 @@ Per cell:
 Flat, solid color regions saturate to fully-lit cells (solid fill); dot-matrix texture appears at edges and gradients.
 
 ### Color & Transparency
-- 24-bit RGB foreground per cell.
-- Native alpha transparency from the source asset (e.g. GIF alpha). Sprites composite over each other and over the background with transparent gaps preserved.
+- 24-bit RGB foreground per cell. **Truecolor terminals are assumed** (no 256-color fallback in v1).
+- Native alpha transparency from the source asset (e.g. GIF alpha), applied as a **per-dot binary cutout** (a dot is lit or transparent, not translucent). Sprites composite over each other and over the background with transparent gaps preserved; translucent blending between overlapping sprites is deferred to a future sub-cell RGBA compositor.
 - No background-color keying — transparency comes from the asset's alpha channel, not color matching.
 
 ### Aspect Correction
@@ -55,11 +61,11 @@ This is the standard 2D/2.5D sorting model (cf. Unity sorting-layer + order-in-l
 ### Animation
 - Animated assets (GIFs) decode to per-frame braille grids.
 - Frame timing honors the source asset's per-frame delays.
-- Any per-cell visual variation (grain/noise) is baked into the per-frame render so it is stable across wall-clock frames and only updates when the underlying animation frame or sprite position changes — never re-rolled per display frame.
+- Conversion is **deterministic**: the same source frame at the same size always yields the same braille grid — no synthetic grain or per-display-frame randomness. A grid changes only when the underlying animation frame or sprite position changes.
 
 ### Renderer Contract
 Scenes do not implement braille conversion themselves. The renderer exposes:
-- Convert an image/frame to a grid of colored braille cells at a target size.
+- Convert an image/frame to a grid of colored braille cells, fitting within a target area (cols×rows) while preserving source aspect, centered (source aspect drives the dot-grid dimensions, not the terminal cell ratio).
 - Composite positioned sprite grids into a screen buffer: a back-to-front painter's sort by `(band, camera.depth_key(position))`, honoring transparency. The camera supplies the projection and `depth_key` (see *Depth & Draw Order*).
 - Emit the buffer as ratatui drawable lines/spans.
 
@@ -82,12 +88,12 @@ Both paths: source image → background removal (transparent cutout) → braille
 Generation engine: **stable-diffusion.cpp** (pure C/C++, GGUF-quantized, ggml family — same ecosystem as the text model). Invoked via its CLI as a sandboxed subprocess, or via Rust bindings (`diffusion-rs`) in-process. Candidate models: Z-Image Turbo (fast, low VRAM) and FLUX.2 klein (higher quality). This keeps generation a local, optional, GPU-gated capability; the down-rezzer and import path require no GPU, so the minimum player spec stays "a terminal."
 
 ## Reference Prototype
-`ascii_test/` contains working prototypes used to validate the style:
+`experiments/ascii_test/` contains working prototypes used to validate the style:
 - `src/main.rs` — single-image fidelity (ASCII vs. half-block vs. braille, face crop)
 - `src/anim.rs` — animated GIF playback in braille with transparency
 - `src/flow.rs` — multi-sprite depth-layer crowd ("tidal wave") compositing
 - `src/downrez.rs` — standalone CLI: image → colored braille (the down-rezzer both front-ends use)
-- `creature_lab/` — CLI bake-off rig: generate (high-res) → img2img-simplify (battlefield) → rembg → braille preview, on stable-diffusion.cpp
+- `experiments/creature_lab/` — CLI bake-off rig: generate (high-res) → img2img-simplify (battlefield) → rembg → braille preview, on stable-diffusion.cpp
 
 ## Current Implementation State
 Only an M1 **placeholder** exists in the `render` crate: a solid-color braille `fill` plus a centered `label`, used to make scene switching visible (see `14-scene-architecture`). None of the conversion, compositing, depth-sort, or animation described above is built yet. The placeholder is marked as such in-crate and is not the rendering model to extend.
