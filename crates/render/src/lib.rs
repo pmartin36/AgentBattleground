@@ -8,8 +8,10 @@
 //! compositing, animation) is specified in `specs/13-rendering.md` and will
 //! replace `fill`/`label` in place. Do not extend the solid-fill approach.
 
+pub mod anim;
 pub mod convert;
 pub mod grid;
+pub use anim::AnimatedSprite;
 pub use convert::convert;
 pub use grid::{draw_grid, Cell, Grid};
 
