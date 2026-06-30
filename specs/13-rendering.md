@@ -98,18 +98,18 @@ Generation engine: **stable-diffusion.cpp** (pure C/C++, GGUF-quantized, ggml fa
 Only an M1 **placeholder** exists in the `render` crate: a solid-color braille `fill` plus a centered `label`, used to make scene switching visible (see `14-scene-architecture`). None of the conversion, compositing, depth-sort, or animation described above is built yet. The placeholder is marked as such in-crate and is not the rendering model to extend.
 
 ## Validation
-The renderer is validated in three tiers of increasing difficulty. Each tier pairs an automated **golden test** (the gate) with a switchable **debug demo scene** (the eyeball check). The prototypes in `experiments/ascii_test/` are the **oracle** — a tier's output must match the corresponding prototype for the same input.
+The renderer is validated in three tiers of increasing difficulty. Each tier pairs an automated **golden test** (the gate) with an **example that renders through the real engine loop** (the eyeball check). The conversion algorithm is ported from the prototypes in `experiments/ascii_test/`; correctness is pinned by **hand-derived expectations** for known inputs (independent of any implementation), with the prototypes as the visual reference.
 
-| Tier | Exercises | Golden test (gate) | Demo scene |
+| Tier | Exercises | Golden test (gate) | Example |
 |---|---|---|---|
-| 1 · static sprite | `convert`: alpha cutout, luma threshold, color, fit-to-area aspect | `convert(fixture, area)` grid matches the `downrez` reference | `RenderStatic` |
-| 2 · animated sprite | + GIF decode, per-frame grids, frame timing | frame count + a chosen frame's grid match the `anim` reference | `RenderAnim` |
-| 3 · overlapping animating sprites, alpha 0/1 | + `composite`, depth/occlusion, binary-cutout transparency | near sprite occludes far at overlap; draw order matches camera `depth_key` | `RenderComposite` |
+| 1 · static sprite | `convert`: alpha cutout, luma threshold, color, fit-to-area aspect | known-input cells match hand-derived expectations (single-cell glyph+fg, alpha cutout, non-square aspect/centering); a committed snapshot guards regressions | `render_tier1` |
+| 2 · animated sprite | + GIF decode, per-frame grids, frame timing | frame count + a chosen frame's cells match hand-derived expectations | `render_tier2` |
+| 3 · overlapping animating sprites, alpha 0/1 | + `composite`, depth/occlusion, binary-cutout transparency | near sprite occludes far at overlap; draw order matches camera `depth_key` | `render_tier3` |
 
-- **Golden tests** are headless `render`-crate tests (no terminal/display) — the CI gate.
-- **Demo scenes** are **debug-build-only** (gated like `--inspect`), registered into the scene catalog so they are switchable from the inspector / `1`–`4` keys; they do not ship in the real game's scene list.
+- **Golden tests** are headless `render`-crate tests (no terminal/display) — the CI gate. Expectations are hand-derived from the documented algorithm, so a faithful-port error is caught — they are not a snapshot of the implementation under test.
+- **Examples** are `game`-crate examples (`cargo run -p game --example render_tierN`) that boot the real engine loop (`game::run`) with an inline validation scene — visualizing through the genuine render path **without** adding to the shipped scene catalog and **without** any new CLI flag or cargo feature. They are dev-only artifacts, not game content.
 - Tier 3 uses **binary alpha (0/1)** only — translucent blending is out of v1 scope (see *Decisions (v1)*); it is the integration test for what v1 actually ships.
-- Fixtures (a small PNG-with-alpha, a short GIF) are committed under the `render` crate's test assets so the golden tests are self-contained.
+- Fixtures (a small PNG-with-alpha, a short GIF) are committed under the `render` crate's test assets so the golden tests are self-contained; examples embed them via `include_bytes!`.
 
 ## Open Questions / TBDs
 - Per-piece upgrade visuals — how do sprites evolve across the two fidelities?
