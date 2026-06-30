@@ -37,11 +37,10 @@ Flat, solid color regions saturate to fully-lit cells (solid fill); dot-matrix t
 Braille dots are square; output is sized so the source aspect ratio is preserved (source width/height drives the dot grid dimensions, not the terminal cell ratio).
 
 ### Crowd / Battlefield Compositing
-Many sprites render into a single cell buffer:
-- **Depth layers (parallax):** sprites belong to layers that differ in size, brightness, and movement speed. Distant layers are smaller, dimmer, slower, and higher on screen; near layers are larger, brighter, faster, and lower. This produces a sense of depth and flow in a moving mass.
-- Sprites composite back-to-front so nearer sprites occlude farther ones.
-- Per-sprite animation phase is staggered so shared animations do not lock into unnatural unison.
-- Frames are pre-rendered per animation frame at each layer's scale and reused across instances.
+Many sprites render into one cell buffer — an application of the band + camera model in *Depth & Draw Order*, with crowd-specific treatments:
+- **Parallax depth cue:** distance bands read as depth — farther bands smaller, dimmer, slower; nearer ones larger, brighter, faster. Size and screen placement follow from the camera projection; the brightness/speed gradient is crowd styling layered on top, not an engine rule.
+- **Per-sprite animation phase** is staggered so shared animations do not lock into unnatural unison.
+- **Pre-rendered frames** per animation frame at each band's scale, reused across instances (the cell-level caching from *Decisions (v1)*).
 
 ### Depth & Draw Order
 Compositing is a back-to-front **painter's algorithm** over a depth-sorted sprite list — no z-buffer.
