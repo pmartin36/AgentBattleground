@@ -1,0 +1,25 @@
+[package]
+name = "ascii_test"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "ascii_test"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+image = "0.25"
+
+[[bin]]
+name = "anim"
+path = "src/anim.rs"
+
+[[bin]]
+name = "flow"
+path = "src/flow.rs"
+
+[[bin]]
+name = "downrez"
+path = "src/downrez.rs"

@@ -25,7 +25,7 @@ The spec files are numbered by dependency order — lower numbers are more found
 ## Key Design Decisions Made
 
 - **Language**: Rust
-- **Rendering**: Terminal UI, image-to-ASCII with color
+- **Rendering**: ratatui + crossterm — Terminal UI. Sprites and battlefield render as colored Unicode braille (2×4 dots per cell) with native alpha transparency. Crowds composite in depth layers (parallax via size/brightness/speed). See `specs/13-rendering.md`. Reference prototype: `ascii_test/`.
 - **AI model**: Local model (FLUX4 recommended and auto-setup during onboarding); online models (Claude, OpenAI, etc.) also supported
 - **Team size**: 6 pieces per player
 - **Pacing**: One initiated battle per day

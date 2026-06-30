@@ -1,0 +1,5 @@
+# large / machine-specific — not checked in
+stable-diffusion.cpp/
+models/
+out/
+.venv/

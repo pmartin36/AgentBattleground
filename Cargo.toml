@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/scene-core",
+    "crates/render",
+    "crates/game",
+    "crates/inspector",
+]
+exclude = ["ascii_test", "creature_lab"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ratatui = "0.29"
+crossterm = "0.28"
+eframe = "0.35"
+egui = "0.35"

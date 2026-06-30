@@ -4,7 +4,7 @@
 The heart of the game. Watching a battle play out — whether live or as a replay — is the primary experience. This is what makes the game feel alive. It is by far the most complex scene and should receive the most design and engineering attention.
 
 ## Scope
-- ASCII art battlefield rendering with color
+- Braille-art battlefield rendering with color (see `13-rendering`)
 - LLM-driven turn playback
 - Live battle mode (watching your initiated battle in progress)
 - Replay mode (watching saved battles)
@@ -14,10 +14,10 @@ The heart of the game. Watching a battle play out — whether live or as a repla
 ## Key Details
 
 ### Visual Rendering
-The game uses image-to-ASCII conversion with color, giving pieces and the battlefield a distinctive visual identity. The Battle Viewer is where this matters most. Pieces should feel like characters, not text blobs. The rendering system needs to handle:
+The game renders sprites as colored Unicode braille (see `13-rendering`), giving pieces and the battlefield a distinctive visual identity. The Battle Viewer is where this matters most. Pieces should feel like characters, not text blobs. The rendering system needs to handle:
 - The battlefield grid/map
 - Piece visuals (unique per piece, evolve with upgrades)
-- Attack/movement animations (ASCII-style)
+- Attack/movement animations
 - Status indicators (health, active skills, etc.)
 
 ### Turn Structure

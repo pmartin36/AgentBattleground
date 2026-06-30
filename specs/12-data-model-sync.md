@@ -60,7 +60,7 @@ What gets downloaded from the server before a battle:
 - Replay file format: binary (compact) or text (inspectable)?
 - How large is a typical replay file?
 - What's the skill file format? (shared decision with `03-army-skill-editing`)
-- How are piece visuals stored and transferred? (ASCII art definition format TBD)
+- How are piece visuals stored and transferred? (sprite/asset source format TBD — see `13-rendering`)
 - Is there any versioning concern — what if skill file format changes between game versions?
 
 ## Dependencies

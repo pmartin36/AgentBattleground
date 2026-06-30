@@ -1,0 +1,15 @@
+[package]
+name = "inspector"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "inspector"
+path = "src/main.rs"
+
+[dependencies]
+scene-core = { path = "../scene-core" }
+eframe = { workspace = true }
+egui = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

@@ -12,7 +12,7 @@ The player's primary workspace between battles. View your pieces in detail and s
 
 ### Piece Detail View
 Each piece has:
-- Visual (ASCII art, customized over time via upgrades)
+- Visual (braille sprite, customized over time via upgrades — see `13-rendering`)
 - Name
 - Current skill set
 - Stats derived from skills and upgrades

@@ -1,6 +1,6 @@
 # Agent Battleground
 
-A terminal-based AI battle game written in Rust. Assemble a team of 6 pieces, write the skills that govern how they fight, and send them into battle — watched unfold in ASCII art, driven by a local LLM.
+A terminal-based AI battle game written in Rust. Assemble a team of 6 pieces, write the skills that govern how they fight, and send them into battle — watched unfold in colored braille art, driven by a local LLM.
 
 ## Concept
 
@@ -19,7 +19,7 @@ Pieces evolve over time — upgraded after victories, growing more unique with e
 ## Tech Stack
 
 - **Language**: Rust
-- **Interface**: Terminal UI with image-to-ASCII rendering and color
+- **Interface**: ratatui + crossterm — Terminal UI with colored Unicode braille sprite rendering
 - **AI**: Local LLM (FLUX4 recommended; online models supported)
 - **Server**: Lightweight, designed for Raspberry Pi hosting
 
@@ -52,6 +52,9 @@ High-level design specs for each segment of the game live in `/specs`:
 | 10 | [Battle Simulation Engine](specs/10-battle-simulation-engine.md) |
 | 11 | [Server / Backend](specs/11-server-backend.md) |
 | 12 | [Data Model & Sync Protocol](specs/12-data-model-sync.md) |
+| 13 | [Rendering](specs/13-rendering.md) |
+| 14 | [Scene Architecture & Debug Scene Switcher](specs/14-scene-architecture.md) |
+| 15 | [Debug Inspector](specs/15-debug-inspector.md) |
 
 ## Status
 
