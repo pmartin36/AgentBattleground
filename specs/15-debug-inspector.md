@@ -20,6 +20,7 @@ Out of scope: everything in `14` (scene model, registry, schema derive, IPC tran
 - **Separate process**, spawned by the game under `--inspect`, connecting over the Unix socket from `14`.
 - **Bidirectional / live**: the inspector reflects the game's current field values and pushes edits back.
 - **Schema-driven**: every widget is generated from the field schema in `14`; the inspector hard-codes no scene-specific UI.
+- **Schema generation is automatic.** The field schema (`Inspectable`/`schema()`, per `14`'s M2 hook) is derived directly from each scene struct's fields via a `#[derive(Inspectable)]`-style macro, the same way `serde`'s `#[derive(Serialize, Deserialize)]` already does for wire types in this codebase — struct and schema always stay in sync. Exact derive grammar/attributes are TBD (see Open Questions).
 
 ---
 
@@ -58,7 +59,7 @@ Out of scope: everything in `14` (scene model, registry, schema derive, IPC tran
 - The dropdown also reflects gameplay-driven switches: an unsolicited `SceneChanged` (the game navigated on its own) updates the selection and panel.
 
 ### Field Editor (Schema-Driven)
-The panel is built from the active scene's `schema()`. Each field's type tag selects a default widget; attributes refine it. Default mapping (mirrors `14`):
+The panel is built from the active scene's `schema()`, generated automatically from the struct (see *Decisions*). Each field's type tag selects a default widget; attributes refine it. Default mapping (mirrors `14`):
 
 | Type tag | Widget |
 |---|---|
