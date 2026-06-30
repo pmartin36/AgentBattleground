@@ -1,3 +1,11 @@
+//! Example scenes for the scene-switcher.
+//!
+//! ⚠ M1 PLACEHOLDERS. Each scene paints a single solid color plus its name so
+//! a scene switch is visibly obvious — that is their whole purpose. They are
+//! NOT representative of real game scenes or the real renderer. See
+//! `specs/13-rendering.md` (renderer) and `specs/14-scene-architecture.md`
+//! (scene model). Real scenes (battle viewer, army editor, …) replace these.
+
 pub mod army_editor;
 pub mod battle_viewer;
 pub mod leaderboard;

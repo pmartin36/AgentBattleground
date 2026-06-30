@@ -37,6 +37,21 @@ Many sprites render into a single cell buffer:
 - Per-sprite animation phase is staggered so shared animations do not lock into unnatural unison.
 - Frames are pre-rendered per animation frame at each layer's scale and reused across instances.
 
+### Depth & Draw Order
+Compositing is a back-to-front **painter's algorithm** over a depth-sorted sprite list — no z-buffer.
+
+- Sprites carry a **logical position in a game-defined space** plus a **band**, not a stored `z`. The space is the game's choice — a discrete grid or continuous 2D — and the renderer assumes neither.
+- The **camera** supplies two functions: a projection `position → screen_pos`, and a `depth_key(position) → scalar`. The sorter is generic, so the **camera angle (isometric / side / top-down) is configuration, not an engine assumption.** Supporting several angles means supplying several `(projection, depth_key)` pairs over the same sprite data.
+- The global draw key is **hierarchical**: `(band, depth_key)`. Bands order coarse layers — background parallax (far) → battlefield → foreground / UI; `depth_key` orders within a band.
+- `depth_key` by camera (battlefield, back-to-front):
+  - **Isometric:** `row + col`
+  - **Side with depth rows:** `row`
+  - **3/4 "top-down" (upright billboards):** `row` (≈ screen-y)
+  - **Pure orthographic top-down:** degenerate — sprites never overlap, ordering is moot
+- **Tall / multi-cell sprites sort on their footprint (anchor) position, not per cell** — this bounds the sprite-overlap mis-sort case without splitting sprites.
+
+This is the standard 2D/2.5D sorting model (cf. Unity sorting-layer + order-in-layer + transparency-sort-axis, Godot Y-sort, GameMaker `depth`) — the 2.5D analog of a 3D camera's view-projection producing depth, made explicit because there is no projection matrix.
+
 ### Animation
 - Animated assets (GIFs) decode to per-frame braille grids.
 - Frame timing honors the source asset's per-frame delays.
@@ -45,7 +60,7 @@ Many sprites render into a single cell buffer:
 ### Renderer Contract
 Scenes do not implement braille conversion themselves. The renderer exposes:
 - Convert an image/frame to a grid of colored braille cells at a target size.
-- Composite multiple positioned sprite grids (with depth ordering and transparency) into a screen buffer.
+- Composite positioned sprite grids into a screen buffer: a back-to-front painter's sort by `(band, camera.depth_key(position))`, honoring transparency. The camera supplies the projection and `depth_key` (see *Depth & Draw Order*).
 - Emit the buffer as ratatui drawable lines/spans.
 
 The current art-style decision excludes: posterization, sprite outlining, and interior noise/grain. Sprites render as clean colored braille.
@@ -74,9 +89,13 @@ Generation engine: **stable-diffusion.cpp** (pure C/C++, GGUF-quantized, ggml fa
 - `src/downrez.rs` — standalone CLI: image → colored braille (the down-rezzer both front-ends use)
 - `creature_lab/` — CLI bake-off rig: generate (high-res) → img2img-simplify (battlefield) → rembg → braille preview, on stable-diffusion.cpp
 
+## Current Implementation State
+Only an M1 **placeholder** exists in the `render` crate: a solid-color braille `fill` plus a centered `label`, used to make scene switching visible (see `14-scene-architecture`). None of the conversion, compositing, depth-sort, or animation described above is built yet. The placeholder is marked as such in-crate and is not the rendering model to extend.
+
 ## Open Questions / TBDs
 - Per-piece upgrade visuals — how do sprites evolve across the two fidelities?
 - Battlefield representation (grid vs. free-form) and how sprites map onto it — see spec 05.
+- Camera angle (isometric / side / 3-4 top-down) is not chosen. It is decoupled from the depth sorter (the camera supplies projection + `depth_key`), so it does not block the renderer; the battlefield-representation decision above constrains the coordinate space the camera projects.
 - Performance ceiling: max sprites on screen at target framerate.
 - Color treatment for team/faction identification in a crowd.
 

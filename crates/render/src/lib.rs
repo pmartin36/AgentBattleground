@@ -1,4 +1,12 @@
-//! Render crate — braille-based terminal rendering.
+//! Render crate — terminal braille rendering.
+//!
+//! ⚠ M1 PLACEHOLDER. The only thing implemented here is a solid-color braille
+//! `fill` plus a centered `label` — just enough to make scene switching
+//! visible on screen. This is NOT the real renderer and NOT the rendering
+//! model to build on. The real braille image/sprite renderer (per-cell luma
+//! threshold, native alpha transparency, depth-sorted multi-sprite
+//! compositing, animation) is specified in `specs/13-rendering.md` and will
+//! replace `fill`/`label` in place. Do not extend the solid-fill approach.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
