@@ -35,11 +35,18 @@ pub struct SceneManager {
 impl SceneManager {
     /// Construct `boot` via the registry and call `enter(None)`.
     pub fn new(boot: SceneId) -> Self {
+        Self::with_scene(registry::construct(boot))
+    }
+
+    /// Boot an already-constructed scene (off-catalog or example-supplied).
+    /// Calls `enter(&mut ctx, None)` once and sets it as the active scene.
+    /// Added in b3-t1; `run(Box<dyn Scene>)` delegates here so the engine
+    /// accepts non-registry scenes (e.g. the render_tier1 example).
+    pub fn with_scene(mut boot: Box<dyn Scene>) -> Self {
         let mut ctx = EngineCtx;
-        let mut active = registry::construct(boot);
-        active.enter(&mut ctx, None);
+        boot.enter(&mut ctx, None);
         SceneManager {
-            active,
+            active: boot,
             pending: None,
             pending_is_debug: false,
             ctx,
@@ -192,6 +199,60 @@ mod tests {
 
     fn key(c: char, mods: KeyModifiers) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), mods)
+    }
+
+    // -------------------------------------------------------- with_scene (b3-t1)
+
+    /// `SceneManager::with_scene` boots a non-registry (example-supplied) scene:
+    ///   - sets `active_id()` to that scene's own id
+    ///   - calls `enter()` exactly once before returning
+    ///
+    /// This is the seam that `game::run(Box<dyn Scene>)` and b3-t2's render
+    /// example depend on.
+    #[test]
+    fn with_scene_boots_arbitrary_scene_and_calls_enter() {
+        use std::sync::{Arc, Mutex};
+        use ratatui::layout::Rect;
+        use serde_json::Value as JsonValue;
+
+        struct TestScene {
+            entered: Arc<Mutex<bool>>,
+        }
+
+        impl Scene for TestScene {
+            fn id(&self) -> SceneId {
+                SceneId::Leaderboard
+            }
+            fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {
+                *self.entered.lock().unwrap() = true;
+            }
+            fn update(
+                &mut self,
+                _ctx: &mut EngineCtx,
+                _dt: std::time::Duration,
+            ) -> Option<Transition> {
+                None
+            }
+            fn render(&self, _frame: &mut ratatui::Frame, _area: Rect) {}
+            fn handle_input(&mut self, _ev: InputEvent) -> Option<Transition> {
+                None
+            }
+            fn exit(&mut self, _ctx: &mut EngineCtx) {}
+        }
+
+        let entered = Arc::new(Mutex::new(false));
+        let scene = TestScene { entered: Arc::clone(&entered) };
+        let mgr = SceneManager::with_scene(Box::new(scene));
+
+        assert_eq!(
+            mgr.active_id(),
+            SceneId::Leaderboard,
+            "with_scene must set active_id to the provided scene's id"
+        );
+        assert!(
+            *entered.lock().unwrap(),
+            "with_scene must call enter() on the scene before returning"
+        );
     }
 
     // ------------------------------------------------------------------ boot
