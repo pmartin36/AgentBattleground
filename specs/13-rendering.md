@@ -58,9 +58,9 @@ Compositing is a back-to-front **painter's algorithm** over a depth-sorted sprit
 This is the standard 2D/2.5D sorting model (cf. Unity sorting-layer + order-in-layer + transparency-sort-axis, Godot Y-sort, GameMaker `depth`) — the 2.5D analog of a 3D camera's view-projection producing depth, made explicit because there is no projection matrix.
 
 ### Animation
-- Animated assets (GIFs) decode to per-frame braille grids.
-- Frame timing honors the source asset's per-frame delays.
-- Conversion is **deterministic**: the same source frame at the same size always yields the same braille grid — no synthetic grain or per-display-frame randomness. A grid changes only when the underlying animation frame or sprite position changes.
+- An animated sprite is a **sequence of frames** advanced by **elapsed wall-clock time at a uniform rate** (one frame duration per sprite), decoupled from the render framerate. The renderer iterates a frame list — it is not a format-specific player.
+- **Source formats are importers** that decompose into that frame list: GIF decode, a texture-atlas slice, or a PNG sequence all yield `frames: Vec<…>`. The renderer is source-agnostic; per-frame source delays (e.g. a GIF's variable timing) are **not** honored in v1 — frames advance at the sprite's uniform rate.
+- Conversion is **deterministic**: the same source frame at the same size always yields the same braille grid — no synthetic grain or per-display-frame randomness. A grid changes only when the active frame or sprite position changes.
 
 ### Renderer Contract
 Scenes do not implement braille conversion themselves. The renderer exposes:
@@ -103,7 +103,7 @@ The renderer is validated in three tiers of increasing difficulty. Each tier pai
 | Tier | Exercises | Golden test (gate) | Example |
 |---|---|---|---|
 | 1 · static sprite | `convert`: alpha cutout, luma threshold, color, fit-to-area aspect | known-input cells match hand-derived expectations (single-cell glyph+fg, alpha cutout, non-square aspect/centering); a committed snapshot guards regressions | `render_tier1` |
-| 2 · animated sprite | + GIF decode, per-frame grids, frame timing | frame count + a chosen frame's cells match hand-derived expectations | `render_tier2` |
+| 2 · animated sprite | + frame-sequence model, uniform-rate playback by elapsed time, GIF import | frame-index selection is correct (t=0→f0, wraps at N·dur); decoded frame count + a chosen frame's cells match hand-derived expectations | `render_tier2` |
 | 3 · overlapping animating sprites, alpha 0/1 | + `composite`, depth/occlusion, binary-cutout transparency | near sprite occludes far at overlap; draw order matches camera `depth_key` | `render_tier3` |
 
 - **Golden tests** are headless `render`-crate tests (no terminal/display) — the CI gate. Expectations are hand-derived from the documented algorithm, so a faithful-port error is caught — they are not a snapshot of the implementation under test.
