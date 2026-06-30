@@ -1,4 +1,5 @@
-//! Animated sprite: a sequence of frames played at a uniform rate.
+//! Animated sprite: a sequence of frames played at a base rate scaled by a
+//! runtime speed multiplier.
 //!
 //! Callers accumulate wall-clock elapsed time externally and call
 //! [`AnimatedSprite::frame_index_at`] or [`AnimatedSprite::frame_at`] to
@@ -11,14 +12,22 @@ use image::DynamicImage;
 use std::io::Cursor;
 use std::time::Duration;
 
-/// A sequence of [`DynamicImage`] frames played in order at a uniform
-/// per-frame duration, wrapping continuously.
+/// A sequence of [`DynamicImage`] frames played in order, wrapping continuously.
 ///
-/// The frame selection is exact: integer nanosecond division — no floats,
-/// no rounding surprises at frame boundaries.
+/// Playback rate is a **base per-frame duration** (`frame_dur`, the rate at
+/// `speed == 1.0`) scaled by a runtime **speed multiplier**, mirroring how game
+/// engines expose animation speed — Unity `Animator.speed`, Godot `speed_scale`,
+/// Unreal `PlayRate`: `1.0` natural, `2.0` twice as fast, `0.5` half, a negative
+/// value plays in reverse, `0.0` holds frame 0.
+///
+/// At the default `speed == 1.0`, frame selection is exact integer nanosecond
+/// division.
 pub struct AnimatedSprite {
     frames: Vec<DynamicImage>,
+    /// Base per-frame duration at `speed == 1.0`.
     frame_dur: Duration,
+    /// Playback multiplier; effective rate = base × `speed`. See [`Self::set_speed`].
+    speed: f32,
 }
 
 impl AnimatedSprite {
@@ -27,7 +36,31 @@ impl AnimatedSprite {
     /// `frame_dur` is the caller-supplied display time per frame — it is NOT
     /// derived from GIF metadata or any external source.
     pub fn new(frames: Vec<DynamicImage>, frame_dur: Duration) -> Self {
-        Self { frames, frame_dur }
+        Self {
+            frames,
+            frame_dur,
+            speed: 1.0,
+        }
+    }
+
+    /// Set the playback speed multiplier and return self (builder style).
+    pub fn with_speed(mut self, speed: f32) -> Self {
+        self.speed = speed;
+        self
+    }
+
+    /// Set the playback speed multiplier in place.
+    ///
+    /// Mirrors Unity's `Animator.speed` / Godot's `speed_scale`: `1.0` is the
+    /// natural rate, `2.0` doubles it, `0.5` halves it, a negative value plays in
+    /// reverse, and `0.0` holds frame 0. Effective per-frame duration = `frame_dur / speed`.
+    pub fn set_speed(&mut self, speed: f32) {
+        self.speed = speed;
+    }
+
+    /// The current playback speed multiplier (default `1.0`).
+    pub fn speed(&self) -> f32 {
+        self.speed
     }
 
     /// Number of frames in the sprite.
@@ -40,21 +73,25 @@ impl AnimatedSprite {
         self.frame_dur
     }
 
-    /// The frame index active at the given `elapsed` wall-clock time.
+    /// The frame index active at the given `elapsed` wall-clock time, honoring
+    /// the [`speed`](Self::speed) multiplier.
     ///
-    /// `= (elapsed_nanos / frame_dur_nanos) % frame_count`, using exact
-    /// integer division on nanoseconds. Returns 0 when `frame_count <= 1`
-    /// or `frame_dur` is zero (no panic).
+    /// Frames advanced = `elapsed × speed / frame_dur`, floored and wrapped into
+    /// `0..frame_count` (euclidean, so a negative `speed` plays in reverse). At
+    /// the default `speed == 1.0` this is exact integer nanosecond division.
+    /// Returns 0 when `frame_count <= 1` or `frame_dur` is zero (no panic).
     pub fn frame_index_at(&self, elapsed: Duration) -> usize {
         let n = self.frames.len();
         if n <= 1 {
             return 0;
         }
-        let denom = self.frame_dur.as_nanos();
-        if denom == 0 {
+        let base = self.frame_dur.as_nanos();
+        if base == 0 {
             return 0;
         }
-        ((elapsed.as_nanos() / denom) % n as u128) as usize
+        // Signed frame position; speed < 0 walks the index backward.
+        let pos = (elapsed.as_nanos() as f64) * (self.speed as f64) / (base as f64);
+        (pos.floor() as i128).rem_euclid(n as i128) as usize
     }
 
     /// The frame active at `elapsed`.
@@ -242,5 +279,55 @@ mod tests {
         let s = AnimatedSprite::new(vec![px(1, 2, 3), px(4, 5, 6)], dur);
         assert_eq!(s.frame_count(), 2, "frame_count must match frame Vec length");
         assert_eq!(s.frame_dur(), dur, "frame_dur must match constructor arg");
+    }
+
+    // ── speed multiplier (Unity Animator.speed / Godot speed_scale) ───────────
+
+    /// Default speed is the natural rate, 1.0.
+    #[test]
+    fn default_speed_is_one() {
+        assert!((make_sprite().speed() - 1.0).abs() < f32::EPSILON);
+    }
+
+    /// `set_speed` mutates in place and round-trips via `speed()`.
+    #[test]
+    fn set_speed_round_trip() {
+        let mut s = make_sprite();
+        s.set_speed(3.5);
+        assert!((s.speed() - 3.5).abs() < f32::EPSILON);
+    }
+
+    /// speed = 2.0 advances twice as fast (effective 50 ms on a 100 ms base).
+    #[test]
+    fn speed_2x_doubles_rate() {
+        let s = make_sprite().with_speed(2.0);
+        assert_eq!(s.frame_index_at(Duration::ZERO), 0);
+        assert_eq!(s.frame_index_at(Duration::from_millis(50)), 1, "2x: 50ms → frame 1");
+        assert_eq!(s.frame_index_at(Duration::from_millis(100)), 2, "2x: 100ms → frame 2");
+    }
+
+    /// speed = 0.5 advances half as fast (effective 200 ms).
+    #[test]
+    fn speed_half_slows_rate() {
+        let s = make_sprite().with_speed(0.5);
+        assert_eq!(s.frame_index_at(Duration::from_millis(100)), 0, "0.5x: 100ms still frame 0");
+        assert_eq!(s.frame_index_at(Duration::from_millis(200)), 1, "0.5x: 200ms → frame 1");
+    }
+
+    /// Negative speed plays in reverse, wrapping euclidean into 0..n.
+    /// 3-frame, 100 ms base: t=100ms → frame 2, t=200ms → frame 1.
+    #[test]
+    fn negative_speed_reverses() {
+        let s = make_sprite().with_speed(-1.0);
+        assert_eq!(s.frame_index_at(Duration::ZERO), 0, "reverse at t=0 → frame 0");
+        assert_eq!(s.frame_index_at(Duration::from_millis(100)), 2, "reverse 100ms → frame 2");
+        assert_eq!(s.frame_index_at(Duration::from_millis(200)), 1, "reverse 200ms → frame 1");
+    }
+
+    /// speed = 0 holds frame 0 (paused).
+    #[test]
+    fn zero_speed_holds_frame_zero() {
+        let s = make_sprite().with_speed(0.0);
+        assert_eq!(s.frame_index_at(Duration::from_millis(500)), 0, "speed 0 holds frame 0");
     }
 }

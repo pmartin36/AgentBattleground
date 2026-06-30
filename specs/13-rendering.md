@@ -58,7 +58,7 @@ Compositing is a back-to-front **painter's algorithm** over a depth-sorted sprit
 This is the standard 2D/2.5D sorting model (cf. Unity sorting-layer + order-in-layer + transparency-sort-axis, Godot Y-sort, GameMaker `depth`) — the 2.5D analog of a 3D camera's view-projection producing depth, made explicit because there is no projection matrix.
 
 ### Animation
-- An animated sprite is a **sequence of frames** advanced by **elapsed wall-clock time at a uniform rate** (one frame duration per sprite), decoupled from the render framerate. The renderer iterates a frame list — it is not a format-specific player.
+- An animated sprite is a **sequence of frames** advanced by **elapsed wall-clock time**, decoupled from the render framerate. Playback rate = a per-sprite **base frame duration** scaled by a runtime **speed multiplier** (the game-engine convention — Unity `Animator.speed`, Godot `speed_scale`, Unreal `PlayRate`): `1.0` natural, `2.0` twice as fast, `0` holds, negative plays in reverse. The renderer iterates a frame list — it is not a format-specific player.
 - **Source formats are importers** that decompose into that frame list: GIF decode, a texture-atlas slice, or a PNG sequence all yield `frames: Vec<…>`. The renderer is source-agnostic; per-frame source delays (e.g. a GIF's variable timing) are **not** honored in v1 — frames advance at the sprite's uniform rate.
 - Conversion is **deterministic**: the same source frame at the same size always yields the same braille grid — no synthetic grain or per-display-frame randomness. A grid changes only when the active frame or sprite position changes.
 
