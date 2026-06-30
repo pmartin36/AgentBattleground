@@ -8,6 +8,11 @@
 //! compositing, animation) is specified in `specs/13-rendering.md` and will
 //! replace `fill`/`label` in place. Do not extend the solid-fill approach.
 
+pub mod convert;
+pub mod grid;
+pub use convert::convert;
+pub use grid::{draw_grid, Cell, Grid};
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
