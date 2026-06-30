@@ -33,10 +33,8 @@ struct Tier1Scene {
 impl Tier1Scene {
     fn new() -> Self {
         Tier1Scene {
-            img: image::load_from_memory(include_bytes!(
-                "../../render/tests/fixtures/sprite.png"
-            ))
-            .expect("decode fixture"),
+            img: image::load_from_memory(include_bytes!("assets/wizard_still.png"))
+                .expect("decode wizard_still.png"),
         }
     }
 }

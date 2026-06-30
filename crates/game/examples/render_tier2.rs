@@ -46,10 +46,10 @@ impl Tier2Scene {
     fn new() -> Self {
         Tier2Scene {
             sprite: render::AnimatedSprite::from_gif(
-                include_bytes!("../../render/tests/fixtures/anim.gif"),
+                include_bytes!("assets/wizard.gif"),
                 FRAME_DUR,
             )
-            .expect("decode anim.gif fixture"),
+            .expect("decode wizard.gif"),
             elapsed: Duration::ZERO,
         }
     }
