@@ -10,8 +10,9 @@ use crossterm::{
 use ratatui::{backend::CrosstermBackend, Terminal};
 use scene_core::scene_id::SceneId;
 
+use game::inspect;
+use game::ipc_server;
 use game::manager::{self, SceneManager};
-use game::scene::Transition;
 
 /// RAII guard: restores the terminal on drop (covers both normal exit and panic).
 struct TerminalGuard;
@@ -32,13 +33,32 @@ impl Drop for TerminalGuard {
 }
 
 fn main() -> io::Result<()> {
+    // Inspect setup BEFORE alt-screen so the socket-path println is visible.
+    let ipc = if inspect::flag_present(std::env::args()) {
+        inspect::start(inspect::INSPECT_SUPPORTED)?
+    } else {
+        None
+    };
+
+    // Split into held handle (Drop unlinks socket), outbound event sender,
+    // and inbound command receiver — works for both IPC-on and IPC-off cases.
+    let (_ipc_handle, events, cmd_rx) = match ipc {
+        Some((handle, rx)) => {
+            let tx = handle.events.clone();
+            (Some(handle), tx, rx)
+        }
+        None => {
+            let (tx, _drop_rx) = std::sync::mpsc::channel::<ipc_server::Event>();
+            let (_unused_tx, rx) = std::sync::mpsc::channel::<manager::Command>();
+            (None, tx, rx)
+        }
+    };
+
     let _guard = TerminalGuard::new()?;
 
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    // M1 stub: command channel is unused; b4-t1 replaces _cmd_tx with the IPC sender.
-    let (_cmd_tx, cmd_rx) = std::sync::mpsc::channel::<manager::Command>();
     let mut mgr = SceneManager::new(SceneId::MainHub);
 
     let frame_budget = Duration::from_nanos(1_000_000_000 / 30);
@@ -48,11 +68,7 @@ fn main() -> io::Result<()> {
 
         // 1. Drain debug command channel (debug always overrides gameplay).
         while let Ok(cmd) = cmd_rx.try_recv() {
-            match cmd {
-                manager::Command::SwitchScene { target, params } => {
-                    mgr.set_debug_transition(Transition { target, params });
-                }
-            }
+            mgr.apply_command(cmd, &events);
         }
 
         // 2. Poll crossterm input (non-blocking). All key routing (1–4 / q / Ctrl-C)
@@ -71,8 +87,8 @@ fn main() -> io::Result<()> {
             mgr.set_gameplay_transition(t);
         }
 
-        // 4. Apply any pending scene transition.
-        mgr.process_pending();
+        // 4. Apply any pending scene transition; notify inspector of the switch.
+        mgr.process_pending_notify(&events);
 
         // 5. Render.
         terminal.draw(|f| mgr.render(f))?;

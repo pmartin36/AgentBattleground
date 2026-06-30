@@ -1,18 +1,22 @@
+use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use ratatui::Frame;
+use scene_core::ipc::{CatalogEntry, Hello, Message, SceneChanged};
 use scene_core::scene_id::SceneId;
 use serde_json::Value as JsonValue;
 
+use crate::ipc_server::Event;
 use crate::registry;
 use crate::scene::{EngineCtx, InputEvent, Scene, Transition};
 
-/// Inbound command drained at top-of-frame. M1 stub: only a debug scene switch.
-/// b4 (ipc_server) owns the real mpsc channel + the outbound `Event` type and may
-/// extend this enum. `target` is already resolved to a `SceneId` — the wire-string
+/// Inbound command drained at top-of-frame.
+/// `target` is already resolved to a `SceneId` — the wire-string
 /// → SceneId resolution (and Error{UnknownScene}) happens at the IPC boundary in b4,
 /// NOT in the manager.
 pub enum Command {
+    /// A new inspector client has connected; the loop must push a Hello.
+    ClientConnected,
     SwitchScene {
         target: SceneId,
         params: Option<JsonValue>,
@@ -92,6 +96,56 @@ impl SceneManager {
         self.active.render(frame, area);
     }
 
+    /// Returns the M1 Hello catalog (four implemented scenes in '1'–'4' order,
+    /// names from `display_name()`, active = current scene id).
+    /// b4-t2 implements this by iterating `scenes::scene_for_digit('1'..='4')`.
+    pub fn hello(&self) -> Hello {
+        let scenes = ['1', '2', '3', '4']
+            .iter()
+            .filter_map(|&c| crate::scenes::scene_for_digit(c))
+            .map(|id| CatalogEntry {
+                id,
+                name: id.display_name().to_string(),
+            })
+            .collect();
+        Hello {
+            scenes,
+            active: self.active_id(),
+        }
+    }
+
+    /// Handle one inbound IPC command from the bridge.
+    ///
+    /// - `ClientConnected` → push `Event { body: Message::Hello(self.hello()), reply_to: None }`.
+    /// - `SwitchScene { target, params }` → `set_debug_transition`; no event pushed here
+    ///   (SceneChanged is pushed by `process_pending_notify` after the swap).
+    pub fn apply_command(&mut self, cmd: Command, events: &Sender<Event>) {
+        match cmd {
+            Command::ClientConnected => {
+                let _ = events.send(Event {
+                    body: Message::Hello(self.hello()),
+                    reply_to: None,
+                });
+            }
+            Command::SwitchScene { target, params } => {
+                self.set_debug_transition(Transition { target, params });
+            }
+        }
+    }
+
+    /// Notifying wrapper around `process_pending`: if a transition is pending,
+    /// applies it (via `process_pending`) and pushes
+    /// `Event { body: Message::SceneChanged { id }, reply_to: None }` on `events`.
+    /// Returns `Some(id)` when a switch occurred, `None` otherwise.
+    pub fn process_pending_notify(&mut self, events: &Sender<Event>) -> Option<SceneId> {
+        let id = self.process_pending()?;
+        let _ = events.send(Event {
+            body: Message::SceneChanged(SceneChanged { id }),
+            reply_to: None,
+        });
+        Some(id)
+    }
+
     /// Route one key event. Returns `true` if the app should quit (`q` or Ctrl-C).
     /// Keys `1`–`4` set a gameplay transition to the corresponding scene.
     /// All other keys are forwarded to the active scene via `handle_input`.
@@ -130,8 +184,10 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::style::Color;
     use ratatui::Terminal;
+    use scene_core::ipc::Message;
     use scene_core::scene_id::SceneId;
 
+    use crate::ipc_server::Event;
     use crate::scenes::MainHub;
 
     fn key(c: char, mods: KeyModifiers) -> KeyEvent {
@@ -337,5 +393,168 @@ mod tests {
             SceneId::ArmyEditor,
             "debug transition must override the digit gameplay transition"
         );
+    }
+
+    // ═══════════════════════════════════════ b4-t2: IPC protocol methods ═══════
+
+    /// `hello()` returns exactly four M1 scenes in digit-key order
+    /// (MainHub, BattleViewer, ArmyEditor, Leaderboard), each name matching
+    /// `display_name()`, with `active` == current active id (MainHub at boot).
+    #[test]
+    fn hello_lists_four_scenes_active_main_hub() {
+        let manager = SceneManager::new(SceneId::MainHub);
+        let hello = manager.hello();
+        assert_eq!(hello.scenes.len(), 4, "hello must list exactly four M1 scenes");
+        assert_eq!(hello.active, SceneId::MainHub, "hello.active must be MainHub at boot");
+        let ids: Vec<SceneId> = hello.scenes.iter().map(|e| e.id).collect();
+        for expected in [
+            SceneId::MainHub,
+            SceneId::BattleViewer,
+            SceneId::ArmyEditor,
+            SceneId::Leaderboard,
+        ] {
+            assert!(
+                ids.contains(&expected),
+                "hello catalog must include {:?}, got {:?}",
+                expected,
+                ids
+            );
+        }
+        for entry in &hello.scenes {
+            assert_eq!(
+                entry.name,
+                entry.id.display_name(),
+                "CatalogEntry.name must equal display_name() for {:?}",
+                entry.id
+            );
+        }
+    }
+
+    /// `apply_command(ClientConnected, ..)` pushes exactly one event with
+    /// `body: Message::Hello(…)` and `reply_to: None`.
+    #[test]
+    fn apply_command_client_connected_pushes_hello_event() {
+        let mut manager = SceneManager::new(SceneId::MainHub);
+        let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
+        manager.apply_command(Command::ClientConnected, &event_tx);
+        let ev = event_rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect("apply_command(ClientConnected) must push exactly one event");
+        assert!(
+            ev.reply_to.is_none(),
+            "Hello push must have reply_to: None (unsolicited)"
+        );
+        match ev.body {
+            Message::Hello(h) => {
+                assert_eq!(h.active, SceneId::MainHub, "Hello.active must be MainHub");
+                assert_eq!(h.scenes.len(), 4, "Hello.scenes must list four M1 scenes");
+            }
+            other => panic!("expected Hello body, got {:?}", other),
+        }
+        assert!(
+            event_rx.try_recv().is_err(),
+            "ClientConnected must push exactly one event"
+        );
+    }
+
+    /// `apply_command(SwitchScene{target,params}, ..)` queues a debug transition
+    /// and pushes no immediate event (SceneChanged is deferred to process_pending_notify).
+    #[test]
+    fn apply_command_switchscene_queues_debug_transition_pushes_no_event() {
+        let mut manager = SceneManager::new(SceneId::MainHub);
+        let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
+        manager.apply_command(
+            Command::SwitchScene { target: SceneId::BattleViewer, params: None },
+            &event_tx,
+        );
+        assert!(
+            event_rx.try_recv().is_err(),
+            "SwitchScene command must not push any immediate event"
+        );
+        // Debug transition must be queued; process_pending (not notify) applies it.
+        let result = manager.process_pending();
+        assert_eq!(
+            result,
+            Some(SceneId::BattleViewer),
+            "SwitchScene command must queue a debug transition resolved by process_pending"
+        );
+    }
+
+    /// `process_pending_notify` after a queued transition returns `Some(id)` and
+    /// pushes `Event { body: Message::SceneChanged { id }, reply_to: None }`.
+    #[test]
+    fn process_pending_notify_pushes_scene_changed_and_returns_id_on_switch() {
+        let mut manager = SceneManager::new(SceneId::MainHub);
+        let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
+        manager.set_debug_transition(Transition {
+            target: SceneId::BattleViewer,
+            params: None,
+        });
+        let result = manager.process_pending_notify(&event_tx);
+        assert_eq!(
+            result,
+            Some(SceneId::BattleViewer),
+            "process_pending_notify must return Some(BattleViewer) after a debug transition"
+        );
+        let ev = event_rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect("process_pending_notify must push a SceneChanged event after a switch");
+        assert!(
+            ev.reply_to.is_none(),
+            "SceneChanged push must have reply_to: None (unsolicited)"
+        );
+        match ev.body {
+            Message::SceneChanged(sc) => {
+                assert_eq!(sc.id, SceneId::BattleViewer, "SceneChanged.id must be BattleViewer");
+            }
+            other => panic!("expected SceneChanged body, got {:?}", other),
+        }
+    }
+
+    /// `process_pending_notify` with nothing pending returns `None` and pushes
+    /// no event.
+    #[test]
+    fn process_pending_notify_returns_none_and_pushes_nothing_when_empty() {
+        let mut manager = SceneManager::new(SceneId::MainHub);
+        let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
+        let result = manager.process_pending_notify(&event_tx);
+        assert_eq!(
+            result,
+            None,
+            "process_pending_notify with nothing pending must return None"
+        );
+        assert!(
+            event_rx.try_recv().is_err(),
+            "process_pending_notify with nothing pending must push no event"
+        );
+    }
+
+    /// `process_pending_notify` fires SceneChanged for a GAMEPLAY transition too,
+    /// not only for debug ones — confirming the "any switch" contract.
+    #[test]
+    fn process_pending_notify_pushes_scene_changed_for_gameplay_transition() {
+        let mut manager = SceneManager::new(SceneId::MainHub);
+        let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
+        // Use the gameplay path (not debug).
+        manager.set_gameplay_transition(Transition {
+            target: SceneId::ArmyEditor,
+            params: None,
+        });
+        let result = manager.process_pending_notify(&event_tx);
+        assert_eq!(
+            result,
+            Some(SceneId::ArmyEditor),
+            "process_pending_notify must return Some(ArmyEditor) for a gameplay transition"
+        );
+        let ev = event_rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect("process_pending_notify must push SceneChanged for a gameplay transition");
+        assert!(ev.reply_to.is_none());
+        match ev.body {
+            Message::SceneChanged(sc) => {
+                assert_eq!(sc.id, SceneId::ArmyEditor);
+            }
+            other => panic!("expected SceneChanged body, got {:?}", other),
+        }
     }
 }
