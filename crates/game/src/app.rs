@@ -29,6 +29,30 @@ impl Drop for TerminalGuard {
     }
 }
 
+/// Tracks wall-clock time between frames. `tick()` returns the elapsed time
+/// since the previous `tick()` — i.e. the full previous-frame interval
+/// (render + sleep), which is the correct `dt` to feed scene updates. The bug
+/// it replaces read intra-frame elapsed (~µs), so `elapsed` barely grew and
+/// animation appeared frozen.
+struct FrameClock {
+    prev: Instant,
+}
+
+impl FrameClock {
+    fn new() -> Self {
+        FrameClock {
+            prev: Instant::now(),
+        }
+    }
+
+    fn tick(&mut self) -> Duration {
+        let now = Instant::now();
+        let dt = now.duration_since(self.prev);
+        self.prev = now;
+        dt
+    }
+}
+
 /// Single entrypoint for the game engine.
 ///
 /// Sets up the terminal, wires IPC/inspect, then runs the 30 fps loop until
@@ -64,6 +88,7 @@ pub fn run(initial: Box<dyn Scene>) -> io::Result<()> {
     let mut mgr = SceneManager::with_scene(initial);
 
     let frame_budget = Duration::from_nanos(1_000_000_000 / 30);
+    let mut clock = FrameClock::new();
 
     loop {
         let frame_start = Instant::now();
@@ -83,8 +108,9 @@ pub fn run(initial: Box<dyn Scene>) -> io::Result<()> {
             }
         }
 
-        // 3. Update active scene with wall-clock dt.
-        let dt = frame_start.elapsed();
+        // 3. Update active scene with wall-clock dt = time since the previous
+        //    frame (≈ frame_budget incl. sleep), NOT intra-frame elapsed.
+        let dt = clock.tick();
         if let Some(t) = mgr.update(dt) {
             mgr.set_gameplay_transition(t);
         }
@@ -103,4 +129,28 @@ pub fn run(initial: Box<dyn Scene>) -> io::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression for the dt freeze bug: `tick()` must report real wall-clock
+    /// time between calls (~ms), not intra-frame elapsed (~µs).
+    #[test]
+    fn frame_clock_tick_reports_real_elapsed() {
+        let mut clock = FrameClock::new();
+        std::thread::sleep(Duration::from_millis(20));
+        let dt = clock.tick();
+        assert!(
+            dt >= Duration::from_millis(15),
+            "tick() dt {dt:?} should reflect the ~20ms slept, not intra-frame µs"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        let dt2 = clock.tick();
+        assert!(
+            dt2 >= Duration::from_millis(7),
+            "second tick {dt2:?} should reflect ~10ms independently"
+        );
+    }
 }
