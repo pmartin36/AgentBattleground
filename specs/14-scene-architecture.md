@@ -1,6 +1,8 @@
+> # ✅ DONE! — Completed 2026-07-01
+
 # Scene Architecture & Debug Scene Switcher
 
-> **Status: draft.** Foundational architecture spec. Defines what a "scene" is in the engine, how scenes are registered and switched in memory, the debug IPC channel, and the debug **Scene Switcher** that drives scene transitions from the external inspector.
+> **Status: implemented (M1 — scene switching, built & validated).** Foundational architecture spec. Defines what a "scene" is in the engine, how scenes are registered and switched in memory, the debug IPC channel, and the debug **Scene Switcher** that drives scene transitions from the external inspector.
 >
 > **Milestone scope.** This spec covers **M1: scene switching only** — list scenes, pick one, switch the running game to it, see the screen change. **Editing a scene's field values (the inspector form, `ApplyState`, schema-driven widgets) is M2 and lives in `15-debug-inspector`.** Where M2 shares a one-way-door decision with M1 (notably the IPC envelope), it is settled here; everything else editing-related is deferred to spec 15 and flagged for confirmation.
 
