@@ -292,7 +292,7 @@ pub fn place_piece<'a>(
 const WIZARD_FRAME_DUR: Duration = Duration::from_millis(100);
 
 pub struct BattleViewer {
-    elapsed: Duration,
+    elapsed: f32,
     sprite: AnimatedSprite,
     /// Owned piece state (b3-t1), seeded once from `pieces()` at construction
     /// — `render()` does not read this yet (that is b3-t2).
@@ -307,7 +307,7 @@ impl Default for BattleViewer {
         )
         .expect("bundled wizard.gif must decode");
         Self {
-            elapsed: Duration::ZERO,
+            elapsed: 0.0,
             sprite,
             pieces: pieces(),
         }
@@ -322,7 +322,7 @@ impl Scene for BattleViewer {
     fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {}
 
     fn update(&mut self, _ctx: &mut EngineCtx, dt: Duration) -> Option<Transition> {
-        self.elapsed += dt;
+        self.elapsed += dt.as_secs_f32();
         None
     }
 
@@ -330,10 +330,11 @@ impl Scene for BattleViewer {
         let geom = board_geometry(area);
         draw_board_lines(frame.buffer_mut(), &geom);
 
+        let elapsed = Duration::from_secs_f32(self.elapsed);
         let dotbufs: Vec<DotBuffer> = self
             .pieces
             .iter()
-            .map(|p| piece_dots(p, &self.sprite, self.elapsed, &geom))
+            .map(|p| piece_dots(p, &self.sprite, elapsed, &geom))
             .collect();
         let placements: Vec<DotPlacement> = self
             .pieces
@@ -1042,6 +1043,29 @@ mod battle_viewer_scene_wiring_tests {
             scene.pieces,
             pieces(),
             "BattleViewer::default().pieces must match the free pieces() layout"
+        );
+    }
+
+    /// b4-t1 DELIVERABLE (1): `BattleViewer.elapsed` is a plain `f32` seconds
+    /// accumulator, seeded to `0.0` — not a `Duration`.
+    #[test]
+    fn elapsed_seeds_to_zero_as_f32() {
+        let scene = BattleViewer::default();
+        assert_eq!(scene.elapsed, 0.0_f32);
+    }
+
+    /// b4-t1 DELIVERABLE (2): `update()` accumulates `dt` into `elapsed` as
+    /// whole seconds (`dt.as_secs_f32()`), not milliseconds or any other unit
+    /// — 150ms of `dt` must land at ~0.15, not ~150.0.
+    #[test]
+    fn elapsed_accumulates_in_seconds_via_update() {
+        let mut scene = BattleViewer::default();
+        let mut ctx = EngineCtx;
+        scene.update(&mut ctx, Duration::from_millis(150));
+        assert!(
+            (scene.elapsed - 0.15).abs() < 1e-4,
+            "expected elapsed ~= 0.15 seconds after a 150ms update(), got {}",
+            scene.elapsed
         );
     }
 }
