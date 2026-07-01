@@ -35,16 +35,23 @@ pub struct SceneManager {
 impl SceneManager {
     /// Construct `boot` via the registry and call `enter(None)`.
     pub fn new(boot: SceneId) -> Self {
-        Self::with_scene(registry::construct(boot))
+        Self::with_scene_and_params(registry::construct(boot), None)
     }
 
-    /// Boot an already-constructed scene (off-catalog or example-supplied).
-    /// Calls `enter(&mut ctx, None)` once and sets it as the active scene.
-    /// Added in b3-t1; `run(Box<dyn Scene>)` delegates here so the engine
-    /// accepts non-registry scenes (e.g. the render_tier1 example).
-    pub fn with_scene(mut boot: Box<dyn Scene>) -> Self {
+    /// Boot an already-constructed scene (off-catalog or example-supplied)
+    /// with `enter(&mut ctx, None)`. Delegates to `with_scene_and_params`.
+    pub fn with_scene(boot: Box<dyn Scene>) -> Self {
+        Self::with_scene_and_params(boot, None)
+    }
+
+    /// Boot `boot` and call `enter(&mut ctx, params)` once with the exact
+    /// `params` given, setting it as the active scene.
+    pub fn with_scene_and_params(
+        mut boot: Box<dyn Scene>,
+        params: Option<serde_json::Value>,
+    ) -> Self {
         let mut ctx = EngineCtx;
-        boot.enter(&mut ctx, None);
+        boot.enter(&mut ctx, params);
         SceneManager {
             active: boot,
             pending: None,
@@ -252,6 +259,103 @@ mod tests {
         assert!(
             *entered.lock().unwrap(),
             "with_scene must call enter() on the scene before returning"
+        );
+    }
+
+    // -------------------------------------------------- with_scene_and_params (b1-t1)
+
+    /// `SceneManager::with_scene_and_params` delivers the exact `Some(json!(...))`
+    /// value into the scene's `enter(_ctx, params)` — the primitive every other
+    /// bucket in this feature threads params through.
+    #[test]
+    fn with_scene_and_params_delivers_exact_params_to_enter() {
+        use std::sync::{Arc, Mutex};
+        use ratatui::layout::Rect;
+        use serde_json::{json, Value as JsonValue};
+
+        struct ParamsCapturingScene {
+            params: Arc<Mutex<Option<JsonValue>>>,
+        }
+
+        impl Scene for ParamsCapturingScene {
+            fn id(&self) -> SceneId {
+                SceneId::Leaderboard
+            }
+            fn enter(&mut self, _ctx: &mut EngineCtx, params: Option<JsonValue>) {
+                *self.params.lock().unwrap() = params;
+            }
+            fn update(
+                &mut self,
+                _ctx: &mut EngineCtx,
+                _dt: std::time::Duration,
+            ) -> Option<Transition> {
+                None
+            }
+            fn render(&self, _frame: &mut ratatui::Frame, _area: Rect) {}
+            fn handle_input(&mut self, _ev: InputEvent) -> Option<Transition> {
+                None
+            }
+            fn exit(&mut self, _ctx: &mut EngineCtx) {}
+        }
+
+        let captured = Arc::new(Mutex::new(None));
+        let scene = ParamsCapturingScene { params: Arc::clone(&captured) };
+        let expected = json!({"k": 1});
+        let mgr = SceneManager::with_scene_and_params(Box::new(scene), Some(expected.clone()));
+
+        assert_eq!(
+            mgr.active_id(),
+            SceneId::Leaderboard,
+            "with_scene_and_params must set active_id to the provided scene's id"
+        );
+        assert_eq!(
+            *captured.lock().unwrap(),
+            Some(expected),
+            "with_scene_and_params must deliver the exact params value into enter()"
+        );
+    }
+
+    /// `with_scene_and_params(scene, None)` delivers `None` to `enter()` —
+    /// pinning the delegation contract `with_scene`/`new` rely on.
+    #[test]
+    fn with_scene_and_params_none_delivers_none_to_enter() {
+        use std::sync::{Arc, Mutex};
+        use ratatui::layout::Rect;
+        use serde_json::{json, Value as JsonValue};
+
+        struct ParamsCapturingScene {
+            params: Arc<Mutex<Option<JsonValue>>>,
+        }
+
+        impl Scene for ParamsCapturingScene {
+            fn id(&self) -> SceneId {
+                SceneId::Leaderboard
+            }
+            fn enter(&mut self, _ctx: &mut EngineCtx, params: Option<JsonValue>) {
+                *self.params.lock().unwrap() = params;
+            }
+            fn update(
+                &mut self,
+                _ctx: &mut EngineCtx,
+                _dt: std::time::Duration,
+            ) -> Option<Transition> {
+                None
+            }
+            fn render(&self, _frame: &mut ratatui::Frame, _area: Rect) {}
+            fn handle_input(&mut self, _ev: InputEvent) -> Option<Transition> {
+                None
+            }
+            fn exit(&mut self, _ctx: &mut EngineCtx) {}
+        }
+
+        let captured = Arc::new(Mutex::new(Some(json!({"stale": true}))));
+        let scene = ParamsCapturingScene { params: Arc::clone(&captured) };
+        let _mgr = SceneManager::with_scene_and_params(Box::new(scene), None);
+
+        assert_eq!(
+            *captured.lock().unwrap(),
+            None,
+            "with_scene_and_params(scene, None) must deliver None to enter()"
         );
     }
 

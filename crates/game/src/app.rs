@@ -57,8 +57,12 @@ impl FrameClock {
 ///
 /// Sets up the terminal, wires IPC/inspect, then runs the 30 fps loop until
 /// the user quits. `initial` is the boot scene — it may be any `Box<dyn Scene>`,
-/// including off-catalog example scenes.
-pub fn run(initial: Box<dyn Scene>) -> io::Result<()> {
+/// including off-catalog example scenes. `params` is delivered to `initial`'s
+/// `enter()` via `SceneManager::with_scene_and_params`.
+pub fn run_with_params(
+    initial: Box<dyn Scene>,
+    params: Option<serde_json::Value>,
+) -> io::Result<()> {
     // Inspect setup BEFORE alt-screen so the socket-path println is visible.
     let ipc = if inspect::flag_present(std::env::args()) {
         inspect::start(inspect::INSPECT_SUPPORTED)?
@@ -85,7 +89,7 @@ pub fn run(initial: Box<dyn Scene>) -> io::Result<()> {
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let mut mgr = SceneManager::with_scene(initial);
+    let mut mgr = SceneManager::with_scene_and_params(initial, params);
 
     let frame_budget = Duration::from_nanos(1_000_000_000 / 30);
     let mut clock = FrameClock::new();
@@ -129,6 +133,11 @@ pub fn run(initial: Box<dyn Scene>) -> io::Result<()> {
     }
 
     Ok(())
+}
+
+/// Boots `initial` with no params (`enter(&mut ctx, None)`). See `run_with_params`.
+pub fn run(initial: Box<dyn Scene>) -> io::Result<()> {
+    run_with_params(initial, None)
 }
 
 #[cfg(test)]

@@ -663,12 +663,13 @@ mod piece_render_tests {
         }
     }
 
-    /// DELIVERABLE (1): with a synthetic single-frame fully-opaque source
-    /// image, `piece_dots` for a Team A piece must be all-`Lit(TEAM_A_COLOR)`
-    /// and for a Team B piece all-`Lit(TEAM_B_COLOR)` — the two colors must
-    /// also differ. (Opaque source => every dot Lit even after mirror.)
+    /// DELIVERABLE (1): with a synthetic single-frame fully-opaque uniform-gray
+    /// (200,200,200) source image, `piece_dots` multiply-tints every dot to a
+    /// hand-derived per-team color (`floor(200 * team_channel / 255)` per
+    /// channel), and the two teams' resulting colors differ. (Opaque source =>
+    /// every dot Lit even after mirror.)
     #[test]
-    fn piece_dots_tints_each_team_distinctly_and_fully_lit() {
+    fn piece_dots_tints_each_team_distinctly_via_multiply_blend() {
         let sprite = AnimatedSprite::new(vec![opaque_image(6, 12)], Duration::from_millis(100));
         let geom = test_geom();
 
@@ -678,13 +679,18 @@ mod piece_render_tests {
         let dots_a = piece_dots(&piece_a, &sprite, Duration::ZERO, &geom);
         let dots_b = piece_dots(&piece_b, &sprite, Duration::ZERO, &geom);
 
+        // TEAM_A_COLOR = (74,144,217): 200*74/255=58, 200*144/255=112, 200*217/255=170
+        let expected_a = Rgba::rgb(58, 112, 170);
+        // TEAM_B_COLOR = (217,74,74): 200*217/255=170, 200*74/255=58, 200*74/255=58
+        let expected_b = Rgba::rgb(170, 58, 58);
+
         assert!(dots_a.cols() > 0 && dots_a.rows() > 0, "Team A buffer must be non-empty");
         for row in 0..dots_a.rows() {
             for col in 0..dots_a.cols() {
                 assert_eq!(
                     dots_a.get(col, row),
-                    Dot::Lit(TEAM_A_COLOR),
-                    "Team A dot ({col},{row}) must be Lit(TEAM_A_COLOR) for an opaque source"
+                    Dot::Lit(expected_a),
+                    "Team A dot ({col},{row}) must be Lit(expected_a) for a uniform-gray opaque source"
                 );
             }
         }
@@ -694,13 +700,13 @@ mod piece_render_tests {
             for col in 0..dots_b.cols() {
                 assert_eq!(
                     dots_b.get(col, row),
-                    Dot::Lit(TEAM_B_COLOR),
-                    "Team B dot ({col},{row}) must be Lit(TEAM_B_COLOR) for an opaque source"
+                    Dot::Lit(expected_b),
+                    "Team B dot ({col},{row}) must be Lit(expected_b) for a uniform-gray opaque source"
                 );
             }
         }
 
-        assert_ne!(TEAM_A_COLOR, TEAM_B_COLOR, "team tint colors must be distinct");
+        assert_ne!(expected_a, expected_b, "the two teams' tinted colors must be distinct");
     }
 
     /// DELIVERABLE (2): the `Transform` selected by `piece_transform` mirrors
@@ -796,12 +802,24 @@ mod battle_viewer_scene_wiring_tests {
         );
     }
 
-    /// DELIVERABLE (2)+(3): at least 12 distinct team-tinted glyph cells are
-    /// present; Team-A-tinted cells are confined to the top half of the board
-    /// and Team-B-tinted cells to the bottom half (per `world_pos_for_cell`
-    /// placement through the shared camera), and the two tint colors differ.
+    /// A cell's symbol is a braille glyph (U+2800..=U+28FF) — i.e. sprite
+    /// content, not a board-line character (┌─┼ etc.) or blank background.
+    fn is_braille_glyph(sym: &str) -> bool {
+        sym.chars().any(|c| ('\u{2800}'..='\u{28FF}').contains(&c))
+    }
+
+    /// DELIVERABLE (2)+(3): sprite glyph cells are present in both the top
+    /// half (Team A) and bottom half (Team B) of the board, and the two
+    /// halves' sets of glyph colors are disjoint — proving the two teams
+    /// render with genuinely distinct (multiply-blend-tinted) palettes rather
+    /// than the same untinted sprite in both places. Does not assert exact
+    /// RGB values, since multiply-blend against the real (non-uniform) wizard
+    /// sprite doesn't average to a single flat color the way a full
+    /// color-replace would have.
     #[test]
     fn team_tinted_cells_present_and_banded_by_team() {
+        use std::collections::HashSet;
+
         let scene = BattleViewer::default();
         let area = Rect::new(0, 0, 100, 50);
         let geom = board_geometry(area);
@@ -809,39 +827,31 @@ mod battle_viewer_scene_wiring_tests {
 
         let buf = render_to_buffer(&scene, 100, 50);
 
-        let team_a_fg = Color::Rgb(TEAM_A_COLOR.r, TEAM_A_COLOR.g, TEAM_A_COLOR.b);
-        let team_b_fg = Color::Rgb(TEAM_B_COLOR.r, TEAM_B_COLOR.g, TEAM_B_COLOR.b);
-        assert_ne!(team_a_fg, team_b_fg, "team tint colors must be distinct");
-
-        let mut team_a_count = 0usize;
-        let mut team_b_count = 0usize;
+        let mut top_colors: HashSet<(u8, u8, u8)> = HashSet::new();
+        let mut bottom_colors: HashSet<(u8, u8, u8)> = HashSet::new();
 
         for y in geom.board_rect.y..geom.board_rect.bottom() {
             for x in geom.board_rect.x..geom.board_rect.right() {
                 let cell = buf.cell((x, y)).unwrap();
-                if cell.fg == team_a_fg {
-                    team_a_count += 1;
-                    assert!(
-                        y < mid_y,
-                        "Team A tinted cell at ({x},{y}) must be in the top half of the board (mid_y={mid_y})"
-                    );
-                } else if cell.fg == team_b_fg {
-                    team_b_count += 1;
-                    assert!(
-                        y >= mid_y,
-                        "Team B tinted cell at ({x},{y}) must be in the bottom half of the board (mid_y={mid_y})"
-                    );
+                if !is_braille_glyph(cell.symbol()) {
+                    continue;
+                }
+                if let Color::Rgb(r, g, b) = cell.fg {
+                    if y < mid_y {
+                        top_colors.insert((r, g, b));
+                    } else {
+                        bottom_colors.insert((r, g, b));
+                    }
                 }
             }
         }
 
+        assert!(!top_colors.is_empty(), "expected some Team A glyph color in the top half");
+        assert!(!bottom_colors.is_empty(), "expected some Team B glyph color in the bottom half");
         assert!(
-            team_a_count >= 6,
-            "expected at least 6 Team A tinted cells, found {team_a_count}"
-        );
-        assert!(
-            team_b_count >= 6,
-            "expected at least 6 Team B tinted cells, found {team_b_count}"
+            top_colors.is_disjoint(&bottom_colors),
+            "top-half (Team A) and bottom-half (Team B) glyph colors must not overlap: \
+             top={top_colors:?} bottom={bottom_colors:?}"
         );
     }
 
