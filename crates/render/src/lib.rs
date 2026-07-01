@@ -14,6 +14,8 @@ pub mod composite;
 pub mod convert;
 pub mod dots;
 pub mod grid;
+pub mod transform;
+pub mod tween;
 pub use anim::AnimatedSprite;
 pub use composite::{composite, Placement};
 pub use convert::convert;
