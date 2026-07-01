@@ -37,14 +37,14 @@ const FRAME_DUR: Duration = Duration::from_millis(100);
 const MARKER: &str = "---FRAME-BREAK---";
 
 /// Headless terminal dimensions (parity with tier1/tier2).
-const W: u16 = 40;
-const H: u16 = 20;
+const W: u16 = 50;
+const H: u16 = 30;
 
-/// Per-sprite braille-cell dimensions used as the `convert` area.
-/// For the ~square wizard.gif the natural rows ≈ SPRITE_W/2 = 6; SPRITE_H=8
-/// gives a comfortable ceiling that the aspect-fit will not exceed.
-const SPRITE_W: u16 = 12;
-const SPRITE_H: u16 = 8;
+/// Per-sprite braille-cell dimensions used as the `convert` area. Large enough
+/// that the tall wizard renders sizeable, so heavy positional overlap between
+/// sprites produces visible body-on-body occlusion (not just adjacent boxes).
+const SPRITE_W: u16 = 22;
+const SPRITE_H: u16 = 22;
 
 // ─── Wizard ───────────────────────────────────────────────────────────────────
 
@@ -70,15 +70,21 @@ impl Tier3Scene {
     fn new() -> Self {
         let gif_bytes = include_bytes!("assets/wizard.gif");
 
-        // Three wizards sharing the same GIF, staggered in position/speed/phase
-        // so their bounding boxes overlap and the compositor's depth-sort is
-        // exercised.  Positions (col, row) are chosen so all sprites fit in the
-        // 40×20 headless screen.
+        // Three wizards sharing the same GIF, placed with heavy overlap (small
+        // per-sprite offset) so their opaque BODIES — not just bounding boxes —
+        // overlap, and the depth-sort visibly occludes: the nearer wizard clips
+        // the one behind it. Positions fit the 50×30 headless screen.
         //
-        // depth = row (side-view ordering): higher row = nearer = drawn on top.
-        // The frontmost wizard (row=7, speed=2.0) provably advances a frame
-        // between elapsed=0 and elapsed=FRAME_DUR (GIF frames 1→3), so the
-        // composited output differs between the two headless captures.
+        // NOTE: `depth = row` here is ONLY this demo's stand-in side-view camera.
+        // It is NOT the design. In the real game the CAMERA computes each
+        // sprite's depth from its position via `depth_key(position)` (row for a
+        // side view, row+col for isometric, …) — see specs/13-rendering.md
+        // §"Depth & Draw Order". The compositor just sorts by whatever depth
+        // scalar it's handed; it never assumes row.
+        //
+        // The frontmost wizard (speed=2.0) provably advances a frame between
+        // elapsed=0 and elapsed=FRAME_DUR, so the composited output differs
+        // between the two headless captures.
         let make = |speed: f32, col: i32, row: i32, phase_ms: u64| Wizard {
             sprite: render::AnimatedSprite::from_gif(gif_bytes, FRAME_DUR)
                 .expect("decode wizard.gif")
@@ -90,9 +96,9 @@ impl Tier3Scene {
 
         Tier3Scene {
             wizards: vec![
-                make(1.0, 2, 1, 0),   // far     — depth=1, drawn first
-                make(1.5, 10, 4, 33), // middle  — depth=4
-                make(2.0, 18, 7, 66), // nearest — depth=7, drawn last (on top)
+                make(1.0, 4, 1, 0),   // back   — depth=row=1, drawn first (farthest)
+                make(1.5, 9, 4, 33),  // middle — depth=row=4
+                make(2.0, 14, 7, 66), // front  — depth=row=7, drawn last (on top)
             ],
             elapsed: Duration::ZERO,
         }

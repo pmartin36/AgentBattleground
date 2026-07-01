@@ -10,6 +10,11 @@ pub struct Placement<'a> {
     pub grid: &'a Grid,
     pub col: i32,
     pub row: i32,
+    /// Back-to-front sort key (larger = nearer = drawn on top). This is an
+    /// opaque scalar supplied by the caller's camera via `depth_key(position)`
+    /// (see specs/13-rendering.md §"Depth & Draw Order"); the compositor never
+    /// interprets it or assumes it equals the row. Callers pick what depth means
+    /// for their camera — row (side view), row+col (isometric), etc.
     pub depth: i32,
 }
 
