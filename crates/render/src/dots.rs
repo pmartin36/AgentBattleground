@@ -169,6 +169,27 @@ pub fn sprite_to_dots(img: &DynamicImage, dot_cols: u32, dot_rows: u32) -> DotBu
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// tint
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Recolor every `Lit` dot in `buf` to `color`; `Transparent` dots pass
+/// through unchanged. Same dims as `buf`. General-purpose (no "team" concept
+/// baked in) — purely a function of each dot's own state, position-independent.
+pub fn tint(buf: &DotBuffer, color: Rgba) -> DotBuffer {
+    let mut out = DotBuffer::new(buf.cols(), buf.rows());
+    for row in 0..buf.rows() {
+        for col in 0..buf.cols() {
+            let dot = match buf.get(col, row) {
+                Dot::Lit(_) => Dot::Lit(color),
+                Dot::Transparent => Dot::Transparent,
+            };
+            out.set(col, row, dot);
+        }
+    }
+    out
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // dots_to_grid  (stub — implementation by code-writer)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -487,6 +508,78 @@ mod tests {
                 color: Rgba::rgb(0, 0, 200),
             },
             "d2: intra-cell dot split must produce mask=0x47 glyph in blue"
+        );
+    }
+
+    // ── tint tests ────────────────────────────────────────────────────────────
+
+    /// An all-`Lit` buffer of mixed source colors, tinted to a target color,
+    /// must yield every dot `Lit(target)` with unchanged dims.
+    #[test]
+    fn tint_all_lit_buffer_becomes_uniform_target_color() {
+        let mut buf = DotBuffer::new(2, 2);
+        buf.set(0, 0, Dot::Lit(Rgba::rgb(10, 20, 30)));
+        buf.set(1, 0, Dot::Lit(Rgba::rgb(200, 100, 50)));
+        buf.set(0, 1, Dot::Lit(Rgba::rgb(0, 255, 0)));
+        buf.set(1, 1, Dot::Lit(Rgba::rgb(255, 255, 255)));
+
+        let target = Rgba::rgb(9, 8, 7);
+        let out = tint(&buf, target);
+
+        assert_eq!(out.cols(), buf.cols(), "tint must preserve cols");
+        assert_eq!(out.rows(), buf.rows(), "tint must preserve rows");
+        for row in 0..out.rows() {
+            for col in 0..out.cols() {
+                assert_eq!(
+                    out.get(col, row),
+                    Dot::Lit(target),
+                    "dot ({col},{row}) must become Lit(target) after tint"
+                );
+            }
+        }
+    }
+
+    /// A buffer with some `Transparent` dots must keep those dots
+    /// `Transparent` after tinting — only `Lit` dots are touched.
+    #[test]
+    fn tint_preserves_transparent_dots() {
+        let mut buf = DotBuffer::new(2, 2);
+        buf.set(0, 0, Dot::Lit(Rgba::rgb(10, 20, 30)));
+        // (1,0), (0,1), (1,1) left as default Transparent.
+        buf.set(1, 1, Dot::Lit(Rgba::rgb(1, 2, 3)));
+
+        let target = Rgba::rgb(77, 88, 99);
+        let out = tint(&buf, target);
+
+        assert_eq!(out.get(0, 0), Dot::Lit(target), "(0,0) was Lit, must be tinted");
+        assert_eq!(out.get(1, 0), Dot::Transparent, "(1,0) was Transparent, must stay Transparent");
+        assert_eq!(out.get(0, 1), Dot::Transparent, "(0,1) was Transparent, must stay Transparent");
+        assert_eq!(out.get(1, 1), Dot::Lit(target), "(1,1) was Lit, must be tinted");
+    }
+
+    /// Tinting is purely a function of each dot's own state (position-
+    /// independent): two structurally-identical Lit/Transparent patterns with
+    /// different source colors, tinted to the same target, must produce the
+    /// same Transparent-mask and the same Lit color at every position.
+    #[test]
+    fn tint_is_position_independent_of_source_color() {
+        let mut buf_a = DotBuffer::new(2, 2);
+        buf_a.set(0, 0, Dot::Lit(Rgba::rgb(1, 1, 1)));
+        buf_a.set(1, 1, Dot::Lit(Rgba::rgb(254, 254, 254)));
+        // (1,0), (0,1) left Transparent.
+
+        let mut buf_b = DotBuffer::new(2, 2);
+        buf_b.set(0, 0, Dot::Lit(Rgba::rgb(9, 8, 7)));
+        buf_b.set(1, 1, Dot::Lit(Rgba::rgb(200, 199, 198)));
+        // Same Transparent positions as buf_a, but different source Lit colors.
+
+        let target = Rgba::rgb(50, 60, 70);
+        let out_a = tint(&buf_a, target);
+        let out_b = tint(&buf_b, target);
+
+        assert_eq!(
+            out_a, out_b,
+            "tint output must depend only on each dot's own Lit/Transparent state, not its source color"
         );
     }
 }
