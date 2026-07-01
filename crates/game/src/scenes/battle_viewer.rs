@@ -155,12 +155,11 @@ pub struct Piece {
 }
 
 impl Piece {
-    /// Sole construction path (b2-t1). Seeds `transform`/`color` once from
-    /// the same math `piece_transform`/`Team::tint_color` compute on the fly
-    /// today: `transform = { translate: world_pos_for_cell(col, row),
-    /// rotation: 0.0, scale: (team.scale_x(), 1.0) }`, `color =
-    /// team.tint_color()`.
-    ///
+    /// Sole construction path. Seeds the owned `transform`/`color` fields
+    /// once from the piece's `(col, row, team)`: `transform = { translate:
+    /// world_pos_for_cell(col, row), rotation: 0.0, scale: (team.scale_x(),
+    /// 1.0) }`, `color = team.tint_color()`. After construction these fields
+    /// are the piece's own state — nothing re-derives them from `team` again.
     pub fn new(col: u16, row: u16, team: Team, index: usize) -> Self {
         let transform = Transform {
             translate: world_pos_for_cell(col, row),
@@ -246,17 +245,6 @@ pub fn sprite_base_dot_rows(camera: &SideView) -> u32 {
     (camera.scale_dots * SPRITE_DOT_RATIO).round() as u32
 }
 
-/// One `Transform` reused for both rasterize (scale/mirror) and place
-/// (translate): `translate = world_pos_for_cell(piece.col, piece.row)`,
-/// `rotation = 0.0`, `scale = Vec2::new(piece.team.scale_x(), 1.0)`.
-pub fn piece_transform(piece: &Piece) -> Transform {
-    Transform {
-        translate: world_pos_for_cell(piece.col, piece.row),
-        rotation: 0.0,
-        scale: Vec2::new(piece.team.scale_x(), 1.0),
-    }
-}
-
 /// Steps a-c of the per-piece pipeline: pick the staggered idle frame,
 /// rasterize it (scale/mirror sized off `geom.camera`), then tint with the
 /// piece's team color. Returns an owned `DotBuffer` (see research.md's
@@ -294,8 +282,9 @@ const WIZARD_FRAME_DUR: Duration = Duration::from_millis(100);
 pub struct BattleViewer {
     elapsed: f32,
     sprite: AnimatedSprite,
-    /// Owned piece state (b3-t1), seeded once from `pieces()` at construction
-    /// — `render()` does not read this yet (that is b3-t2).
+    /// Owned piece state, seeded once from `pieces()` at construction.
+    /// `render()` reads each piece's own `transform`/`color` fields directly
+    /// — mutating an entry here changes what the next `render()` draws.
     pub pieces: Vec<Piece>,
 }
 
@@ -758,25 +747,33 @@ mod piece_render_tests {
         assert_eq!(piece_b.transform.scale.x, -1.0, "Team B stored transform mirrored");
     }
 
-    /// b2-t1 DELIVERABLE: `Piece::new`'s seeded `transform` field must be
-    /// bit-identical to what `piece_transform` computes on the fly for the
-    /// same `(col, row, team)` — proves construction-time seeding didn't
-    /// diverge from the existing per-frame math. Covers both teams so the
-    /// mirror (`scale.x`) is pinned for Team B too.
+    /// b2-t1 DELIVERABLE: `Piece::new`'s seeded `transform` field must match
+    /// the hand-derived layout formula for the same `(col, row, team)`:
+    /// `translate = world_pos_for_cell(col, row)`, `rotation = 0.0`, `scale =
+    /// (team.scale_x(), 1.0)`. Covers both teams so the mirror (`scale.x`) is
+    /// pinned for Team B too.
     #[test]
     fn piece_new_seeds_transform_from_layout_math() {
         let piece_a = Piece::new(1, TEAM_A_ROW, Team::A, 0);
         assert_eq!(
             piece_a.transform,
-            piece_transform(&piece_a),
-            "Team A: Piece::new's seeded transform must match piece_transform's on-the-fly math"
+            Transform {
+                translate: world_pos_for_cell(1, TEAM_A_ROW),
+                rotation: 0.0,
+                scale: Vec2::new(1.0, 1.0),
+            },
+            "Team A: Piece::new's seeded transform must match the hand-derived layout formula"
         );
 
         let piece_b = Piece::new(1, TEAM_B_ROW, Team::B, 3);
         assert_eq!(
             piece_b.transform,
-            piece_transform(&piece_b),
-            "Team B: Piece::new's seeded transform must match piece_transform's on-the-fly math"
+            Transform {
+                translate: world_pos_for_cell(1, TEAM_B_ROW),
+                rotation: 0.0,
+                scale: Vec2::new(-1.0, 1.0),
+            },
+            "Team B: Piece::new's seeded transform must match the hand-derived layout formula (mirrored)"
         );
     }
 
