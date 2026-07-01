@@ -4,31 +4,10 @@
 //! function that returns a [`Grid`] instead of an ANSI string, and fits
 //! to a two-axis `area` instead of a single `--width`.
 
-use image::imageops::FilterType;
-use image::{DynamicImage, GenericImageView};
+use image::DynamicImage;
 use ratatui::layout::Rect;
-use scene_core::color::Rgba;
 
-use crate::grid::{Cell, Grid};
-
-/// (dx, dy, bit-position) for each of the 8 braille dots in a 2×4 pixel block.
-/// Port of `downrez.rs:9-13`.
-const DOTS: [(u32, u32, u8); 8] = [
-    (0, 0, 0),
-    (0, 1, 1),
-    (0, 2, 2),
-    (1, 0, 3),
-    (1, 1, 4),
-    (1, 2, 5),
-    (0, 3, 6),
-    (1, 3, 7),
-];
-
-/// Luma (perceived brightness) from an RGB triplet.
-/// Truncating float→integer, matching the oracle `downrez.rs:15-17`.
-fn luma(r: u8, g: u8, b: u8) -> u8 {
-    (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) as u8
-}
+use crate::grid::Grid;
 
 /// Convert `img` into a braille [`Grid`] aspect-preserving fitted into `area`.
 ///
@@ -57,80 +36,7 @@ pub fn convert(img: &DynamicImage, area: Rect) -> Grid {
     cols = cols.clamp(1, area.width as u32);
     rows = rows.clamp(1, area.height as u32);
 
-    // Resize source to the pixel dimensions required by the cols×rows braille grid.
-    let src = img.resize_exact(cols * 2, rows * 4, FilterType::Lanczos3);
-
-    let mut grid = Grid::new(cols as usize, rows as usize);
-
-    for ty in 0..rows {
-        for tx in 0..cols {
-            let (px, py) = (tx * 2, ty * 4);
-
-            // Gather raw RGBA values for the 8 dot positions.
-            let pixels: Vec<[u8; 4]> = DOTS
-                .iter()
-                .map(|(dx, dy, _)| src.get_pixel(px + dx, py + dy).0)
-                .collect();
-
-            // Per-dot: None if alpha < 128, else Some(luma).
-            let lumas: Vec<Option<u8>> = pixels
-                .iter()
-                .map(|p| {
-                    if p[3] < 128 {
-                        None
-                    } else {
-                        Some(luma(p[0], p[1], p[2]))
-                    }
-                })
-                .collect();
-
-            let visible: Vec<u8> = lumas.iter().filter_map(|l| *l).collect();
-            if visible.is_empty() {
-                // All dots transparent — cell stays Cell::Transparent.
-                continue;
-            }
-
-            // Integer mean luma of visible dots.
-            let avg =
-                visible.iter().map(|&l| l as u32).sum::<u32>() / visible.len() as u32;
-
-            // Build braille bit mask: dot is lit iff visible AND luma >= mean.
-            let mut mask = 0u32;
-            for (k, (_, _, bit)) in DOTS.iter().enumerate() {
-                if let Some(l) = lumas[k] {
-                    if l as u32 >= avg {
-                        mask |= 1 << bit;
-                    }
-                }
-            }
-
-            if mask == 0 {
-                // Defensive guard — unreachable when visible is non-empty.
-                continue;
-            }
-
-            let ch = char::from_u32(0x2800 + mask).unwrap_or(' ');
-
-            // Foreground = integer mean RGB over the visible (alpha >= 128) dots.
-            let vp: Vec<&[u8; 4]> = pixels
-                .iter()
-                .enumerate()
-                .filter(|(k, _)| lumas[*k].is_some())
-                .map(|(_, p)| p)
-                .collect();
-            let n = vp.len() as u32;
-            let (r, g, b) =
-                vp.iter()
-                    .fold((0u32, 0u32, 0u32), |(ar, ag, ab), p| {
-                        (ar + p[0] as u32, ag + p[1] as u32, ab + p[2] as u32)
-                    });
-            let color = Rgba::rgb((r / n) as u8, (g / n) as u8, (b / n) as u8);
-
-            grid.set(tx as usize, ty as usize, Cell::Glyph { ch, color });
-        }
-    }
-
-    grid
+    crate::dots::dots_to_grid(&crate::dots::sprite_to_dots(img, cols * 2, rows * 4))
 }
 
 #[cfg(test)]
