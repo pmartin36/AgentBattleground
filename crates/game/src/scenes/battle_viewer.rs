@@ -187,10 +187,10 @@ pub fn world_pos_for_cell(col: u16, row: u16) -> WorldPos {
 pub const PIECE_STAGGER: std::time::Duration = std::time::Duration::from_millis(37);
 /// `sprite_base_dot_rows` = `camera.scale_dots * SPRITE_DOT_RATIO`, rounded.
 pub const SPRITE_DOT_RATIO: f32 = 1.2;
-/// Team A tint (blue-ish).
-pub const TEAM_A_COLOR: Rgba = Rgba::rgb(0x4a, 0x90, 0xd9);
-/// Team B tint (red-ish).
-pub const TEAM_B_COLOR: Rgba = Rgba::rgb(0xd9, 0x4a, 0x4a);
+/// Team A tint (pale gold).
+pub const TEAM_A_COLOR: Rgba = Rgba::rgb(0xff, 0xe8, 0xb0);
+/// Team B tint (pale mint).
+pub const TEAM_B_COLOR: Rgba = Rgba::rgb(0xb0, 0xff, 0xe0);
 
 impl Team {
     /// This team's tint color: A -> `TEAM_A_COLOR`, B -> `TEAM_B_COLOR`.
@@ -679,10 +679,10 @@ mod piece_render_tests {
         let dots_a = piece_dots(&piece_a, &sprite, Duration::ZERO, &geom);
         let dots_b = piece_dots(&piece_b, &sprite, Duration::ZERO, &geom);
 
-        // TEAM_A_COLOR = (74,144,217): 200*74/255=58, 200*144/255=112, 200*217/255=170
-        let expected_a = Rgba::rgb(58, 112, 170);
-        // TEAM_B_COLOR = (217,74,74): 200*217/255=170, 200*74/255=58, 200*74/255=58
-        let expected_b = Rgba::rgb(170, 58, 58);
+        // TEAM_A_COLOR = (255,232,176): 200*255/255=200, 200*232/255=181, 200*176/255=138
+        let expected_a = Rgba::rgb(200, 181, 138);
+        // TEAM_B_COLOR = (176,255,224): 200*176/255=138, 200*255/255=200, 200*224/255=175
+        let expected_b = Rgba::rgb(138, 200, 175);
 
         assert!(dots_a.cols() > 0 && dots_a.rows() > 0, "Team A buffer must be non-empty");
         for row in 0..dots_a.rows() {
@@ -707,6 +707,14 @@ mod piece_render_tests {
         }
 
         assert_ne!(expected_a, expected_b, "the two teams' tinted colors must be distinct");
+    }
+
+    /// Direct-value pin (b1-t1): the two team tint constants must be the
+    /// pale-gold / pale-mint defaults, not the old saturated blue/red.
+    #[test]
+    fn team_colors_are_pale_gold_and_pale_mint() {
+        assert_eq!(TEAM_A_COLOR, Rgba::rgb(0xff, 0xe8, 0xb0), "TEAM_A_COLOR must be pale gold");
+        assert_eq!(TEAM_B_COLOR, Rgba::rgb(0xb0, 0xff, 0xe0), "TEAM_B_COLOR must be pale mint");
     }
 
     /// DELIVERABLE (2): the `Transform` selected by `piece_transform` mirrors
