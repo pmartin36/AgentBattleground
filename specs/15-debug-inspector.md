@@ -1,6 +1,6 @@
 # Debug Inspector — Field Editing
 
-> **Status: draft (not started).** The debug inspector's process, egui shell, connection lifecycle, **scene-switch UI, and message log shipped with `14-scene-architecture` (done).** This spec covers the remaining, unbuilt half: **live field editing** — reading and tweaking a scene's exposed state. Read `14` first.
+> **Status: draft (not started).** The debug inspector's process, egui shell, connection lifecycle, **scene-switch UI, and message log shipped with `14-scene-architecture` (done).** This spec covers the remaining, unbuilt half: **live field editing** — reading and tweaking a scene's exposed state. Read `14` first. The `asset` widget and dynamic (add/remove) collection editing are cut from this spec's scope — both live in `19-debug-inspector-advanced-editing`.
 
 ## Purpose
 Extend the (already-built) debug inspector from scene *switching* to scene-state *editing*: let a developer read and change a scene's exposed fields live, without touching code or rebuilding.
@@ -33,10 +33,9 @@ The panel docks below the (already-built) scene-switch bar and is built from the
 | `enum` | dropdown of variants |
 | `color` | color picker (24-bit RGB) |
 | `struct` | collapsible foldout (nested fields) |
-| `list` | foldout list (read/edit values; add/remove TBD) |
-| `asset` | path field + file picker |
+| `list` | foldout list, **fixed size** — read/edit each element's fields; add/remove is out of scope (`19-debug-inspector-advanced-editing`) |
 
-Attributes honored: `label` (display name), `range` (slider bounds), `readonly` (display only), `hidden` (omitted). Unknown/unsupported type tags fall back to a read-only JSON view so no field is ever undisplayable.
+Attributes honored: `label` (display name), `range` (slider bounds), `readonly` (display only), `hidden` (omitted). Unknown/unsupported type tags — including `asset` (deferred to `19`) — fall back to a read-only JSON view so no field is ever undisplayable.
 
 Switching scenes (via the built switcher) rebuilds the panel for the new scene from its schema and populates it with the returned live `snapshot`.
 
@@ -50,15 +49,17 @@ Switching scenes (via the built switcher) rebuilds the panel for the new scene f
 ---
 
 ## Test Plan
-Connect (via the built switcher) → switch to a scene → its schema-driven fields render → edit `background`/`caption` → **Submit** → change is visible in the game. Plus: widget selection per type, dirty highlighting, Revert, live-apply toggle.
+Connect (via the built switcher) → switch to a scene → its schema-driven fields render → edit an exposed field → **Submit** → change is visible in the game. Plus: widget selection per type, dirty highlighting, Revert, live-apply toggle.
 
 ## Open Questions / TBDs
 - `#[derive(Inspectable)]` grammar/attributes (labels, ranges, hidden/readonly).
-- Collection editing (add/remove `Vec` elements) — deferred or v1?
 - Presets: save/load a set of field values per scene?
 - Undo/redo of applied changes?
 - Triggering scene-specific debug *actions* (buttons/commands), not just field edits — future extension?
 
+Resolved (moved out): `asset` widget and dynamic (add/remove) collection editing → `19-debug-inspector-advanced-editing`.
+
 ## Dependencies
 - `14-scene-architecture` — the built inspector base (process, egui shell, connection, scene switcher, message log) this extends, plus the IPC envelope and the `Inspectable`/`schema()` M2 hook.
 - `16-world-space-and-camera` / `13-rendering` — only indirectly (the game it inspects renders through them).
+- Consumed by `19-debug-inspector-advanced-editing` — extends this spec's schema/widget system with the `asset` widget and dynamic collection sizing.

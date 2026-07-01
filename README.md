@@ -57,6 +57,7 @@ High-level design specs for each segment of the game live in `/specs`:
 | 15 | [Debug Inspector — Field Editing](specs/15-debug-inspector.md) |
 | 16 | [World Space & Camera](specs/16-world-space-and-camera.md) ✅ |
 | 17 | [Creature Art & Asset Pipeline](specs/17-creature-art-asset-pipeline.md) |
+| 19 | [Debug Inspector — Advanced Editing](specs/19-debug-inspector-advanced-editing.md) |
 
 ## Status
 
