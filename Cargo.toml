@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/scene-core",
+    "crates/scene-core-derive",
     "crates/render",
     "crates/game",
     "crates/inspector",
@@ -15,3 +16,6 @@ ratatui = "0.29"
 crossterm = "0.28"
 eframe = "0.35"
 egui = "0.35"
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
