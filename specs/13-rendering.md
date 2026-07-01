@@ -1,4 +1,8 @@
+> # ✅ DONE! — Completed 2026-07-01
+
 # Rendering
+
+> **Status: implemented.** The braille renderer — image/GIF → colored braille, animation, dot-level depth compositing — is built and validated (see *Validation*). World space + camera + the sprite transform live in `16-world-space-and-camera`; creature-art generation/import lives in `17-creature-art-asset-pipeline`.
 
 ## Purpose
 The shared visual layer that turns image/sprite assets into terminal output. Every scene that shows a piece, a portrait, or the battlefield draws through this system. It defines the game's visual identity. The Battle Viewer (spec 05) is its most demanding consumer.
@@ -64,32 +68,12 @@ Scenes do not implement braille conversion themselves. The renderer exposes:
 
 The current art-style decision excludes: posterization, sprite outlining, and interior noise/grain. Sprites render as clean colored braille.
 
-## Two Fidelities Per Creature
-Each creature has **two source images**, both rendered through the braille converter at different sizes:
-- **Creature-viewer image** — high detail. Rendered as a large braille sprite for detail/roster views.
-- **Battlefield image** — low detail, simplified. Rendered as a small braille sprite for the battlefield.
-
-These are two distinct images, not one image at two zoom levels. A detailed image shrunk to battlefield size reads as mush; a purpose-simplified image reads as a clean small sprite. The battlefield image is **derived from the creature-viewer image** (image-to-image with low denoise + a simplification prompt) so the two share identity — same creature, two detail levels.
-
-## Asset Generation Pipeline
-Creature art enters through two front-ends that converge on the same converter:
-- **In-app generation** (GPU-gated, optional) — local diffusion produces the high-detail image, then an img2img-simplify pass derives the battlefield image.
-- **Drag-n-drop import** (universal) — the player supplies the high-detail image from any source; the simplify + convert steps run locally.
-
-Both paths: source image → background removal (transparent cutout) → braille convert. Background removal is required for clean compositing (transparent pixels become empty cells).
-
-Generation engine: **stable-diffusion.cpp** (pure C/C++, GGUF-quantized, ggml family — same ecosystem as the text model). Invoked via its CLI as a sandboxed subprocess, or via Rust bindings (`diffusion-rs`) in-process. Candidate models: Z-Image Turbo (fast, low VRAM) and FLUX.2 klein (higher quality). This keeps generation a local, optional, GPU-gated capability; the down-rezzer and import path require no GPU, so the minimum player spec stays "a terminal."
-
 ## Reference Prototype
 `experiments/ascii_test/` contains working prototypes used to validate the style:
 - `src/main.rs` — single-image fidelity (ASCII vs. half-block vs. braille, face crop)
 - `src/anim.rs` — animated GIF playback in braille with transparency
 - `src/flow.rs` — multi-sprite depth-layer crowd ("tidal wave") compositing
 - `src/downrez.rs` — standalone CLI: image → colored braille (the down-rezzer both front-ends use)
-- `experiments/creature_lab/` — CLI bake-off rig: generate (high-res) → img2img-simplify (battlefield) → rembg → braille preview, on stable-diffusion.cpp
-
-## Current Implementation State
-Only an M1 **placeholder** exists in the `render` crate: a solid-color braille `fill` plus a centered `label`, used to make scene switching visible (see `14-scene-architecture`). None of the conversion, compositing, depth-sort, or animation described above is built yet. The placeholder is marked as such in-crate and is not the rendering model to extend.
 
 ## Validation
 The renderer is validated in three tiers of increasing difficulty. Each tier pairs an automated **golden test** (the gate) with an **example that renders through the real engine loop** (the eyeball check). The conversion algorithm is ported from the prototypes in `experiments/ascii_test/`; correctness is pinned by **hand-derived expectations** for known inputs (independent of any implementation), with the prototypes as the visual reference.
@@ -105,13 +89,15 @@ The renderer is validated in three tiers of increasing difficulty. Each tier pai
 - Tier 3 uses **binary alpha (0/1)** only — translucent blending is out of v1 scope (see *Decisions (v1)*); it is the integration test for what v1 actually ships.
 - Fixtures (a small PNG-with-alpha, a short GIF) are committed under the `render` crate's test assets so the golden tests are self-contained; examples embed them via `include_bytes!`.
 
-## Open Questions / TBDs
-- Per-piece upgrade visuals — how do sprites evolve across the two fidelities?
-- Battlefield representation (grid vs. free-form) and how sprites map onto it — see spec 05.
-- Camera angle (isometric / side / 3-4 top-down) is not chosen. It is decoupled from the depth sorter (the camera supplies projection + `depth_key`), so it does not block the renderer; the battlefield-representation decision above constrains the coordinate space the camera projects.
+## Open Questions / TBDs (future refinements — renderer is shipped)
 - Performance ceiling: max sprites on screen at target framerate.
 - Color treatment for team/faction identification in a crowd.
+- Sub-cell RGBA / translucency blending (deferred; current compositing is binary cutout).
+
+(Moved out: creature fidelity + upgrade visuals → `17`; camera angle → `16`; battlefield representation → `05`.)
 
 ## Dependencies
 - Consumed by `05-battle-viewer` (primary), and any scene showing pieces (`02`, `03`, `06`, `07`).
+- `16-world-space-and-camera` — provides world position, the camera (projection + `depth_key`), and the sprite `Transform` the renderer places by.
+- `17-creature-art-asset-pipeline` — produces the background-removed source images the renderer converts.
 - `12-data-model-sync` — sprite/asset references in the data model.

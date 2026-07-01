@@ -187,7 +187,7 @@ These are stand-ins for the real scenes (`02`, `05`, `03`, `08`) so names and id
 - `scene-core` (shared): `SceneId`, registry, `Scene` trait, IPC envelope/message types. Depended on by **both** game and inspector so neither drifts. *(M2 adds the `Inspectable` trait + derive here.)*
 - `render`: the braille renderer (M1: `fill` + label; grows into spec 13).
 - `game`: engine, `SceneManager`, main loop, concrete scenes, IPC server thread.
-- `inspector`: the egui app (spec 15), IPC client.
+- `inspector`: the egui app — the **scene-switch client** (catalog dropdown + "Go", connection/reconnect, message log) is built here as part of this milestone; **live field editing is `15-debug-inspector`**.
 
 `ascii_test/` stays a separate scratch prototype; code is ported into `render` as needed.
 
