@@ -55,6 +55,7 @@ High-level design specs for each segment of the game live in `/specs`:
 | 13 | [Rendering](specs/13-rendering.md) |
 | 14 | [Scene Architecture & Debug Scene Switcher](specs/14-scene-architecture.md) |
 | 15 | [Debug Inspector](specs/15-debug-inspector.md) |
+| 16 | [World Space & Camera](specs/16-world-space-and-camera.md) |
 
 ## Status
 

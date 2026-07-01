@@ -11,7 +11,7 @@ The shared visual layer that turns image/sprite assets into terminal output. Eve
 
 ## Decisions (v1)
 - **No synthetic grain.** Sprites render as clean colored braille; conversion is deterministic. (Resolves the earlier grain/no-grain contradiction in favor of clean.)
-- **Cell-level compositing, binary alpha.** Sprites are pre-rendered to braille grids and painted back-to-front; alpha is a per-dot cutout (lit or transparent), not translucency. Sub-cell RGBA blending between overlapping translucent sprites is a future refinement.
+- **Dot-level compositing, binary alpha.** Sprites composite at dot granularity (image → dot buffer → composite at dot offsets → braille), per `16-world-space-and-camera`; the cell-level compositor built during renderer validation is the whole-cell special case. Alpha is a per-dot cutout (lit or transparent), not translucency; sub-cell RGBA blending between overlapping translucent sprites is a future refinement.
 - **`convert` fits within a target area** (cols×rows), preserving source aspect, centered.
 - **Truecolor only.** 24-bit RGB terminals are assumed; no 256-color fallback in v1.
 
@@ -43,19 +43,13 @@ Many sprites render into one cell buffer — an application of the band + camera
 - **Pre-rendered frames** per animation frame at each band's scale, reused across instances (the cell-level caching from *Decisions (v1)*).
 
 ### Depth & Draw Order
-Compositing is a back-to-front **painter's algorithm** over a depth-sorted sprite list — no z-buffer.
+Compositing is a back-to-front **painter's algorithm** over a depth-sorted sprite list — no z-buffer. The world-space + camera model that produces each sprite's screen position and depth scalar is specified in `16-world-space-and-camera`; this section covers only how the compositor consumes them.
 
-- Sprites carry a **logical position in a game-defined space** plus a **band**, not a stored `z`. The space is the game's choice — a discrete grid or continuous 2D — and the renderer assumes neither.
-- The **camera** supplies two functions: a projection `position → screen_pos`, and a `depth_key(position) → scalar`. The sorter is generic, so the **camera angle (isometric / side / top-down) is configuration, not an engine assumption.** Supporting several angles means supplying several `(projection, depth_key)` pairs over the same sprite data.
-- The global draw key is **hierarchical**: `(band, depth_key)`. Bands order coarse layers — background parallax (far) → battlefield → foreground / UI; `depth_key` orders within a band.
-- `depth_key` by camera (battlefield, back-to-front):
-  - **Isometric:** `row + col`
-  - **Side with depth rows:** `row`
-  - **3/4 "top-down" (upright billboards):** `row` (≈ screen-y)
-  - **Pure orthographic top-down:** degenerate — sprites never overlap, ordering is moot
+- Each sprite arrives with a screen position and a **depth** scalar from the camera (`depth_key(world_pos)`, per `16`) plus a **band**. The compositor is angle-agnostic — it never interprets depth, only sorts by it.
+- The global draw key is **hierarchical**: `(band, depth)`. Bands order coarse layers — background parallax (far) → battlefield → foreground / UI; `depth` orders within a band.
 - **Tall / multi-cell sprites sort on their footprint (anchor) position, not per cell** — this bounds the sprite-overlap mis-sort case without splitting sprites.
 
-This is the standard 2D/2.5D sorting model (cf. Unity sorting-layer + order-in-layer + transparency-sort-axis, Godot Y-sort, GameMaker `depth`) — the 2.5D analog of a 3D camera's view-projection producing depth, made explicit because there is no projection matrix.
+This is the standard 2D/2.5D sorting model (cf. Unity sorting-layer + order-in-layer + transparency-sort-axis, Godot Y-sort, GameMaker `depth`).
 
 ### Animation
 - An animated sprite is a **sequence of frames** advanced by **elapsed wall-clock time**, decoupled from the render framerate. Playback rate = a per-sprite **base frame duration** scaled by a runtime **speed multiplier** (the game-engine convention — Unity `Animator.speed`, Godot `speed_scale`, Unreal `PlayRate`): `1.0` natural, `2.0` twice as fast, `0` holds, negative plays in reverse. The renderer iterates a frame list — it is not a format-specific player.
