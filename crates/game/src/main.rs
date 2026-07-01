@@ -1,7 +1,11 @@
 use std::io;
 
-use scene_core::scene_id::SceneId;
-
 fn main() -> io::Result<()> {
-    game::run(game::registry::construct(SceneId::MainHub))
+    match game::cli::resolve_boot(std::env::args().skip(1)) {
+        Ok((id, params)) => game::app::run_with_params(game::registry::construct(id), params),
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
 }
