@@ -2,9 +2,25 @@ use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use ratatui::Frame;
+use scene_core::inspect::{FieldSchema, FieldTag};
 use scene_core::ipc::{CatalogEntry, Hello, Message, SceneChanged};
 use scene_core::scene_id::SceneId;
 use serde_json::Value as JsonValue;
+
+/// Placeholder schema for a catalog entry until b5-t3 wires
+/// `registry::schema_for(id)` in with the real per-scene schema.
+fn stub_schema(id: SceneId) -> FieldSchema {
+    FieldSchema {
+        name: id.display_name().to_string(),
+        label: None,
+        tag: FieldTag::Struct,
+        readonly: false,
+        hidden: false,
+        range: None,
+        children: vec![],
+        variants: vec![],
+    }
+}
 
 use crate::ipc_server::Event;
 use crate::registry;
@@ -120,6 +136,7 @@ impl SceneManager {
             .map(|id| CatalogEntry {
                 id,
                 name: id.display_name().to_string(),
+                schema: stub_schema(id),
             })
             .collect();
         Hello {
@@ -154,7 +171,10 @@ impl SceneManager {
     pub fn process_pending_notify(&mut self, events: &Sender<Event>) -> Option<SceneId> {
         let id = self.process_pending()?;
         let _ = events.send(Event {
-            body: Message::SceneChanged(SceneChanged { id }),
+            body: Message::SceneChanged(SceneChanged {
+                id,
+                snapshot: JsonValue::Null,
+            }),
             reply_to: None,
         });
         Some(id)

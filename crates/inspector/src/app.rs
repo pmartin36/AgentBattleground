@@ -45,8 +45,13 @@ impl SwitcherState {
                 self.active = Some(sc.id);
                 self.selected = Some(sc.id);
             }
-            Message::Ack | Message::Error(_) | Message::SwitchScene(_) => {
-                // no-op in M1
+            Message::Ack
+            | Message::Error(_)
+            | Message::SwitchScene(_)
+            | Message::ApplyState(_)
+            | Message::StateSnapshot(_)
+            | Message::Subscribe(_) => {
+                // no-op here; StateSnapshot/ApplyState/Subscribe handling lands in b4-t1..t3.
             }
         }
     }
@@ -165,8 +170,22 @@ impl eframe::App for InspectorApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scene_core::inspect::{FieldSchema, FieldTag};
     use scene_core::ipc::{CatalogEntry, Hello, Message, SceneChanged};
     use scene_core::scene_id::SceneId;
+
+    fn stub_schema(name: &str) -> FieldSchema {
+        FieldSchema {
+            name: name.to_string(),
+            label: None,
+            tag: FieldTag::Struct,
+            readonly: false,
+            hidden: false,
+            range: None,
+            children: vec![],
+            variants: vec![],
+        }
+    }
 
     fn four_scene_hello() -> Message {
         Message::Hello(Hello {
@@ -174,18 +193,22 @@ mod tests {
                 CatalogEntry {
                     id: SceneId::MainHub,
                     name: "Main Hub".to_string(),
+                    schema: stub_schema("MainHub"),
                 },
                 CatalogEntry {
                     id: SceneId::BattleViewer,
                     name: "Battle Viewer".to_string(),
+                    schema: stub_schema("BattleViewer"),
                 },
                 CatalogEntry {
                     id: SceneId::ArmyEditor,
                     name: "Army Editor".to_string(),
+                    schema: stub_schema("ArmyEditor"),
                 },
                 CatalogEntry {
                     id: SceneId::Leaderboard,
                     name: "Leaderboard".to_string(),
+                    schema: stub_schema("Leaderboard"),
                 },
             ],
             active: SceneId::MainHub,
@@ -220,6 +243,7 @@ mod tests {
         s.apply(&four_scene_hello());
         s.apply(&Message::SceneChanged(SceneChanged {
             id: SceneId::BattleViewer,
+            snapshot: serde_json::Value::Null,
         }));
         assert_eq!(s.active, Some(SceneId::BattleViewer), "active must track SceneChanged");
         assert_eq!(s.selected, Some(SceneId::BattleViewer), "selected must mirror active on SceneChanged");

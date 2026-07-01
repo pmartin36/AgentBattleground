@@ -78,6 +78,7 @@ impl InspectorClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scene_core::inspect::{FieldSchema, FieldTag};
     use scene_core::ipc::{
         write_frame, read_frame, CatalogEntry, Envelope, Hello, Message,
     };
@@ -85,6 +86,19 @@ mod tests {
     use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
     use std::time::Duration;
+
+    fn stub_schema(name: &str) -> FieldSchema {
+        FieldSchema {
+            name: name.to_string(),
+            label: None,
+            tag: FieldTag::Struct,
+            readonly: false,
+            hidden: false,
+            range: None,
+            children: vec![],
+            variants: vec![],
+        }
+    }
 
     // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -108,10 +122,12 @@ mod tests {
                 CatalogEntry {
                     id: SceneId::MainHub,
                     name: "Main Hub".to_string(),
+                    schema: stub_schema("MainHub"),
                 },
                 CatalogEntry {
                     id: SceneId::BattleViewer,
                     name: "Battle Viewer".to_string(),
+                    schema: stub_schema("BattleViewer"),
                 },
             ],
             active: SceneId::MainHub,

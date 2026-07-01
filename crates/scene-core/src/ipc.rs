@@ -4,8 +4,10 @@
 //! All encode/decode paths live here; b4 server and b5 client use `write_frame`/`read_frame`.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 
+use crate::inspect::FieldSchema;
 use crate::scene_id::SceneId;
 
 /// Maximum JSON body length (bytes) the 4-byte length prefix may declare.
@@ -15,10 +17,13 @@ pub const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
 // ── Payload structs ────────────────────────────────────────────────────────────
 
 /// One entry in the scene catalog sent in a `Hello` message.
+/// `schema` is sent for EVERY entry (not only `active`) so the inspector can
+/// build a panel for a not-yet-active scene the moment it connects.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CatalogEntry {
     pub id: SceneId,
     pub name: String,
+    pub schema: FieldSchema,
 }
 
 /// Server → inspector on connect (and on reconnect). Lists every available
@@ -30,9 +35,12 @@ pub struct Hello {
 }
 
 /// Server → inspector (unsolicited) after any scene switch.
+/// Deliberately carries `snapshot` only — never `schema` (the inspector
+/// rebuilds the panel from its own `Hello`-populated schema cache).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SceneChanged {
     pub id: SceneId,
+    pub snapshot: serde_json::Value,
 }
 
 /// Inspector → server: request a scene switch.
@@ -59,6 +67,32 @@ pub enum ErrorCode {
     BadFrame,
     UnknownType,
     UnknownScene,
+    /// `ApplyState.id` did not match the currently-active scene.
+    NotActive,
+    /// One or more paths in an `ApplyState.patch` were rejected
+    /// (readonly target, type mismatch, unknown path).
+    BadField,
+}
+
+/// Inspector → game: apply a batch of field patches to the named scene.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApplyState {
+    pub id: SceneId,
+    pub patch: BTreeMap<String, serde_json::Value>,
+}
+
+/// Game → inspector: current field values for the named scene (reply to
+/// `ApplyState`, or an unprompted post-connect / live-mode push).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StateSnapshot {
+    pub id: SceneId,
+    pub snapshot: serde_json::Value,
+}
+
+/// Inspector → game: toggle "apply on change" live mode.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Subscribe {
+    pub live: bool,
 }
 
 // ── Message (the M1 message set) ───────────────────────────────────────────────
@@ -72,6 +106,9 @@ pub enum Message {
     /// Acknowledgement of a `SwitchScene`; no payload.
     Ack,
     Error(ErrorPayload),
+    ApplyState(ApplyState),
+    StateSnapshot(StateSnapshot),
+    Subscribe(Subscribe),
 }
 
 impl Message {
@@ -83,6 +120,9 @@ impl Message {
             Message::SwitchScene(_) => "SwitchScene",
             Message::Ack => "Ack",
             Message::Error(_) => "Error",
+            Message::ApplyState(_) => "ApplyState",
+            Message::StateSnapshot(_) => "StateSnapshot",
+            Message::Subscribe(_) => "Subscribe",
         }
     }
 }
@@ -133,6 +173,15 @@ impl Envelope {
             Message::Ack => serde_json::Value::Null,
             Message::Error(ep) => {
                 serde_json::to_value(ep).map_err(|e| IpcError::BadFrame(e.to_string()))?
+            }
+            Message::ApplyState(a) => {
+                serde_json::to_value(a).map_err(|e| IpcError::BadFrame(e.to_string()))?
+            }
+            Message::StateSnapshot(ss) => {
+                serde_json::to_value(ss).map_err(|e| IpcError::BadFrame(e.to_string()))?
+            }
+            Message::Subscribe(s) => {
+                serde_json::to_value(s).map_err(|e| IpcError::BadFrame(e.to_string()))?
             }
         };
 
@@ -264,6 +313,18 @@ fn decode_body(body: &[u8]) -> Result<Envelope, IpcError> {
             let ep: ErrorPayload = from_payload(wire.payload)?;
             Message::Error(ep)
         }
+        "ApplyState" => {
+            let a: ApplyState = from_payload(wire.payload)?;
+            Message::ApplyState(a)
+        }
+        "StateSnapshot" => {
+            let ss: StateSnapshot = from_payload(wire.payload)?;
+            Message::StateSnapshot(ss)
+        }
+        "Subscribe" => {
+            let s: Subscribe = from_payload(wire.payload)?;
+            Message::Subscribe(s)
+        }
         unknown => return Err(IpcError::UnknownType(unknown.to_string())),
     };
 
@@ -324,9 +385,23 @@ impl std::error::Error for IpcError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::inspect::FieldTag;
     use std::io::Cursor;
 
     // ── helpers ────────────────────────────────────────────────────────────────
+
+    fn stub_schema(name: &str) -> FieldSchema {
+        FieldSchema {
+            name: name.to_string(),
+            label: None,
+            tag: FieldTag::Struct,
+            readonly: false,
+            hidden: false,
+            range: None,
+            children: vec![],
+            variants: vec![],
+        }
+    }
 
     fn hello_msg() -> Message {
         Message::Hello(Hello {
@@ -334,10 +409,12 @@ mod tests {
                 CatalogEntry {
                     id: SceneId::MainHub,
                     name: "Main Hub".to_string(),
+                    schema: stub_schema("MainHub"),
                 },
                 CatalogEntry {
                     id: SceneId::BattleViewer,
                     name: "Battle Viewer".to_string(),
+                    schema: stub_schema("BattleViewer"),
                 },
             ],
             active: SceneId::MainHub,
@@ -361,7 +438,29 @@ mod tests {
     fn scene_changed_msg() -> Message {
         Message::SceneChanged(SceneChanged {
             id: SceneId::BattleViewer,
+            snapshot: serde_json::Value::Null,
         })
+    }
+
+    fn apply_state_msg() -> Message {
+        let mut patch = BTreeMap::new();
+        patch.insert("elapsed".to_string(), serde_json::json!(5.0));
+        patch.insert("pieces[0].team".to_string(), serde_json::json!("B"));
+        Message::ApplyState(ApplyState {
+            id: SceneId::BattleViewer,
+            patch,
+        })
+    }
+
+    fn state_snapshot_msg() -> Message {
+        Message::StateSnapshot(StateSnapshot {
+            id: SceneId::BattleViewer,
+            snapshot: serde_json::json!({"elapsed": 1.0}),
+        })
+    }
+
+    fn subscribe_msg() -> Message {
+        Message::Subscribe(Subscribe { live: true })
     }
 
     // ── encode_frame / decode_frame round-trips (one per message variant) ──────
@@ -495,6 +594,7 @@ mod tests {
         // Hello.active and SceneChanged.id must survive as "BattleViewer", not a numeric id.
         let env = Envelope::new(30, None, Message::SceneChanged(SceneChanged {
             id: SceneId::BattleViewer,
+            snapshot: serde_json::Value::Null,
         }));
         let bytes = env.encode_frame().expect("encode");
         // The raw JSON somewhere inside bytes must contain the wire name.
@@ -640,5 +740,148 @@ mod tests {
             None,
             "Io IpcError must map to None"
         );
+    }
+
+    // ── b2-t1: new Message variants (ApplyState/StateSnapshot/Subscribe) ──────
+
+    #[test]
+    fn round_trip_apply_state_encode_decode() {
+        let env = Envelope::new(40, None, apply_state_msg());
+        let bytes = env.encode_frame().expect("encode ApplyState");
+        let decoded = Envelope::decode_frame(&bytes).expect("decode ApplyState");
+        assert_eq!(env, decoded);
+    }
+
+    #[test]
+    fn round_trip_apply_state_write_read_frame() {
+        let env = Envelope::new(41, Some(40), apply_state_msg());
+        let mut buf = Vec::new();
+        write_frame(&mut buf, &env).expect("write_frame ApplyState");
+        let decoded = read_frame(&mut Cursor::new(buf)).expect("read_frame ApplyState");
+        assert_eq!(env, decoded);
+    }
+
+    #[test]
+    fn round_trip_state_snapshot_encode_decode() {
+        let env = Envelope::new(42, None, state_snapshot_msg());
+        let bytes = env.encode_frame().expect("encode StateSnapshot");
+        let decoded = Envelope::decode_frame(&bytes).expect("decode StateSnapshot");
+        assert_eq!(env, decoded);
+    }
+
+    #[test]
+    fn round_trip_subscribe_encode_decode() {
+        let env = Envelope::new(43, None, subscribe_msg());
+        let bytes = env.encode_frame().expect("encode Subscribe");
+        let decoded = Envelope::decode_frame(&bytes).expect("decode Subscribe");
+        assert_eq!(env, decoded);
+    }
+
+    #[test]
+    fn apply_state_patch_btreemap_preserves_multiple_entries() {
+        let env = Envelope::new(44, None, apply_state_msg());
+        let bytes = env.encode_frame().expect("encode ApplyState");
+        let decoded = Envelope::decode_frame(&bytes).expect("decode ApplyState");
+        match decoded.body {
+            Message::ApplyState(a) => {
+                assert_eq!(a.patch.len(), 2, "both patch keys must survive the round trip");
+                assert_eq!(a.patch["elapsed"], serde_json::json!(5.0));
+                assert_eq!(a.patch["pieces[0].team"], serde_json::json!("B"));
+            }
+            other => panic!("expected ApplyState, got {:?}", other),
+        }
+    }
+
+    // ── b2-t1: per-entry schema placement + snapshot-only SceneChanged ────────
+
+    #[test]
+    fn hello_two_distinct_per_entry_schemas_decode_distinctly() {
+        let schema_a = FieldSchema {
+            name: "A".to_string(),
+            label: None,
+            tag: FieldTag::Float,
+            readonly: false,
+            hidden: false,
+            range: None,
+            children: vec![],
+            variants: vec![],
+        };
+        let schema_b = FieldSchema {
+            name: "B".to_string(),
+            label: None,
+            tag: FieldTag::Struct,
+            readonly: false,
+            hidden: false,
+            range: None,
+            children: vec![stub_schema("child")],
+            variants: vec![],
+        };
+        let env = Envelope::new(
+            50,
+            None,
+            Message::Hello(Hello {
+                scenes: vec![
+                    CatalogEntry {
+                        id: SceneId::MainHub,
+                        name: "Main Hub".to_string(),
+                        schema: schema_a.clone(),
+                    },
+                    CatalogEntry {
+                        id: SceneId::BattleViewer,
+                        name: "Battle Viewer".to_string(),
+                        schema: schema_b.clone(),
+                    },
+                ],
+                active: SceneId::MainHub,
+            }),
+        );
+        let bytes = env.encode_frame().expect("encode Hello");
+        let decoded = Envelope::decode_frame(&bytes).expect("decode Hello");
+        match decoded.body {
+            Message::Hello(h) => {
+                assert_eq!(h.scenes[0].schema, schema_a, "entry 0's own schema must decode intact");
+                assert_eq!(h.scenes[1].schema, schema_b, "entry 1's own schema must decode intact");
+                assert_ne!(
+                    h.scenes[0].schema, h.scenes[1].schema,
+                    "the two entries' schemas must remain distinct, not collapsed to one shared schema"
+                );
+            }
+            other => panic!("expected Hello, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn scene_changed_wire_payload_has_id_and_snapshot_no_schema_key() {
+        let env = Envelope::new(
+            51,
+            None,
+            Message::SceneChanged(SceneChanged {
+                id: SceneId::BattleViewer,
+                snapshot: serde_json::json!({"elapsed": 2.5}),
+            }),
+        );
+        let bytes = env.encode_frame().expect("encode SceneChanged");
+        let json_body = std::str::from_utf8(&bytes[4..]).expect("valid UTF-8");
+        let v: serde_json::Value = serde_json::from_str(json_body).expect("valid JSON");
+        let payload = v["payload"].as_object().expect("payload is a JSON object");
+        let mut keys: Vec<&str> = payload.keys().map(|k| k.as_str()).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["id", "snapshot"],
+            "SceneChanged payload must be exactly {{id, snapshot}} — no schema key"
+        );
+        assert_eq!(payload["snapshot"], serde_json::json!({"elapsed": 2.5}));
+    }
+
+    #[test]
+    fn error_code_not_active_and_bad_field_round_trip() {
+        let na = serde_json::to_value(ErrorCode::NotActive).expect("serialize NotActive");
+        let decoded: ErrorCode = serde_json::from_value(na).expect("deserialize NotActive");
+        assert_eq!(decoded, ErrorCode::NotActive);
+
+        let bf = serde_json::to_value(ErrorCode::BadField).expect("serialize BadField");
+        let decoded: ErrorCode = serde_json::from_value(bf).expect("deserialize BadField");
+        assert_eq!(decoded, ErrorCode::BadField);
     }
 }

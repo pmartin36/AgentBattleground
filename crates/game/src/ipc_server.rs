@@ -536,8 +536,22 @@ mod tests {
         cmd_rx: std::sync::mpsc::Receiver<Command>,
         event_tx: std::sync::mpsc::Sender<Event>,
     ) {
+        use scene_core::inspect::{FieldSchema, FieldTag};
         use scene_core::ipc::{CatalogEntry, Hello, SceneChanged};
         use scene_core::scene_id::SceneId;
+
+        fn stub_schema(id: SceneId) -> FieldSchema {
+            FieldSchema {
+                name: id.display_name().to_string(),
+                label: None,
+                tag: FieldTag::Struct,
+                readonly: false,
+                hidden: false,
+                range: None,
+                children: vec![],
+                variants: vec![],
+            }
+        }
 
         let active = SceneId::MainHub;
         loop {
@@ -551,6 +565,7 @@ mod tests {
                             .map(|id| CatalogEntry {
                                 id,
                                 name: id.display_name().to_string(),
+                                schema: stub_schema(id),
                             })
                             .collect();
                         let _ = event_tx.send(Event {
@@ -562,7 +577,10 @@ mod tests {
                         // Mirror what process_pending_notify will emit.
                         // (Ack is sent by the reader thread, not here.)
                         let _ = event_tx.send(Event {
-                            body: Message::SceneChanged(SceneChanged { id: target }),
+                            body: Message::SceneChanged(SceneChanged {
+                                id: target,
+                                snapshot: serde_json::Value::Null,
+                            }),
                             reply_to: None,
                         });
                     }
