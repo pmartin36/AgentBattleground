@@ -1,5 +1,7 @@
 # Battle Viewer
 
+> **Status: draft (not started).** Its foundation — the static battlefield (board + 6v6 placeholder pieces, idle-animating) — is a separate, completed spec: `18-battle-viewer-baseline`. Everything in *this* spec (replay-driven playback, live sim, turn structure, playback controls, tutorial overlay) is unbuilt.
+
 ## Purpose
 The heart of the game. Watching a battle play out — whether live or as a replay — is the primary experience. This is what makes the game feel alive. It is by far the most complex scene and should receive the most design and engineering attention.
 
@@ -21,17 +23,12 @@ The game renders sprites as colored Unicode braille (see `13-rendering`), giving
 - Status indicators (health, active skills, etc.)
 
 ### Battlefield & Coordinates
-The battlefield is an **8×8 grid**. Pieces occupy **discrete cells** and **moves are discrete** (a piece moves cell → cell) — this is the gameplay truth. But **movement is rendered continuously**: a piece lerps its *world position* between cell centers over the move's animation, so it glides rather than snapping (the sprite `Transform` + tween layer, `16`, exists for exactly this).
-
-Coordinate model (per `16-world-space-and-camera`, built): the discrete grid cell is the gameplay position; a **continuous world position** is the render position (1 cell = 1 world unit, sub-cell / dot-granularity movement). The board is a layer *on top of* world space — world space is board-agnostic. A move commits instantly in gameplay (the piece *is* at the destination cell); the world position lerps to catch up (cosmetic).
-
-Render order is per-sprite depth via `camera.depth_key(world_pos)` — painter's, no z-buffer (see `16`). With the current side-view camera, `depth = world-Y` (a piece lower on the board draws in front).
+The board geometry, coordinate model (discrete cell = gameplay truth, continuous world position = render truth, cell-center convention), and depth ordering are built — see `18-battle-viewer-baseline`. What's still open here is how *movement between cells* renders once stage 2/3 exist: a move commits instantly in gameplay, and the piece's `Transform.translate` should lerp from its old cell center to its new one over the move's animation (glide, not snap) — the tween utility (`16`) exists for this but isn't wired to any move-driven trigger yet, since there are no moves to trigger it in a static layout.
 
 ### Build Approach (presentation decoupled from battle rules)
-The viewer is a *presentation* layer and can be built before the battle *rules* (the LLM sim, `10`) are designed. Staged:
-1. **Static battlefield** — the 8×8 board + the 6v6 pieces placed and idle-animating, camera-framed. Needs no battle-design decisions. (The immediate next build.)
-2. **Replay-driven viewer** — plays a hand-authored replay of universal events (move / attack / take-damage). Needs only a replay *format*, not the rules.
-3. **Live / real sim** — the actual battle design (`10`) later, emitting the same replay format.
+The viewer is a *presentation* layer and can be built before the battle *rules* (the LLM sim, `10`) are designed, on top of the completed static-battlefield foundation (`18-battle-viewer-baseline`). Staged:
+1. **Replay-driven viewer** — plays a hand-authored replay of universal events (move / attack / take-damage). Needs only a replay *format*, not the rules. **Next.**
+2. **Live / real sim** — the actual battle design (`10`) later, emitting the same replay format.
 
 ### Turn Structure
 Battles are turn-based, driven by the LLM simulation engine. The viewer receives a sequence of turns (from a live battle or a replay file) and renders them. The pacing and presentation of each turn is a major UX concern — too fast and it's unreadable, too slow and it's boring.
@@ -54,11 +51,7 @@ On a player's first battle watch, a tutorial overlay explains what they're seein
 Players watch other people's battles specifically to gather intelligence on what's working. The viewer should support this use case: it should be easy to read what happened and why. Clear skill/action annotations on each turn are important.
 
 ## Open Questions / TBDs
-- Camera angle — side / isometric / 3-4 top-down (only a side-view camera exists so far).
-- How the 6v6 pieces lay out on the 8×8 board (two facing rows? starting zones?) and board orientation.
-- Are cells / terrain rendered, or only the pieces on an implied grid? Piece size on screen.
-- Idle-animation behaviour for placed pieces.
-- Whether **bands** (background / battlefield / foreground) are needed — spec'd in `16` but not yet implemented.
+- Whether **bands** (background / battlefield / foreground) are needed for terrain/obstacles that pieces must visually interleave with — spec'd in `16` but not yet implemented (the current board is a flat background layer, sufficient while there's no terrain).
 - Replay file format (the universal-events schema for the replay-driven stage).
 - How many turns does a typical battle last?
 - How are skill decisions annotated in the viewer? (which skill fired, what it did)
@@ -66,9 +59,12 @@ Players watch other people's battles specifically to gather intelligence on what
 - Sound? (probably no, terminal game)
 - Can you share a timestamp/turn link for discussion?
 
+Resolved (moved out): camera angle, 6v6 board layout, terrain/cell rendering, idle-animation behavior → all decided and built in `18-battle-viewer-baseline`.
+
 ## Dependencies
 - `13-rendering` ✅ — the braille renderer the battlefield draws through.
 - `16-world-space-and-camera` ✅ — world position, camera (projection + `depth_key`), and the sprite `Transform`/tween that place and move pieces.
+- `18-battle-viewer-baseline` ✅ — the static board + 6v6 placeholder layout stages 2/3 render on top of.
 - `10-battle-simulation-engine` — produces the turn sequence that the viewer consumes
 - `07-replay-browser` — launches viewer in replay mode
 - `04-matchmaking-battle-initiation` — launches viewer in live mode
