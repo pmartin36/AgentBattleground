@@ -20,6 +20,7 @@ Out of scope: braille conversion + compositing internals (`13`), the battlefield
 - **Screen space is dot-resolution** — 2 dots wide × 4 tall per terminal cell. The camera projects to dots, giving sub-cell (dot-granularity) placement.
 - **Depth is per-sprite (painter's), computed by the camera from world position.** No per-dot/per-cell z-buffer.
 - **Compositing is dot-level** to honor dot-granularity (see *Rendering Consequence*).
+- **Sprites are positioned via a `Transform`** — `translate` (world position) + `rotation` (in **degrees**; radians are an internal detail) + per-axis `scale` (negative mirrors, so "flip" is just `scale.x < 0`). Rotation/scale are applied by an affine rasterize at image resolution. T/R/S animate via small `lerp`/easing helpers.
 
 ## Key Details
 
@@ -69,13 +70,31 @@ Dot-granularity placement changes the compositing pipeline. A sprite pre-baked t
 
 This **generalizes** the cell-level compositor validated during the renderer tiers (whole-cell placement is the special case where the dot offset is a multiple of the cell). It remains **binary alpha** (per-dot cutout) — translucent RGBA blending stays a separate, deferred capability (`13` Decisions). Depth is still per-sprite painter's; the dot buffer holds no per-dot depth.
 
+### Sprite Transform & Placement
+A renderable is positioned with a **`Transform`**, not raw dot math:
+
+```
+Transform { translate: WorldPos, rotation: f32 /* degrees */, scale: Vec2 /* per-axis; negative mirrors */ }
+```
+
+- **Translate** → screen via `camera.project(translate)`; the sprite's **pivot** (default: center) anchors there.
+- **Rotation** is in **degrees**, applied on the 2D screen plane about the pivot.
+- **Scale** is per-axis; a negative component mirrors on that axis (flip is `scale.x < 0`, not a separate flag).
+
+**Rasterize is an affine warp, not a plain resize.** To honor rotation, `rasterize(image, transform, base_size) → DotBuffer` inverse-maps each output dot through `(rotate ∘ scale)` to a source pixel and samples (alpha cutout + color) at image resolution — as clean as the dot grid allows. The output bbox grows with rotation. `scale = (1,1)`, `rotation = 0` reduces to the plain resize. Depth is unaffected (still per-sprite from world position). Arbitrary-angle rotation resamples (mild dot shimmer in motion — validated as acceptable in the braille aesthetic); 90°/180°/270° are lattice-exact.
+
+**Placement** then anchors the rasterized buffer's pivot at `camera.project(translate)` and tags it with `camera.depth_key(translate)`, producing a `DotPlacement` — collapsing the per-sprite `rasterize → project → placement` boilerplate.
+
+### Animating a Transform
+Any T/R/S component animates over time with small helpers rather than hand-rolled math: `lerp(a, b, t)`, a few easing curves (linear, ease-in-out), and a `Tween { from, to, duration }` yielding the eased value at an elapsed time. A minimal utility — not a timeline/animation-graph system. Frame animation (`AnimatedSprite`) and transform animation are independent and compose.
+
 ## Relationship to Other Specs
 - `13-rendering` — consumes the camera's output (positioned, depth-tagged sprites) and owns braille conversion + the dot-level compositor. The camera / world-space / depth-key model is **owned here**; `13`'s "Depth & Draw Order" references this spec.
 - `05-battle-viewer` / battlefield — one **consumer**: it may impose a grid whose cells map to world positions, and lerp world positions on moves. It builds on this spec; this spec does not depend on it.
 - `10-battle-simulation-engine` — emits discrete moves; the viewer animates world positions between them.
 
 ## Current Implementation State
-Not built. The renderer tiers (`13` Validation) built the cell-level compositor + a hardcoded side-view "camera" inline in the demo (screen coords + `depth = row`, no camera object). This spec defines the world-space + real camera + dot-level compositor that generalizes that.
+Built: `WorldPos`, the `Camera` trait + `SideView`, the dot pipeline (`sprite_to_dots` / `dots_to_grid`) and the dot-level compositor (`composite_dots`), dogfooded by the wandering-wizards demo (`render_movement`). Not yet built: the **`Transform`** (translate + degrees-rotation + per-axis scale), the affine **`rasterize`** (rotation/scale), the pivot-aware **placement helper**, and the **lerp/easing/tween** utility — arbitrary rotation has been validated as acceptable in braille (static + spinning).
 
 ## Open Questions / TBDs
 - The world unit for the battle game (ties to the grid-vs-free-form decision in `05`).
