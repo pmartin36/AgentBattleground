@@ -9,7 +9,7 @@ use crate::scenes::{ArmyEditor, BattleViewer, Leaderboard, MainHub};
 pub fn construct(id: SceneId) -> Box<dyn Scene> {
     match id {
         SceneId::MainHub => Box::new(MainHub),
-        SceneId::BattleViewer => Box::new(BattleViewer),
+        SceneId::BattleViewer => Box::new(BattleViewer::default()),
         SceneId::ArmyEditor => Box::new(ArmyEditor),
         SceneId::Leaderboard => Box::new(Leaderboard),
         other => unimplemented!("scene {:?} is not implemented in M1", other),

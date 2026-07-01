@@ -4,7 +4,11 @@ use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
-use render::camera::SideView;
+use render::camera::{SideView, WorldPos};
+use render::composite::{composite_dots, DotPlacement};
+use render::dots::{dots_to_grid, tint, DotBuffer};
+use render::transform::{place, rasterize, Transform, Vec2};
+use render::{draw_grid, AnimatedSprite};
 use scene_core::color::Rgba;
 use scene_core::scene_id::SceneId;
 use serde_json::Value as JsonValue;
@@ -124,11 +128,162 @@ pub fn draw_board_lines(buf: &mut Buffer, geom: &BoardGeometry) {
     }
 }
 
-#[derive(Default)]
-pub struct BattleViewer;
+/// Which side a piece belongs to. Rendering differences (tint, mirror) are
+/// added by b4-t3; this enum carries only identity.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Team {
+    A,
+    B,
+}
 
-impl BattleViewer {
-    pub const COLOR: Rgba = Rgba::rgb(0xc8, 0x1e, 0x1e);
+/// Team A occupies the top row; Team B occupies the bottom row.
+pub const TEAM_A_ROW: u16 = 0;
+pub const TEAM_B_ROW: u16 = BOARD_ROWS - 1;
+
+/// One placed piece. `index` is a stable 0..12 ordinal (column-ascending
+/// within a team, Team A before Team B) used later by b4-t3's phase-stagger.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Piece {
+    pub col: u16,
+    pub row: u16,
+    pub team: Team,
+    pub index: usize,
+}
+
+/// The 12-piece 6v6 static layout: Team A on `TEAM_A_ROW`, Team B on
+/// `TEAM_B_ROW`, both on columns `1..(BOARD_COLS - 1)` (cols 0 and the last
+/// column left empty). Deterministic order: Team A cols asc, then Team B cols asc.
+pub fn pieces() -> Vec<Piece> {
+    let mut out = Vec::with_capacity(12);
+    let mut index = 0;
+    for (team, row) in [(Team::A, TEAM_A_ROW), (Team::B, TEAM_B_ROW)] {
+        for col in 1..(BOARD_COLS - 1) {
+            out.push(Piece {
+                col,
+                row,
+                team,
+                index,
+            });
+            index += 1;
+        }
+    }
+    out
+}
+
+/// World position of a board cell's CENTER (not its corner) — matches spec 05's
+/// "movement lerps world position between cell centers." General for any cell.
+pub fn world_pos_for_cell(col: u16, row: u16) -> WorldPos {
+    WorldPos::new(col as f32 + 0.5, row as f32 + 0.5)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// b4-t3: per-piece render pipeline — team tint, mirror, phase-staggered idle
+// frame. Signatures/constants per research.md blueprint; bodies are stubs for
+// the code-writer (test-writer only pins the observable contract).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Per-index idle-animation desync offset (spec 05: pieces must not all
+/// animate in lockstep).
+pub const PIECE_STAGGER: std::time::Duration = std::time::Duration::from_millis(37);
+/// `sprite_base_dot_rows` = `camera.scale_dots * SPRITE_DOT_RATIO`, rounded.
+pub const SPRITE_DOT_RATIO: f32 = 1.2;
+/// Team A tint (blue-ish).
+pub const TEAM_A_COLOR: Rgba = Rgba::rgb(0x4a, 0x90, 0xd9);
+/// Team B tint (red-ish).
+pub const TEAM_B_COLOR: Rgba = Rgba::rgb(0xd9, 0x4a, 0x4a);
+
+impl Team {
+    /// This team's tint color: A -> `TEAM_A_COLOR`, B -> `TEAM_B_COLOR`.
+    pub fn tint_color(self) -> Rgba {
+        match self {
+            Team::A => TEAM_A_COLOR,
+            Team::B => TEAM_B_COLOR,
+        }
+    }
+
+    /// Horizontal mirror factor for `Transform.scale.x`: A -> 1.0, B -> -1.0.
+    pub fn scale_x(self) -> f32 {
+        match self {
+            Team::A => 1.0,
+            Team::B => -1.0,
+        }
+    }
+}
+
+/// Per-index animation offset so the 12 idle loops don't play in lockstep:
+/// `elapsed + PIECE_STAGGER * index`.
+pub fn piece_elapsed(elapsed: Duration, index: usize) -> Duration {
+    elapsed + PIECE_STAGGER * index as u32
+}
+
+/// Sprite height in dots, sized off the shared camera's per-world-unit dot
+/// scale: `(camera.scale_dots * SPRITE_DOT_RATIO).round() as u32`.
+pub fn sprite_base_dot_rows(camera: &SideView) -> u32 {
+    (camera.scale_dots * SPRITE_DOT_RATIO).round() as u32
+}
+
+/// One `Transform` reused for both rasterize (scale/mirror) and place
+/// (translate): `translate = world_pos_for_cell(piece.col, piece.row)`,
+/// `rotation = 0.0`, `scale = Vec2::new(piece.team.scale_x(), 1.0)`.
+pub fn piece_transform(piece: &Piece) -> Transform {
+    Transform {
+        translate: world_pos_for_cell(piece.col, piece.row),
+        rotation: 0.0,
+        scale: Vec2::new(piece.team.scale_x(), 1.0),
+    }
+}
+
+/// Steps a-c of the per-piece pipeline: pick the staggered idle frame,
+/// rasterize it (scale/mirror sized off `geom.camera`), then tint with the
+/// piece's team color. Returns an owned `DotBuffer` (see research.md's
+/// REFINED lifetime split — `place_piece`, b4-t4, borrows from this).
+pub fn piece_dots(
+    piece: &Piece,
+    sprite: &AnimatedSprite,
+    elapsed: Duration,
+    geom: &BoardGeometry,
+) -> DotBuffer {
+    let frame = sprite.frame_at(piece_elapsed(elapsed, piece.index));
+    let raw = rasterize(
+        frame,
+        &piece_transform(piece),
+        sprite_base_dot_rows(&geom.camera),
+    );
+    tint(&raw, piece.team.tint_color())
+}
+
+/// Step d: thin reuse of `render::transform::place` through the shared
+/// camera — places `dots` at the piece's cell CENTER world position.
+pub fn place_piece<'a>(
+    dots: &'a DotBuffer,
+    piece: &Piece,
+    geom: &BoardGeometry,
+) -> DotPlacement<'a> {
+    place(dots, world_pos_for_cell(piece.col, piece.row), &geom.camera)
+}
+
+/// Uniform per-frame playback speed for the bundled wizard idle GIF. The
+/// GIF's own per-frame delays are intentionally ignored by `from_gif`; this
+/// constant is the single source of truth for animation speed.
+const WIZARD_FRAME_DUR: Duration = Duration::from_millis(100);
+
+pub struct BattleViewer {
+    elapsed: Duration,
+    sprite: AnimatedSprite,
+}
+
+impl Default for BattleViewer {
+    fn default() -> Self {
+        let sprite = AnimatedSprite::from_gif(
+            include_bytes!("assets/wizard.gif"),
+            WIZARD_FRAME_DUR,
+        )
+        .expect("bundled wizard.gif must decode");
+        Self {
+            elapsed: Duration::ZERO,
+            sprite,
+        }
+    }
 }
 
 impl Scene for BattleViewer {
@@ -138,12 +293,33 @@ impl Scene for BattleViewer {
 
     fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {}
 
-    fn update(&mut self, _ctx: &mut EngineCtx, _dt: Duration) -> Option<Transition> {
+    fn update(&mut self, _ctx: &mut EngineCtx, dt: Duration) -> Option<Transition> {
+        self.elapsed += dt;
         None
     }
 
     fn render(&self, frame: &mut Frame, area: Rect) {
-        super::fill_and_label(frame, area, Self::COLOR, self.id().display_name());
+        let geom = board_geometry(area);
+        draw_board_lines(frame.buffer_mut(), &geom);
+
+        let all_pieces = pieces();
+        let dotbufs: Vec<DotBuffer> = all_pieces
+            .iter()
+            .map(|p| piece_dots(p, &self.sprite, self.elapsed, &geom))
+            .collect();
+        let placements: Vec<DotPlacement> = all_pieces
+            .iter()
+            .zip(&dotbufs)
+            .map(|(p, dots)| place_piece(dots, p, &geom))
+            .collect();
+
+        let composed = composite_dots(
+            (geom.board_rect.width * 2) as usize,
+            (geom.board_rect.height * 4) as usize,
+            &placements,
+        );
+        let grid = dots_to_grid(&composed);
+        draw_grid(frame.buffer_mut(), geom.board_rect, &grid);
     }
 
     fn handle_input(&mut self, _ev: InputEvent) -> Option<Transition> {
@@ -392,5 +568,322 @@ mod draw_board_lines_tests {
                 .symbol(),
             "┬"
         );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: pieces() + world_pos_for_cell (b4-t2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod piece_layout_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// 12 pieces total: 6 Team A on row 0, 6 Team B on row BOARD_ROWS-1, each
+    /// team's columns exactly {1,2,3,4,5,6}, no duplicates.
+    #[test]
+    fn pieces_are_6v6_on_the_edge_rows() {
+        let ps = pieces();
+        assert_eq!(ps.len(), 12, "expected exactly 12 pieces");
+
+        let team_a: Vec<&Piece> = ps.iter().filter(|p| p.team == Team::A).collect();
+        let team_b: Vec<&Piece> = ps.iter().filter(|p| p.team == Team::B).collect();
+        assert_eq!(team_a.len(), 6, "expected 6 Team A pieces");
+        assert_eq!(team_b.len(), 6, "expected 6 Team B pieces");
+
+        assert!(
+            team_a.iter().all(|p| p.row == 0),
+            "all Team A pieces must be on row 0"
+        );
+        assert!(
+            team_b.iter().all(|p| p.row == BOARD_ROWS - 1),
+            "all Team B pieces must be on row BOARD_ROWS - 1"
+        );
+
+        let expected_cols: HashSet<u16> = (1..=6).collect();
+        let a_cols: HashSet<u16> = team_a.iter().map(|p| p.col).collect();
+        let b_cols: HashSet<u16> = team_b.iter().map(|p| p.col).collect();
+        assert_eq!(a_cols, expected_cols, "Team A columns must be {{1..6}}");
+        assert_eq!(b_cols, expected_cols, "Team B columns must be {{1..6}}");
+
+        let unique: HashSet<(bool, u16, u16)> = ps
+            .iter()
+            .map(|p| (p.team == Team::A, p.col, p.row))
+            .collect();
+        assert_eq!(unique.len(), 12, "no duplicate (team, col, row) entries");
+    }
+
+    /// Piece indices form the stable set 0..12, with no gaps or duplicates —
+    /// b4-t3's phase-stagger depends on this.
+    #[test]
+    fn piece_indices_are_stable_0_to_11() {
+        let ps = pieces();
+        let mut indices: Vec<usize> = ps.iter().map(|p| p.index).collect();
+        indices.sort_unstable();
+        assert_eq!(indices, (0..12).collect::<Vec<_>>());
+    }
+
+    /// world_pos_for_cell must return the cell CENTER, not the corner — pins
+    /// the convention the plan-validator flagged as at risk of regressing.
+    #[test]
+    fn world_pos_is_cell_center() {
+        assert_eq!(world_pos_for_cell(0, 0), WorldPos::new(0.5, 0.5));
+        assert_eq!(world_pos_for_cell(3, 7), WorldPos::new(3.5, 7.5));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: per-piece render pipeline (b4-t3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod piece_render_tests {
+    use super::*;
+    use image::{DynamicImage, Rgba as PixelRgba, RgbaImage};
+    use render::dots::Dot;
+
+    /// A uniform fully-opaque RGBA image (source for the synthetic sprites
+    /// below) — deterministic, unlike the real GIF asset.
+    fn opaque_image(w: u32, h: u32) -> DynamicImage {
+        let mut raw = RgbaImage::new(w, h);
+        for p in raw.pixels_mut() {
+            *p = PixelRgba([200, 200, 200, 255]);
+        }
+        DynamicImage::from(raw)
+    }
+
+    /// Hand-picked geometry (mirrors `draw_board_lines_tests::geom`).
+    fn test_geom() -> BoardGeometry {
+        BoardGeometry {
+            cell_width_cols: 4,
+            cell_height_rows: 2,
+            board_rect: Rect::new(0, 0, 32, 16),
+            camera: SideView::new(8.0),
+        }
+    }
+
+    /// DELIVERABLE (1): with a synthetic single-frame fully-opaque source
+    /// image, `piece_dots` for a Team A piece must be all-`Lit(TEAM_A_COLOR)`
+    /// and for a Team B piece all-`Lit(TEAM_B_COLOR)` — the two colors must
+    /// also differ. (Opaque source => every dot Lit even after mirror.)
+    #[test]
+    fn piece_dots_tints_each_team_distinctly_and_fully_lit() {
+        let sprite = AnimatedSprite::new(vec![opaque_image(6, 12)], Duration::from_millis(100));
+        let geom = test_geom();
+
+        let piece_a = Piece { col: 1, row: TEAM_A_ROW, team: Team::A, index: 0 };
+        let piece_b = Piece { col: 1, row: TEAM_B_ROW, team: Team::B, index: 0 };
+
+        let dots_a = piece_dots(&piece_a, &sprite, Duration::ZERO, &geom);
+        let dots_b = piece_dots(&piece_b, &sprite, Duration::ZERO, &geom);
+
+        assert!(dots_a.cols() > 0 && dots_a.rows() > 0, "Team A buffer must be non-empty");
+        for row in 0..dots_a.rows() {
+            for col in 0..dots_a.cols() {
+                assert_eq!(
+                    dots_a.get(col, row),
+                    Dot::Lit(TEAM_A_COLOR),
+                    "Team A dot ({col},{row}) must be Lit(TEAM_A_COLOR) for an opaque source"
+                );
+            }
+        }
+
+        assert!(dots_b.cols() > 0 && dots_b.rows() > 0, "Team B buffer must be non-empty");
+        for row in 0..dots_b.rows() {
+            for col in 0..dots_b.cols() {
+                assert_eq!(
+                    dots_b.get(col, row),
+                    Dot::Lit(TEAM_B_COLOR),
+                    "Team B dot ({col},{row}) must be Lit(TEAM_B_COLOR) for an opaque source"
+                );
+            }
+        }
+
+        assert_ne!(TEAM_A_COLOR, TEAM_B_COLOR, "team tint colors must be distinct");
+    }
+
+    /// DELIVERABLE (2): the `Transform` selected by `piece_transform` mirrors
+    /// Team B (`scale.x == -1.0`) and leaves Team A unmirrored (`== 1.0`).
+    #[test]
+    fn piece_transform_scale_x_mirrors_team_b_only() {
+        let piece_a = Piece { col: 1, row: TEAM_A_ROW, team: Team::A, index: 0 };
+        let piece_b = Piece { col: 1, row: TEAM_B_ROW, team: Team::B, index: 3 };
+
+        assert_eq!(piece_transform(&piece_a).scale.x, 1.0, "Team A must be unmirrored");
+        assert_eq!(piece_transform(&piece_b).scale.x, -1.0, "Team B must be mirrored");
+    }
+
+    /// DELIVERABLE (3): using a synthetic multi-frame `AnimatedSprite`, two
+    /// pieces with different `index` at the same `elapsed` must resolve to
+    /// different frame indices for at least one tested `elapsed` — proves the
+    /// per-piece stagger actually desyncs idle playback.
+    #[test]
+    fn piece_elapsed_desyncs_frame_selection_across_indices() {
+        let sprite = AnimatedSprite::new(
+            vec![opaque_image(1, 1), opaque_image(1, 1), opaque_image(1, 1)],
+            Duration::from_millis(20),
+        );
+        let elapsed = Duration::from_millis(15);
+
+        let idx0 = sprite.frame_index_at(piece_elapsed(elapsed, 0));
+        let idx5 = sprite.frame_index_at(piece_elapsed(elapsed, 5));
+
+        assert_ne!(
+            idx0, idx5,
+            "pieces with index 0 vs 5 at the same elapsed time must resolve to different frames"
+        );
+    }
+
+    /// DELIVERABLE (4): `sprite_base_dot_rows` is a fixed, documented ratio of
+    /// `camera.scale_dots`, pinned against the `SPRITE_DOT_RATIO` constant.
+    #[test]
+    fn sprite_base_dot_rows_matches_ratio_constant() {
+        for scale in [8.0f32, 32.0f32, 5.0f32] {
+            let camera = SideView::new(scale);
+            let expected = (scale * SPRITE_DOT_RATIO).round() as u32;
+            assert_eq!(
+                sprite_base_dot_rows(&camera),
+                expected,
+                "sprite_base_dot_rows must equal (scale_dots * SPRITE_DOT_RATIO).round() for scale {scale}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: BattleViewer scene wiring (b4-t4) — replaces fill_and_label with the
+// real board + 6v6 team-tinted idle-animating pieces.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod battle_viewer_scene_wiring_tests {
+    use super::*;
+    use crate::scene::{EngineCtx, Scene};
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+    use ratatui::style::Color;
+    use ratatui::Terminal;
+
+    fn render_to_buffer(scene: &BattleViewer, w: u16, h: u16) -> Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                scene.render(f, area);
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    /// DELIVERABLE (1): a board-line corner glyph is present at the position
+    /// `board_geometry(area)` independently predicts, and is not overwritten
+    /// by a piece (no piece occupies board column 0).
+    #[test]
+    fn board_corner_glyph_present_at_predicted_position() {
+        let scene = BattleViewer::default();
+        let area = Rect::new(0, 0, 100, 50);
+        let geom = board_geometry(area);
+
+        let buf = render_to_buffer(&scene, 100, 50);
+        let corner = buf
+            .cell((geom.board_rect.x, geom.board_rect.y))
+            .expect("board_rect origin must be within the rendered buffer");
+        assert_eq!(
+            corner.symbol(),
+            "┌",
+            "top-left board corner glyph must be present at board_geometry(area)'s predicted board_rect origin"
+        );
+    }
+
+    /// DELIVERABLE (2)+(3): at least 12 distinct team-tinted glyph cells are
+    /// present; Team-A-tinted cells are confined to the top half of the board
+    /// and Team-B-tinted cells to the bottom half (per `world_pos_for_cell`
+    /// placement through the shared camera), and the two tint colors differ.
+    #[test]
+    fn team_tinted_cells_present_and_banded_by_team() {
+        let scene = BattleViewer::default();
+        let area = Rect::new(0, 0, 100, 50);
+        let geom = board_geometry(area);
+        let mid_y = geom.board_rect.y + geom.board_rect.height / 2;
+
+        let buf = render_to_buffer(&scene, 100, 50);
+
+        let team_a_fg = Color::Rgb(TEAM_A_COLOR.r, TEAM_A_COLOR.g, TEAM_A_COLOR.b);
+        let team_b_fg = Color::Rgb(TEAM_B_COLOR.r, TEAM_B_COLOR.g, TEAM_B_COLOR.b);
+        assert_ne!(team_a_fg, team_b_fg, "team tint colors must be distinct");
+
+        let mut team_a_count = 0usize;
+        let mut team_b_count = 0usize;
+
+        for y in geom.board_rect.y..geom.board_rect.bottom() {
+            for x in geom.board_rect.x..geom.board_rect.right() {
+                let cell = buf.cell((x, y)).unwrap();
+                if cell.fg == team_a_fg {
+                    team_a_count += 1;
+                    assert!(
+                        y < mid_y,
+                        "Team A tinted cell at ({x},{y}) must be in the top half of the board (mid_y={mid_y})"
+                    );
+                } else if cell.fg == team_b_fg {
+                    team_b_count += 1;
+                    assert!(
+                        y >= mid_y,
+                        "Team B tinted cell at ({x},{y}) must be in the bottom half of the board (mid_y={mid_y})"
+                    );
+                }
+            }
+        }
+
+        assert!(
+            team_a_count >= 6,
+            "expected at least 6 Team A tinted cells, found {team_a_count}"
+        );
+        assert!(
+            team_b_count >= 6,
+            "expected at least 6 Team B tinted cells, found {team_b_count}"
+        );
+    }
+
+    /// DELIVERABLE (4): idle animation actually advances — after `update()`
+    /// accumulates enough elapsed time to cross a frame boundary, at least
+    /// one previously-lit board cell changes.
+    #[test]
+    fn idle_animation_advances_after_update() {
+        let mut scene = BattleViewer::default();
+        let area = Rect::new(0, 0, 100, 50);
+        let geom = board_geometry(area);
+
+        let buf_before = render_to_buffer(&scene, 100, 50);
+
+        let mut ctx = EngineCtx;
+        scene.update(&mut ctx, Duration::from_millis(150));
+
+        let buf_after = render_to_buffer(&scene, 100, 50);
+
+        let mut changed = false;
+        'outer: for y in geom.board_rect.y..geom.board_rect.bottom() {
+            for x in geom.board_rect.x..geom.board_rect.right() {
+                let before = buf_before.cell((x, y)).unwrap();
+                let after = buf_after.cell((x, y)).unwrap();
+                if before.symbol() != after.symbol() || before.fg != after.fg {
+                    changed = true;
+                    break 'outer;
+                }
+            }
+        }
+        assert!(
+            changed,
+            "at least one board cell must change after update() advances past a frame boundary"
+        );
+    }
+
+    /// DELIVERABLE (5): the pre-existing registry roundtrip test is
+    /// unaffected by this task's changes (regression guard, duplicated here
+    /// so a red run of this file alone still proves it).
+    #[test]
+    fn default_battle_viewer_reports_correct_scene_id() {
+        let scene = BattleViewer::default();
+        assert_eq!(scene.id(), SceneId::BattleViewer);
     }
 }

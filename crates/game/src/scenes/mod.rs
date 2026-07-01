@@ -70,12 +70,7 @@ mod tests {
     #[test]
     fn all_scene_colors_are_distinct() {
         use std::collections::HashSet;
-        let colors = [
-            MainHub::COLOR,
-            BattleViewer::COLOR,
-            ArmyEditor::COLOR,
-            Leaderboard::COLOR,
-        ];
+        let colors = [MainHub::COLOR, ArmyEditor::COLOR, Leaderboard::COLOR];
         let mut seen: HashSet<(u8, u8, u8)> = HashSet::new();
         for (i, c) in colors.iter().enumerate() {
             assert!(
@@ -133,11 +128,6 @@ mod tests {
         main_hub_fills_with_color_and_correct_id,
         MainHub,
         SceneId::MainHub
-    );
-    scene_fill_and_id_test!(
-        battle_viewer_fills_with_color_and_correct_id,
-        BattleViewer,
-        SceneId::BattleViewer
     );
     scene_fill_and_id_test!(
         army_editor_fills_with_color_and_correct_id,
