@@ -270,10 +270,10 @@ pub fn piece_dots(
     let frame = sprite.frame_at(piece_elapsed(elapsed, piece.index));
     let raw = rasterize(
         frame,
-        &piece_transform(piece),
+        &piece.transform,
         sprite_base_dot_rows(&geom.camera),
     );
-    tint(&raw, piece.team.tint_color())
+    tint(&raw, piece.color)
 }
 
 /// Step d: thin reuse of `render::transform::place` through the shared
@@ -294,6 +294,9 @@ const WIZARD_FRAME_DUR: Duration = Duration::from_millis(100);
 pub struct BattleViewer {
     elapsed: Duration,
     sprite: AnimatedSprite,
+    /// Owned piece state (b3-t1), seeded once from `pieces()` at construction
+    /// — `render()` does not read this yet (that is b3-t2).
+    pub pieces: Vec<Piece>,
 }
 
 impl Default for BattleViewer {
@@ -306,6 +309,7 @@ impl Default for BattleViewer {
         Self {
             elapsed: Duration::ZERO,
             sprite,
+            pieces: pieces(),
         }
     }
 }
@@ -326,12 +330,13 @@ impl Scene for BattleViewer {
         let geom = board_geometry(area);
         draw_board_lines(frame.buffer_mut(), &geom);
 
-        let all_pieces = pieces();
-        let dotbufs: Vec<DotBuffer> = all_pieces
+        let dotbufs: Vec<DotBuffer> = self
+            .pieces
             .iter()
             .map(|p| piece_dots(p, &self.sprite, self.elapsed, &geom))
             .collect();
-        let placements: Vec<DotPlacement> = all_pieces
+        let placements: Vec<DotPlacement> = self
+            .pieces
             .iter()
             .zip(&dotbufs)
             .map(|(p, dots)| place_piece(dots, p, &geom))
@@ -807,6 +812,32 @@ mod piece_render_tests {
         );
     }
 
+    /// b3-t2 DELIVERABLE (unit-level reinforcement): `piece_dots` must tint
+    /// using the piece's own stored `color` field, not `piece.team.tint_color()`
+    /// re-derived fresh. Mutating `piece.color` to a sentinel black must show
+    /// up in the tinted output.
+    #[test]
+    fn piece_dots_reads_piece_color_field_not_team_default() {
+        let sprite = AnimatedSprite::new(vec![opaque_image(6, 12)], Duration::from_millis(100));
+        let geom = test_geom();
+
+        let mut piece = Piece::new(1, TEAM_A_ROW, Team::A, 0);
+        piece.color = Rgba::rgb(0, 0, 0);
+
+        let dots = piece_dots(&piece, &sprite, Duration::ZERO, &geom);
+
+        assert!(dots.cols() > 0 && dots.rows() > 0, "buffer must be non-empty");
+        for row in 0..dots.rows() {
+            for col in 0..dots.cols() {
+                assert_eq!(
+                    dots.get(col, row),
+                    Dot::Lit(Rgba::rgb(0, 0, 0)),
+                    "piece_dots must tint using the mutated piece.color field (black), not piece.team.tint_color()"
+                );
+            }
+        }
+    }
+
     /// DELIVERABLE (4): `sprite_base_dot_rows` is a fixed, documented ratio of
     /// `camera.scale_dots`, pinned against the `SPRITE_DOT_RATIO` constant.
     #[test]
@@ -961,5 +992,56 @@ mod battle_viewer_scene_wiring_tests {
     fn default_battle_viewer_reports_correct_scene_id() {
         let scene = BattleViewer::default();
         assert_eq!(scene.id(), SceneId::BattleViewer);
+    }
+
+    /// b3-t2 DELIVERABLE (the point of the whole feature): mutating a stored
+    /// `scene.pieces[i].color` directly must change what the very next
+    /// `render()` call draws — proving `render()` reads live stored state
+    /// instead of silently re-deriving `piece.team.tint_color()` fresh every
+    /// frame. Every piece's color is set to a pure-black sentinel; multiply-
+    /// blend by black forces every lit sprite dot to black regardless of the
+    /// (non-uniform) wizard source, so the expected output is exact.
+    #[test]
+    fn render_reflects_mutated_stored_piece_color() {
+        let mut scene = BattleViewer::default();
+        let area = Rect::new(0, 0, 100, 50);
+        let geom = board_geometry(area);
+
+        for p in &mut scene.pieces {
+            p.color = Rgba::rgb(0, 0, 0);
+        }
+
+        let buf = render_to_buffer(&scene, 100, 50);
+
+        let mut found_glyph = false;
+        for y in geom.board_rect.y..geom.board_rect.bottom() {
+            for x in geom.board_rect.x..geom.board_rect.right() {
+                let cell = buf.cell((x, y)).unwrap();
+                if !is_braille_glyph(cell.symbol()) {
+                    continue;
+                }
+                found_glyph = true;
+                assert_eq!(
+                    cell.fg,
+                    Color::Rgb(0, 0, 0),
+                    "cell ({x},{y}) must reflect the mutated stored piece.color (black), not the team default"
+                );
+            }
+        }
+        assert!(found_glyph, "expected at least one sprite glyph cell in the board");
+    }
+
+    /// b3-t1 DELIVERABLE: `BattleViewer::default().pieces` is seeded from the
+    /// same layout logic as the free `pieces()` function — a real, owned
+    /// field, not a divergent copy or an empty placeholder.
+    #[test]
+    fn default_seeds_twelve_pieces_from_layout() {
+        let scene = BattleViewer::default();
+        assert_eq!(scene.pieces.len(), 12, "expected 12 seeded pieces");
+        assert_eq!(
+            scene.pieces,
+            pieces(),
+            "BattleViewer::default().pieces must match the free pieces() layout"
+        );
     }
 }
