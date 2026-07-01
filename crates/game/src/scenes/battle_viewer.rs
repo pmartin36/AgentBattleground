@@ -142,12 +142,41 @@ pub const TEAM_B_ROW: u16 = BOARD_ROWS - 1;
 
 /// One placed piece. `index` is a stable 0..12 ordinal (column-ascending
 /// within a team, Team A before Team B) used later by b4-t3's phase-stagger.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// `transform`/`color` are owned, seeded once at construction by `Piece::new`
+/// (b2-t1) — no `Eq`/`Hash`, since `Transform` has `f32` fields.
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Piece {
     pub col: u16,
     pub row: u16,
     pub team: Team,
     pub index: usize,
+    pub transform: Transform,
+    pub color: Rgba,
+}
+
+impl Piece {
+    /// Sole construction path (b2-t1). Seeds `transform`/`color` once from
+    /// the same math `piece_transform`/`Team::tint_color` compute on the fly
+    /// today: `transform = { translate: world_pos_for_cell(col, row),
+    /// rotation: 0.0, scale: (team.scale_x(), 1.0) }`, `color =
+    /// team.tint_color()`.
+    ///
+    pub fn new(col: u16, row: u16, team: Team, index: usize) -> Self {
+        let transform = Transform {
+            translate: world_pos_for_cell(col, row),
+            rotation: 0.0,
+            scale: Vec2::new(team.scale_x(), 1.0),
+        };
+        let color = team.tint_color();
+        Self {
+            col,
+            row,
+            team,
+            index,
+            transform,
+            color,
+        }
+    }
 }
 
 /// The 12-piece 6v6 static layout: Team A on `TEAM_A_ROW`, Team B on
@@ -158,12 +187,7 @@ pub fn pieces() -> Vec<Piece> {
     let mut index = 0;
     for (team, row) in [(Team::A, TEAM_A_ROW), (Team::B, TEAM_B_ROW)] {
         for col in 1..(BOARD_COLS - 1) {
-            out.push(Piece {
-                col,
-                row,
-                team,
-                index,
-            });
+            out.push(Piece::new(col, row, team, index));
             index += 1;
         }
     }
@@ -673,8 +697,8 @@ mod piece_render_tests {
         let sprite = AnimatedSprite::new(vec![opaque_image(6, 12)], Duration::from_millis(100));
         let geom = test_geom();
 
-        let piece_a = Piece { col: 1, row: TEAM_A_ROW, team: Team::A, index: 0 };
-        let piece_b = Piece { col: 1, row: TEAM_B_ROW, team: Team::B, index: 0 };
+        let piece_a = Piece::new(1, TEAM_A_ROW, Team::A, 0);
+        let piece_b = Piece::new(1, TEAM_B_ROW, Team::B, 0);
 
         let dots_a = piece_dots(&piece_a, &sprite, Duration::ZERO, &geom);
         let dots_b = piece_dots(&piece_b, &sprite, Duration::ZERO, &geom);
@@ -721,11 +745,45 @@ mod piece_render_tests {
     /// Team B (`scale.x == -1.0`) and leaves Team A unmirrored (`== 1.0`).
     #[test]
     fn piece_transform_scale_x_mirrors_team_b_only() {
-        let piece_a = Piece { col: 1, row: TEAM_A_ROW, team: Team::A, index: 0 };
-        let piece_b = Piece { col: 1, row: TEAM_B_ROW, team: Team::B, index: 3 };
+        let piece_a = Piece::new(1, TEAM_A_ROW, Team::A, 0);
+        let piece_b = Piece::new(1, TEAM_B_ROW, Team::B, 3);
 
         assert_eq!(piece_transform(&piece_a).scale.x, 1.0, "Team A must be unmirrored");
         assert_eq!(piece_transform(&piece_b).scale.x, -1.0, "Team B must be mirrored");
+    }
+
+    /// b2-t1 DELIVERABLE: `Piece::new`'s seeded `transform` field must be
+    /// bit-identical to what `piece_transform` computes on the fly for the
+    /// same `(col, row, team)` — proves construction-time seeding didn't
+    /// diverge from the existing per-frame math. Covers both teams so the
+    /// mirror (`scale.x`) is pinned for Team B too.
+    #[test]
+    fn piece_new_seeds_transform_from_layout_math() {
+        let piece_a = Piece::new(1, TEAM_A_ROW, Team::A, 0);
+        assert_eq!(
+            piece_a.transform,
+            piece_transform(&piece_a),
+            "Team A: Piece::new's seeded transform must match piece_transform's on-the-fly math"
+        );
+
+        let piece_b = Piece::new(1, TEAM_B_ROW, Team::B, 3);
+        assert_eq!(
+            piece_b.transform,
+            piece_transform(&piece_b),
+            "Team B: Piece::new's seeded transform must match piece_transform's on-the-fly math"
+        );
+    }
+
+    /// b2-t1 DELIVERABLE: `Piece::new`'s seeded `color` field must be the
+    /// piece's team default (the pastel `TEAM_A_COLOR`/`TEAM_B_COLOR`
+    /// constants), not some other placeholder.
+    #[test]
+    fn piece_new_seeds_color_from_team_default() {
+        let piece_a = Piece::new(1, TEAM_A_ROW, Team::A, 0);
+        assert_eq!(piece_a.color, TEAM_A_COLOR, "Team A piece must seed color = TEAM_A_COLOR");
+
+        let piece_b = Piece::new(1, TEAM_B_ROW, Team::B, 0);
+        assert_eq!(piece_b.color, TEAM_B_COLOR, "Team B piece must seed color = TEAM_B_COLOR");
     }
 
     /// DELIVERABLE (3): using a synthetic multi-frame `AnimatedSprite`, two
