@@ -1,8 +1,10 @@
 //! Camera abstraction: maps world positions to screen-dot coordinates + depth.
 //! Implementation is provided by task b3-t1.
 
+use scene_core::Inspectable;
+
 /// Continuous 2D world position. Units are game-defined (spec 16).
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Inspectable)]
 pub struct WorldPos {
     pub x: f32,
     pub y: f32,

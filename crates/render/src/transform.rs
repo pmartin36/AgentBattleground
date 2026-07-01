@@ -7,10 +7,11 @@ use crate::camera::{Camera, WorldPos};
 use crate::composite::DotPlacement;
 use crate::dots::{sprite_to_dots, DotBuffer};
 use image::DynamicImage;
+use scene_core::Inspectable;
 
 /// Plain 2D vector (POD). Used for per-axis scale (negative mirrors, applied
 /// in rasterize).
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, Inspectable)]
 pub struct Vec2 {
     pub x: f32,
     pub y: f32,
@@ -29,7 +30,7 @@ impl Vec2 {
 
 /// Sprite transform: translate (world pos) + rotation (DEGREES) + per-axis
 /// scale (negative mirrors).
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Inspectable)]
 pub struct Transform {
     pub translate: WorldPos,
     pub rotation: f32, // degrees
@@ -382,5 +383,78 @@ mod tests {
         let placement = place(&dots, translate, &camera);
 
         assert!(std::ptr::eq(placement.dots, &dots), "placement.dots must point at the passed buffer");
+    }
+
+    // ── Inspectable (b3-t1) ──────────────────────────────────────────────────
+
+    use scene_core::FieldTag;
+
+    /// `Transform::schema()` must be a `Struct` with exactly the 3 fields, and
+    /// its two struct-typed children (`translate`, `scale`) must themselves
+    /// expose `x`/`y` `Float` children — a real 2-level nested tree, not a
+    /// flattened blob.
+    #[test]
+    fn transform_schema_is_nested_struct_tree() {
+        let schema = Transform::schema();
+        assert_eq!(schema.tag, FieldTag::Struct);
+        assert_eq!(
+            schema.children.len(),
+            3,
+            "Transform must have exactly 3 top-level fields"
+        );
+
+        let by_name = |s: &scene_core::FieldSchema, n: &str| {
+            s.children
+                .iter()
+                .find(|c| c.name == n)
+                .unwrap_or_else(|| panic!("missing child schema for field `{n}`"))
+                .clone()
+        };
+
+        let translate = by_name(&schema, "translate");
+        assert_eq!(translate.tag, FieldTag::Struct);
+        assert_eq!(by_name(&translate, "x").tag, FieldTag::Float);
+        assert_eq!(by_name(&translate, "y").tag, FieldTag::Float);
+
+        let rotation = by_name(&schema, "rotation");
+        assert_eq!(rotation.tag, FieldTag::Float);
+
+        let scale = by_name(&schema, "scale");
+        assert_eq!(scale.tag, FieldTag::Struct);
+        assert_eq!(by_name(&scale, "x").tag, FieldTag::Float);
+        assert_eq!(by_name(&scale, "y").tag, FieldTag::Float);
+    }
+
+    /// `apply_patch("translate.x", 3.0)` must mutate exactly that leaf,
+    /// proving the derive-generated struct-arm resolves a real nested path
+    /// (Transform -> WorldPos -> f32) rather than only a single-level one.
+    #[test]
+    fn transform_apply_patch_mutates_only_translate_x() {
+        let mut t = Transform::new(WorldPos::new(1.0, 2.0), 45.0, Vec2::new(2.0, -3.0));
+
+        t.apply_patch("translate.x", scene_core::__private::serde_json::json!(9.5))
+            .expect("apply_patch on translate.x must succeed");
+
+        assert_eq!(t.translate.x, 9.5, "translate.x must be updated");
+        assert_eq!(t.translate.y, 2.0, "translate.y must be untouched");
+        assert_eq!(t.rotation, 45.0, "rotation must be untouched");
+        assert_eq!(t.scale, Vec2::new(2.0, -3.0), "scale must be untouched");
+    }
+
+    /// `Vec2` and `WorldPos` are both plain `{x, y}` structs: schema must be
+    /// `Struct` with exactly `[x: Float, y: Float]` children for each.
+    #[test]
+    fn vec2_and_worldpos_schema_are_float_pair_structs() {
+        for (tag, children) in [
+            (Vec2::schema().tag, Vec2::schema().children),
+            (WorldPos::schema().tag, WorldPos::schema().children),
+        ] {
+            assert_eq!(tag, FieldTag::Struct);
+            assert_eq!(children.len(), 2);
+            let names: Vec<&str> = children.iter().map(|c| c.name.as_str()).collect();
+            assert!(names.contains(&"x"));
+            assert!(names.contains(&"y"));
+            assert!(children.iter().all(|c| c.tag == FieldTag::Float));
+        }
     }
 }
