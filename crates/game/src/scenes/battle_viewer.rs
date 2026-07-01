@@ -747,15 +747,15 @@ mod piece_render_tests {
         assert_eq!(TEAM_B_COLOR, Rgba::rgb(0xb0, 0xff, 0xe0), "TEAM_B_COLOR must be pale mint");
     }
 
-    /// DELIVERABLE (2): the `Transform` selected by `piece_transform` mirrors
-    /// Team B (`scale.x == -1.0`) and leaves Team A unmirrored (`== 1.0`).
+    /// Piece::new's stored, seeded `transform` mirrors Team B (`scale.x == -1.0`)
+    /// and leaves Team A unmirrored (`== 1.0`).
     #[test]
     fn piece_transform_scale_x_mirrors_team_b_only() {
         let piece_a = Piece::new(1, TEAM_A_ROW, Team::A, 0);
         let piece_b = Piece::new(1, TEAM_B_ROW, Team::B, 3);
 
-        assert_eq!(piece_transform(&piece_a).scale.x, 1.0, "Team A must be unmirrored");
-        assert_eq!(piece_transform(&piece_b).scale.x, -1.0, "Team B must be mirrored");
+        assert_eq!(piece_a.transform.scale.x, 1.0, "Team A stored transform unmirrored");
+        assert_eq!(piece_b.transform.scale.x, -1.0, "Team B stored transform mirrored");
     }
 
     /// b2-t1 DELIVERABLE: `Piece::new`'s seeded `transform` field must be
