@@ -1,17 +1,19 @@
-//! render_movement — behavioral deliverable for dot-compositor-camera/b4-t1.
+//! render_movement — wandering wizards (dot-compositor-camera demo).
 //!
-//! Demonstrates sub-cell (dot-granularity) movement through the full
-//! dot-level pipeline: world position → SideView camera → dot offset →
-//! DotBuffer compositor → braille grid → terminal.
+//! Three wizards drift along deterministic Lissajous paths in world x/y through
+//! the full dot-level pipeline: world position → SideView camera → dot offset →
+//! DotBuffer compositor → braille → terminal. Because `depth = screen-y`, a
+//! wizard moving down in y passes IN FRONT OF one higher up, so occlusion
+//! updates live — and the motion is sub-cell (dot-granularity), not cell-snapping.
 //!
 //! Modes:
-//!   - **Interactive** (TTY stdout, no `--once`): runs the live 30 fps game loop
-//!     via `game::run`.
-//!   - **Headless** (`--once` flag present OR stdout is not a TTY): renders the
-//!     scene at `elapsed = SAMPLE_A` (frame A), prints `---FRAME-BREAK---`,
-//!     then renders at `elapsed = SAMPLE_B` (frame B, 1-dot sub-cell shift,
-//!     same GIF animation frame), and exits 0.
+//!   - **Interactive** (TTY, no `--once`): the live 30 fps loop via `game::run`.
+//!   - **Headless** (`--once` or non-TTY): renders the scene at two close times
+//!     (both inside the first GIF frame window, so the animation frame is FROZEN
+//!     and the only change is sub-cell movement), separated by `---FRAME-BREAK---`,
+//!     then exits 0.
 
+use std::f32::consts::TAU;
 use std::io::{self, IsTerminal};
 use std::time::Duration;
 
@@ -29,50 +31,63 @@ use render::camera::{Camera, SideView, WorldPos};
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-/// Uniform per-frame duration. Defines the GIF frame window; both headless
-/// samples must fall inside the first frame window [0, FRAME_DUR) so the GIF
-/// animation frame stays at 0.
+/// Uniform per-frame GIF duration. Defines the frame window; both headless
+/// samples fall inside [0, FRAME_DUR) so every wizard stays on GIF frame 0.
 const FRAME_DUR: Duration = Duration::from_millis(100);
 
-/// Separator printed between the two headless frames. Must contain no braille
-/// codepoint (U+2800..U+28FF) and no ESC byte so the integration test's
-/// split + per-half braille assertions are unambiguous.
+/// Separator between the two headless frames. No braille codepoint / no ESC byte.
 const MARKER: &str = "---FRAME-BREAK---";
 
-/// Headless terminal dimensions (parity with tier1/tier2/tier3).
+/// Headless terminal dimensions (parity with the tier examples).
 const W: u16 = 50;
 const H: u16 = 30;
 
-/// Camera scale: dots per world unit. 2 dots/unit → 1 world unit = 1 cell wide.
+/// Camera scale: dots per world unit.
 const SCALE_DOTS: f32 = 2.0;
 
-/// Initial wizard world X position.
-/// dot_x = round(5.0 × 2.0) = 10 (even → left edge of cell, cell-aligned).
-const X0: f32 = 5.0;
+/// Wizard height in dots — small enough that three fit and overlap.
+const WIZARD_DOT_ROWS: u32 = 40;
 
-/// Wizard world Y position (fixed; only X moves).
-/// dot_y = round(10.0 × 2.0) = 20.
-const Y0: f32 = 10.0;
+/// Per-wizard animation speed multipliers (also the wizard count). All ≤ 1.8 so
+/// that within the headless window [0, SAMPLE_B] every wizard stays on GIF
+/// frame 0 (SAMPLE_B × 1.8 / FRAME_DUR = 0.9 < 1) — the two headless captures
+/// therefore differ by MOVEMENT only, not animation.
+const SPEEDS: [f32; 3] = [0.8, 1.3, 1.8];
 
-/// Wizard movement speed in world units/second.
-const SPEED: f32 = 5.0;
+/// Spatial phase per wizard — spread so they start in distinct spots and cross
+/// as the Lissajous curves self-intersect over time.
+const PHASES: [f32; 3] = [0.0, TAU / 4.0, TAU / 2.0];
 
-/// Wizard height in dots. aspect ≈ 64/144 ≈ 0.444;
-/// w_dot_cols = round(80 × 0.444) = round(35.56) = 36.
-const WIZARD_DOT_ROWS: u32 = 80;
+// Deterministic Lissajous wander (world units and radians/second).
+const CX: f32 = 22.0;
+const CY: f32 = 22.0;
+const AX: f32 = 14.0;
+const AY: f32 = 8.0;
+const WX: f32 = 0.7;
+const WY: f32 = 1.1;
 
-/// Headless sample A: elapsed = 0 → x = 5.0 → dot_x = 10, GIF frame index = 0.
 const SAMPLE_A: Duration = Duration::ZERO;
+/// 50 ms: same GIF frame as A for all speeds ≤ 1.8; the wizards drift a sub-cell.
+const SAMPLE_B: Duration = Duration::from_millis(50);
 
-/// Headless sample B: elapsed = 90 ms → x = 5.0 + 5.0×0.09 = 5.45 →
-/// dot_x = round(10.9) = 11 (odd → straddles cell boundary).
-/// GIF frame index = floor(90 / 100) = 0 — same frame as A (proof is sound).
-const SAMPLE_B: Duration = Duration::from_millis(90);
+/// World position of a wizard with the given spatial phase at time `t` (seconds):
+/// a deterministic ellipse (Lissajous — differing x/y frequencies).
+fn wizard_world_pos(spatial_phase: f32, t: f32) -> WorldPos {
+    WorldPos::new(
+        CX + AX * (WX * t + spatial_phase).cos(),
+        CY + AY * (WY * t + spatial_phase).sin(),
+    )
+}
 
 // ─── Scene ────────────────────────────────────────────────────────────────────
 
+struct Wizard {
+    sprite: render::AnimatedSprite,
+    spatial_phase: f32,
+}
+
 struct RenderMovementScene {
-    wizard: render::AnimatedSprite,
+    wizards: Vec<Wizard>,
     camera: SideView,
     elapsed: Duration,
 }
@@ -80,17 +95,21 @@ struct RenderMovementScene {
 impl RenderMovementScene {
     fn new() -> Self {
         let gif_bytes = include_bytes!("assets/wizard.gif");
+        let wizards = SPEEDS
+            .iter()
+            .zip(PHASES.iter())
+            .map(|(&speed, &spatial_phase)| Wizard {
+                sprite: render::AnimatedSprite::from_gif(gif_bytes, FRAME_DUR)
+                    .expect("decode wizard.gif")
+                    .with_speed(speed),
+                spatial_phase,
+            })
+            .collect();
         RenderMovementScene {
-            wizard: render::AnimatedSprite::from_gif(gif_bytes, FRAME_DUR)
-                .expect("decode wizard.gif"),
+            wizards,
             camera: SideView::new(SCALE_DOTS),
             elapsed: Duration::ZERO,
         }
-    }
-
-    /// Current world position: linear horizontal motion over time.
-    fn world_pos(&self) -> WorldPos {
-        WorldPos::new(X0 + SPEED * self.elapsed.as_secs_f32(), Y0)
     }
 }
 
@@ -107,73 +126,64 @@ impl Scene for RenderMovementScene {
     }
 
     fn handle_input(&mut self, _ev: InputEvent) -> Option<Transition> {
-        // Quit is handled globally by the engine (manager.rs route_key).
+        // Quit handled globally by the engine (manager.rs route_key).
         None
     }
 
     fn exit(&mut self, _ctx: &mut EngineCtx) {}
 
-    /// Dot-level render pipeline:
-    ///   1. Get current GIF animation frame.
-    ///   2. Compute aspect-preserving dot dims from the frame's pixel dimensions.
-    ///   3. Rasterize frame to DotBuffer via `sprite_to_dots`.
-    ///   4. Project world position to dot offset via `SideView`.
-    ///   5. Place in `DotPlacement`; composite into screen-sized DotBuffer.
-    ///   6. Convert DotBuffer to braille Grid via `dots_to_grid`.
-    ///   7. Blit with `draw_grid`.
+    /// Dot-level multi-sprite render:
+    ///   1. Rasterize every wizard's current frame to a DotBuffer.
+    ///   2. Project each world position → dot offset + depth via the camera.
+    ///   3. `composite_dots` at dot granularity, sorted by depth (screen-y).
+    ///   4. `dots_to_grid` → braille → blit.
     fn render(&self, frame: &mut Frame, area: Rect) {
         let cols = area.width as usize;
         let rows = area.height as usize;
+        let t = self.elapsed.as_secs_f32();
 
-        // 1. Current animation frame.
-        let img = self.wizard.frame_at(self.elapsed);
+        // Rasterize first — the DotPlacements below borrow these, so the buffers
+        // must outlive the composite call.
+        let dotbufs: Vec<render::dots::DotBuffer> = self
+            .wizards
+            .iter()
+            .map(|w| {
+                let img = w.sprite.frame_at(self.elapsed);
+                let (img_w, img_h) = img.dimensions();
+                let aspect = img_w as f32 / img_h as f32;
+                let dot_rows = WIZARD_DOT_ROWS;
+                let dot_cols = (dot_rows as f32 * aspect).round() as u32;
+                render::dots::sprite_to_dots(img, dot_cols, dot_rows)
+            })
+            .collect();
 
-        // 2. Aspect-preserving dot dimensions (inline; no shared helper exists).
-        let (img_w, img_h) = img.dimensions();
-        let aspect = img_w as f32 / img_h as f32;
-        let w_dot_rows = WIZARD_DOT_ROWS;
-        let w_dot_cols = (w_dot_rows as f32 * aspect).round() as u32;
+        let placements: Vec<render::composite::DotPlacement> = self
+            .wizards
+            .iter()
+            .zip(&dotbufs)
+            .map(|(w, dots)| {
+                let pos = wizard_world_pos(w.spatial_phase, t);
+                let (dot_x, dot_y) = self.camera.project(pos);
+                render::composite::DotPlacement {
+                    dots,
+                    dot_x,
+                    dot_y,
+                    depth: self.camera.depth_key(pos),
+                }
+            })
+            .collect();
 
-        // 3. Rasterize to dot-level buffer.
-        let dots = render::dots::sprite_to_dots(img, w_dot_cols, w_dot_rows);
-
-        // 4. Project world position → screen dot coordinate + depth sort key.
-        let pos = self.world_pos();
-        let (dx, dy) = self.camera.project(pos);
-        let depth = self.camera.depth_key(pos);
-
-        // 5. Compositor placement.
-        let place = render::composite::DotPlacement {
-            dots: &dots,
-            dot_x: dx,
-            dot_y: dy,
-            depth,
-        };
-
-        // 6. Composite into a screen-sized dot buffer (cols×2 wide, rows×4 tall).
-        let composed = render::composite::composite_dots(cols * 2, rows * 4, &[place]);
-
-        // 7. Convert dot buffer → braille cell grid.
+        let composed = render::composite::composite_dots(cols * 2, rows * 4, &placements);
         let grid = render::dots::dots_to_grid(&composed);
-
-        // 8. Blit braille grid to the ratatui buffer.
         render::draw_grid(frame.buffer_mut(), area, &grid);
     }
 }
 
 // ─── Headless buffer serializer ───────────────────────────────────────────────
 
-/// Serialize a ratatui `Buffer` to ANSI truecolor braille on stdout.
-///
-/// For each row:
-///   - Cells containing a braille glyph (U+2800..=U+28FF) with an `Rgb` fg
-///     are emitted as `\x1b[38;2;r;g;bm<glyph>`.
-///   - All other cells (transparent / background) are emitted as their symbol
-///     (typically a space).
-///   - Row ends with `\x1b[0m\n` (reset + newline).
-///
-/// Copied verbatim from render_tier3 (examples are standalone binaries;
-/// tier3 itself copied it from tier2 — this is the established pattern).
+/// Serialize a ratatui `Buffer` to ANSI truecolor braille on stdout: braille
+/// cells (U+2800..=U+28FF) with an `Rgb` fg become `\x1b[38;2;r;g;bm<glyph>`;
+/// other cells emit their symbol; each row ends with `\x1b[0m\n`.
 fn dump_buffer_ansi(buf: &ratatui::buffer::Buffer) -> String {
     let area = buf.area;
     let mut out = String::new();
@@ -186,11 +196,9 @@ fn dump_buffer_ansi(buf: &ratatui::buffer::Buffer) -> String {
                     if let Color::Rgb(r, g, b) = cell.fg {
                         out.push_str(&format!("\x1b[38;2;{r};{g};{b}m{sym}"));
                     } else {
-                        // Unexpected fg type: emit symbol without color.
                         out.push_str(sym);
                     }
                 } else {
-                    // Background / transparent cell: emit symbol (usually " ").
                     out.push_str(sym);
                 }
             }
@@ -209,25 +217,21 @@ fn main() -> io::Result<()> {
     if headless {
         let backend = TestBackend::new(W, H);
         let mut terminal = Terminal::new(backend)?;
-
         let mut scene = RenderMovementScene::new();
 
-        // Frame A: elapsed = SAMPLE_A (dot_x = 10, GIF frame 0).
+        // Frame A: elapsed = SAMPLE_A.
         scene.elapsed = SAMPLE_A;
         terminal.draw(|f| scene.render(f, f.area()))?;
         let buf_a = terminal.backend().buffer().clone();
-        let output_a = dump_buffer_ansi(&buf_a);
-        print!("{}", output_a);
+        print!("{}", dump_buffer_ansi(&buf_a));
 
-        // Separator line.
         println!("{}", MARKER);
 
-        // Frame B: elapsed = SAMPLE_B (dot_x = 11, GIF frame 0 — same frame, 1-dot shift).
+        // Frame B: elapsed = SAMPLE_B (same GIF frame; wizards drifted a sub-cell).
         scene.elapsed = SAMPLE_B;
         terminal.draw(|f| scene.render(f, f.area()))?;
         let buf_b = terminal.backend().buffer().clone();
-        let output_b = dump_buffer_ansi(&buf_b);
-        print!("{}", output_b);
+        print!("{}", dump_buffer_ansi(&buf_b));
 
         Ok(())
     } else {
