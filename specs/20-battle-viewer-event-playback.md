@@ -1,6 +1,8 @@
+> # ✅ DONE! — Completed 2026-07-02
+
 # Battle Viewer — Event Playback
 
-> **Status: draft (not started).** The first concrete slice of `05-battle-viewer`'s stage 2 (replay-driven viewer): scripted playback of two universal battle events — piece movement and piece death — animated on top of the static battlefield (`18-battle-viewer-baseline`). Attack/take-damage events and a real replay file format are explicitly NOT part of this spec (see *Scope*).
+> **Status: implemented.** The first concrete slice of `05-battle-viewer`'s stage 2 (replay-driven viewer): scripted playback of two universal battle events — piece movement and piece death — is built and validated on top of the static battlefield (`18-battle-viewer-baseline`). Attack/take-damage events and a real replay file format are explicitly NOT part of this spec (see *Scope*).
 
 ## Purpose
 Prove the viewer can animate a battle over time — pieces gliding between cells, pieces dying — independent of any real combat rules or replay file format, continuing `05-battle-viewer`'s build approach of building presentation before rules.
