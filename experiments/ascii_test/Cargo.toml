@@ -17,10 +17,6 @@ name = "anim"
 path = "src/anim.rs"
 
 [[bin]]
-name = "anim_bias"
-path = "src/anim_bias.rs"
-
-[[bin]]
 name = "flow"
 path = "src/flow.rs"
 
@@ -31,16 +27,3 @@ path = "src/downrez.rs"
 [[bin]]
 name = "playframes"
 path = "src/playframes.rs"
-
-[[bin]]
-name = "mkslash"
-path = "src/mkslash.rs"
-
-[[bin]]
-name = "mkslash2"
-path = "src/mkslash2.rs"
-
-[[bin]]
-name = "combat"
-path = "src/combat.rs"
-
