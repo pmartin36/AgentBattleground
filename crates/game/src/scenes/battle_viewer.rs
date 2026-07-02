@@ -180,6 +180,33 @@ pub fn world_pos_for_cell(col: u16, row: u16) -> WorldPos {
     WorldPos::new(col as f32 + 0.5, row as f32 + 0.5)
 }
 
+/// The hand-authored demo playback sequence (b3-t1): Team A piece index 0
+/// advances into the board while Team B piece index 6 dies, their windows
+/// partially overlapping and sharing a `turn`, per spec 05's "hand-authored/
+/// hardcoded directly in the scene" decision. Every `start_time` is `> 0.0`
+/// so the elapsed==0.0 baseline is unperturbed.
+pub fn demo_events() -> Vec<Event> {
+    vec![
+        // Team A piece (index 0) advances into the board.
+        Event {
+            turn: 1,
+            start_time: 1.0,
+            duration: 1.2,
+            kind: EventKind::Move {
+                piece_index: 0,
+                to: (3, 3),
+            },
+        },
+        // Team B piece (index 6) dies; window [1.6,2.6) overlaps the move's [1.0,2.2).
+        Event {
+            turn: 1,
+            start_time: 1.6,
+            duration: 1.0,
+            kind: EventKind::Die { piece_index: 6 },
+        },
+    ]
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // b4-t3: per-piece render pipeline — team tint, mirror, phase-staggered idle
 // frame. Signatures/constants per research.md blueprint; bodies are stubs for
@@ -320,9 +347,8 @@ pub struct BattleViewer {
     pub pieces: Vec<Piece>,
     /// Playback event sequence (b1-t2's `Event`/`EventKind`). Hidden from the
     /// inspector: playback-internal runtime state, not part of the
-    /// `Piece`-level editable surface. Empty until b3-t1 hand-authors a demo
-    /// sequence; not yet read by `update()`/`render()` (that starts at
-    /// b2-t2/b2-t3).
+    /// `Piece`-level editable surface. Seeded from `demo_events()` (b3-t1);
+    /// driven each frame by `update()`/`drive_events()`.
     #[inspect(hidden)]
     pub events: Vec<Event>,
     /// Transient, scene-internal bookkeeping documented on `Event` above (NOT
@@ -355,9 +381,9 @@ impl Default for BattleViewer {
             elapsed: 0.0,
             sprite,
             pieces: pieces(),
-            // Empty until b3-t1 hand-authors a demo sequence; not yet read by
-            // `update()`/`render()` (that starts at b2-t2/b2-t3).
-            events: Vec::new(),
+            // Hand-authored demo sequence (b3-t1); driven each frame by
+            // `update()`/`drive_events()`.
+            events: demo_events(),
             event_from_values: std::collections::HashMap::new(),
             settled_events: std::collections::HashSet::new(),
         }
@@ -1196,16 +1222,105 @@ mod event_data_model_tests {
 mod event_playback_wiring_tests {
     use super::*;
 
-    /// DELIVERABLE: `BattleViewer::default()` carries no playback events —
-    /// no demo content is authored until b3-t1.
+    /// DELIVERABLE (b3-t1): `BattleViewer::default()` carries a hand-authored
+    /// demo event sequence — at least one `Move` and one `Die` — per the
+    /// spec's "hand-authored/hardcoded directly in the scene" decision.
     #[test]
-    fn default_events_is_empty() {
+    fn default_events_contains_a_move_and_a_die() {
+        let scene = BattleViewer::default();
+        let has_move = scene
+            .events
+            .iter()
+            .any(|e| matches!(e.kind, EventKind::Move { .. }));
+        let has_die = scene
+            .events
+            .iter()
+            .any(|e| matches!(e.kind, EventKind::Die { .. }));
+        assert!(
+            has_move,
+            "default().events must contain at least one Move event, got {:?}",
+            scene.events
+        );
+        assert!(
+            has_die,
+            "default().events must contain at least one Die event, got {:?}",
+            scene.events
+        );
+    }
+
+    /// DELIVERABLE: no authored event's `start_time` may be `<= 0.0` — this
+    /// protects every elapsed==0.0 baseline test from perturbation now that
+    /// real demo content is wired in.
+    #[test]
+    fn default_events_all_start_after_zero() {
         let scene = BattleViewer::default();
         assert!(
-            scene.events.is_empty(),
-            "BattleViewer::default().events must be empty until b3-t1 hand-authors a demo \
-             sequence, got {:?}",
-            scene.events
+            !scene.events.is_empty(),
+            "default().events must be non-empty once the demo sequence is authored"
+        );
+        for (i, e) in scene.events.iter().enumerate() {
+            assert!(
+                e.start_time > 0.0,
+                "event[{i}] start_time must be > 0.0 to preserve the elapsed==0.0 baseline, \
+                 got {}",
+                e.start_time
+            );
+        }
+    }
+
+    /// DELIVERABLE: the authored Move and Die windows partially overlap,
+    /// exercising the shipped overlap-handling path (b2-t5) in real demo
+    /// data, per this task's own "at least partially overlapping" instruction.
+    #[test]
+    fn default_events_move_and_die_windows_partially_overlap() {
+        let scene = BattleViewer::default();
+        let move_event = scene
+            .events
+            .iter()
+            .find(|e| matches!(e.kind, EventKind::Move { .. }))
+            .expect("a Move event must be present");
+        let die_event = scene
+            .events
+            .iter()
+            .find(|e| matches!(e.kind, EventKind::Die { .. }))
+            .expect("a Die event must be present");
+
+        let move_end = move_event.start_time + move_event.duration;
+        let die_end = die_event.start_time + die_event.duration;
+        let overlap_start = move_event.start_time.max(die_event.start_time);
+        let overlap_end = move_end.min(die_end);
+        assert!(
+            overlap_start < overlap_end,
+            "Move [{}, {}) and Die [{}, {}) windows must partially overlap",
+            move_event.start_time,
+            move_end,
+            die_event.start_time,
+            die_end
+        );
+    }
+
+    /// DELIVERABLE: multiple events may legitimately share a `turn` while
+    /// having different `start_time`s — the authored Move and Die share a
+    /// `turn` tag, demonstrating `turn` does not replace the clock.
+    #[test]
+    fn default_events_move_and_die_share_a_turn() {
+        let scene = BattleViewer::default();
+        let move_turn = scene
+            .events
+            .iter()
+            .find(|e| matches!(e.kind, EventKind::Move { .. }))
+            .expect("a Move event must be present")
+            .turn;
+        let die_turn = scene
+            .events
+            .iter()
+            .find(|e| matches!(e.kind, EventKind::Die { .. }))
+            .expect("a Die event must be present")
+            .turn;
+        assert_eq!(
+            move_turn, die_turn,
+            "authored Move and Die events should share a turn tag while differing in \
+             start_time"
         );
     }
 
