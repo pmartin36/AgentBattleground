@@ -51,6 +51,7 @@ On a player's first battle watch, a tutorial overlay explains what they're seein
 Players watch other people's battles specifically to gather intelligence on what's working. The viewer should support this use case: it should be easy to read what happened and why. Clear skill/action annotations on each turn are important.
 
 ## Open Questions / TBDs
+- **Cutaway / cinematic animations.** Battles may want dramatic close-up moments (a creature's special-move animation takes over the screen, camera cuts away from the board and back) — unconfirmed, but plausible enough to flag before building further on the current model. `20-battle-viewer-event-playback`'s `Event`/`EventKind` shape is purely board-relative (world-space positions on the one fixed `SideView` camera) and has no concept of cutting to a different view or a non-board-relative animation. If cutaways turn out to be real, they're likely a distinct presentation mode (a second camera or overlay), not an `EventKind` variant — don't build playback controls or extend the event vocabulary further until this has more clarity, to avoid designing around a shape that gets partially obsoleted.
 - Whether **bands** (background / battlefield / foreground) are needed for terrain/obstacles that pieces must visually interleave with — spec'd in `16` but not yet implemented (the current board is a flat background layer, sufficient while there's no terrain).
 - Replay file format (the universal-events schema for the replay-driven stage).
 - How many turns does a typical battle last?
