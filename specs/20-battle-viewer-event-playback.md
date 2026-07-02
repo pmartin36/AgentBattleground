@@ -20,13 +20,13 @@ Out of scope:
 ## Decisions (v1)
 - **Event shape**:
   ```rust
-  struct Event { start_time: f32, duration: f32, kind: EventKind }
+  struct Event { turn: u32, start_time: f32, duration: f32, kind: EventKind }
   enum EventKind {
       Move { piece_index: usize, to: (u16, u16) },
       Die { piece_index: usize },
   }
   ```
-  `start_time`/`duration` are elapsed seconds, matching `BattleViewer.elapsed`'s existing unit.
+  `start_time`/`duration` are elapsed seconds, matching `BattleViewer.elapsed`'s existing unit — they drive the actual smooth interpolation. `turn` is a separate, discrete grouping tag: this game is turn-based (`10-battle-simulation-engine`), and `05-battle-viewer`'s future playback controls ("step forward/back by turn", "jump to turn N") need a discrete unit to navigate by that cannot be reconstructed from continuous time alone once multiple turns' events overlap in wall-clock time for pacing. Multiple events may share the same `turn` while still having different `start_time`s (staggered within the turn) — `turn` does not replace the clock, it labels which turn produced each event.
 - **`piece_index` targets `Piece.index`** (a piece's own stable identity field), not its position in `BattleViewer.pieces` — stays valid regardless of future removal/reordering. Independent of `Piece.team` (ownership) — resolving which piece an event affects never needs to know or infer which side owns it.
 - **`Move` carries only a destination**, not a redundant "from" — the glide interpolates from wherever the piece's `Transform.translate` actually is when the event starts, via the existing `Tween`/`ease_in_out` utility (`16-world-space-and-camera`, built but previously unused by any shipped scene).
 - **Events may overlap in time.** The playback clock evaluates "which events are active at the current elapsed time" every frame and drives every affected piece simultaneously — not a strict one-event-at-a-time assumption. A real battle will very likely want simultaneous multi-piece actions within a single turn.
