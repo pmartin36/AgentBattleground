@@ -39,6 +39,8 @@ Contents (TBD in detail):
 - Turn-by-turn deltas (what happened each turn: actions, results, state changes)
 - Skill annotations (which skill fired, what it resolved to)
 
+Whatever this format ends up being (binary/text, see Open Questions), it must be able to represent `20-battle-viewer-event-playback`'s `Event`/`EventKind` shape — a real, already-built example of "turn-by-turn deltas" (`Move`/`Die` so far, targeting a piece by its stable `index`). That spec's internal event list is deliberately decoupled from this file format (same pattern as board-cell-vs-world-position in `16`), so this format doesn't need to match it byte-for-byte — only be able to produce it.
+
 ### Opponent Data Package
 What gets downloaded from the server before a battle:
 - Opponent's 6 pieces: names, visuals, skill files

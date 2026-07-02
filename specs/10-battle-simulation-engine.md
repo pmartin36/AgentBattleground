@@ -28,6 +28,8 @@ TBD in detail, but at a high level:
 ### Replay Artifact
 After each turn, the engine records the state delta — what happened, who acted, what skills fired, resulting state. This sequence becomes the replay file, which the viewer consumes and the server stores.
 
+The viewer already has a real, working consumer contract for a subset of this: `20-battle-viewer-event-playback` defines `Event { start_time, duration, kind }` with `EventKind::Move`/`Die`, targeting a piece by its stable `index`. Whatever this engine emits must be translatable into that shape (or its future extensions — an `Attack`/`TakeDamage` `EventKind` doesn't exist yet and should be designed alongside this engine's combat rules, not guessed at beforehand).
+
 ### Sandboxing (Critical)
 The LLM must not be able to take actions outside the game directory. This is a hard constraint. Skill files are essentially prompts — a malicious skill file could attempt prompt injection to get the LLM to do something harmful.
 
@@ -55,3 +57,4 @@ Bots use the same engine as human opponents, with server-authored skill files. B
 - `05-battle-viewer` — consumes the engine's turn output (live or via replay file)
 - `09-settings-model-config` — determines which LLM the engine uses
 - `12-data-model-sync` — replay file format, opponent data format
+- `20-battle-viewer-event-playback` — the viewer-side event shape (`Move`/`Die` so far) this engine's output must be translatable into
