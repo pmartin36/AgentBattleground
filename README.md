@@ -60,6 +60,7 @@ High-level design specs for each segment of the game live in `/specs`:
 | 18 | [Battle Viewer — Baseline](specs/18-battle-viewer-baseline.md) ✅ |
 | 19 | [Debug Inspector — Advanced Editing](specs/19-debug-inspector-advanced-editing.md) |
 | 20 | [Battle Viewer — Event Playback](specs/20-battle-viewer-event-playback.md) ✅ |
+| 21 | [Roster — Baseline](specs/21-roster-baseline.md) |
 
 ## Status
 

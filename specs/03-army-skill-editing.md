@@ -1,5 +1,7 @@
 # Army Management & Skill Editing
 
+> A minimal presentation-only slice of this spec — six placeholder pieces with sprites, no stats/skills yet — is split out as `21-roster-baseline` (not yet built).
+
 ## Purpose
 The player's primary workspace between battles. View your pieces in detail and shape how they behave on the battlefield by editing their skills.
 
