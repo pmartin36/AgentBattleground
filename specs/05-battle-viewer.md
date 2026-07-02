@@ -27,7 +27,7 @@ The board geometry, coordinate model (discrete cell = gameplay truth, continuous
 
 ### Build Approach (presentation decoupled from battle rules)
 The viewer is a *presentation* layer and can be built before the battle *rules* (the LLM sim, `10`) are designed, on top of the completed static-battlefield foundation (`18-battle-viewer-baseline`). Staged:
-1. **Replay-driven viewer** — plays a hand-authored replay of universal events (move / attack / take-damage). Needs only a replay *format*, not the rules. **Next.**
+1. **Replay-driven viewer** — plays a hand-authored replay of universal events. Move and death (piece removal) are covered by `20-battle-viewer-event-playback`. Attack and take-damage visuals are deliberately deferred — their shape depends on combat mechanics that don't exist yet (`10`), and picking a visual now risks guessing wrong. A real replay *file* format (vs. `20`'s hand-authored in-memory event list) is also still open (`12`).
 2. **Live / real sim** — the actual battle design (`10`) later, emitting the same replay format.
 
 ### Turn Structure
@@ -65,6 +65,7 @@ Resolved (moved out): camera angle, 6v6 board layout, terrain/cell rendering, id
 - `13-rendering` ✅ — the braille renderer the battlefield draws through.
 - `16-world-space-and-camera` ✅ — world position, camera (projection + `depth_key`), and the sprite `Transform`/tween that place and move pieces.
 - `18-battle-viewer-baseline` ✅ — the static board + 6v6 placeholder layout stages 2/3 render on top of.
+- `20-battle-viewer-event-playback` — the move/death event-playback slice of stage 2 (stage 2 also needs attack/take-damage events and a real replay file format, both still pending).
 - `10-battle-simulation-engine` — produces the turn sequence that the viewer consumes
 - `07-replay-browser` — launches viewer in replay mode
 - `04-matchmaking-battle-initiation` — launches viewer in live mode
