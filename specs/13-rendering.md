@@ -14,6 +14,7 @@ The shared visual layer that turns image/sprite assets into terminal output. Eve
 - The renderer contract that scenes build against
 
 ## Decisions (v1)
+- **Braille is universal except text.** Every non-text visual element — sprites, battlefield/board chrome (grid lines, borders, panels), effects — renders through this braille dot pipeline (image/procedural content → `DotBuffer` → composite → braille glyph), never drawn directly with other Unicode/ASCII characters. The sole exception is text (scene labels, menus, HUD copy): braille cannot render legible Latin glyphs at this resolution, so text stays plain ratatui characters/spans. No render pass may bypass the dot pipeline for non-text content — a "just draw some box-drawing characters for this UI element" shortcut is not permitted, no matter how minor the element.
 - **No synthetic grain.** Sprites render as clean colored braille; conversion is deterministic. (Resolves the earlier grain/no-grain contradiction in favor of clean.)
 - **Dot-level compositing, binary alpha.** Sprites composite at dot granularity (image → dot buffer → composite at dot offsets → braille), per `16-world-space-and-camera`; the cell-level compositor built during renderer validation is the whole-cell special case. Alpha is a per-dot cutout (lit or transparent), not translucency; sub-cell RGBA blending between overlapping translucent sprites is a future refinement.
 - **`convert` fits within a target area** (cols×rows), preserving source aspect, centered.
