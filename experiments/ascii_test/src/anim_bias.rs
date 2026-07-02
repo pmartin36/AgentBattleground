@@ -3,7 +3,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use image::{codecs::gif::GifDecoder, AnimationDecoder, DynamicImage, GenericImageView};
+use image::{codecs::gif::GifDecoder, AnimationDecoder, DynamicImage, GenericImageView, RgbaImage};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -61,7 +61,10 @@ fn mode_name(m: Thresh) -> &'static str {
 // 4x4 ordered-dither matrix.
 const BAYER: [[u32; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
 
-fn render_braille(img: &DynamicImage, cols: u32, rows: u32, mode: Thresh) -> Vec<Line<'static>> {
+// s: fractional bias applied to the AdaptiveGe threshold (luma >= cell_mean * s).
+// s = 1.0 reproduces the plain AdaptiveGe behavior; s < 1.0 lights more dots (fills
+// holes); s > 1.0 lights fewer (stricter, more contrast). Other modes ignore it.
+fn render_braille(img: &DynamicImage, cols: u32, rows: u32, mode: Thresh, s: f32) -> Vec<Line<'static>> {
     let img = img.resize_exact(cols * 2, rows * 4, image::imageops::FilterType::Lanczos3);
 
     // Global mode: one threshold for the whole frame = mean luma of visible pixels.
@@ -104,7 +107,7 @@ fn render_braille(img: &DynamicImage, cols: u32, rows: u32, mode: Thresh) -> Vec
                 if let Some(l) = lumas[i] {
                     let lit = match mode {
                         Thresh::AdaptiveGt => l as u32 > cell_avg,
-                        Thresh::AdaptiveGe => l as u32 >= cell_avg,
+                        Thresh::AdaptiveGe => (l as f32) >= cell_avg as f32 * s,
                         Thresh::Global => l as u32 >= frame_thresh,
                         Thresh::Bayer => {
                             let (ax, ay) = (px + dx, py + dy);
@@ -213,7 +216,25 @@ struct LoadedGif {
     img_row: u16,
     img_cols: u16,
     img_rows: u16,
+    out_cols: u32,
+    out_rows: u32,
+    cached_s: f32,
     frames: Vec<Frame>,
+}
+
+/// Re-renders every frame's braille cache (all modes) for the given `s`. Called lazily
+/// whenever the live threshold bias changes — cheap enough at these frame counts (<=49
+/// frames/gif) to just redo the whole gif rather than track per-frame dirtiness.
+fn recompute_braille(gif: &mut LoadedGif, s: f32) {
+    for frame in gif.frames.iter_mut() {
+        let img = DynamicImage::ImageRgba8(
+            RgbaImage::from_raw(frame.width, frame.height, frame.rgba.clone()).unwrap(),
+        );
+        frame.braille = MODES.iter()
+            .map(|&m| render_braille(&img, gif.out_cols, gif.out_rows, m, s))
+            .collect();
+    }
+    gif.cached_s = s;
 }
 
 fn load_gif(
@@ -261,12 +282,15 @@ fn load_gif(
             rgba: buf.clone().into_raw(),
             width,
             height,
-            braille: MODES.iter().map(|&m| render_braille(&img, out_cols, out_rows, m)).collect(),
+            braille: MODES.iter().map(|&m| render_braille(&img, out_cols, out_rows, m, 1.0)).collect(),
             delay,
         }
     }).collect();
 
-    LoadedGif { name: name.to_string(), img_col, img_row, img_cols, img_rows, frames }
+    LoadedGif {
+        name: name.to_string(), img_col, img_row, img_cols, img_rows,
+        out_cols, out_rows, cached_s: 1.0, frames,
+    }
 }
 
 fn main() -> io::Result<()> {
@@ -296,7 +320,7 @@ fn main() -> io::Result<()> {
     let right_inner = Block::default().borders(Borders::ALL).inner(panes[1]);
 
     eprintln!("Loading GIFs...");
-    let gifs: Vec<LoadedGif> = GIFS.iter()
+    let mut gifs: Vec<LoadedGif> = GIFS.iter()
         .filter(|(_, path)| std::path::Path::new(path).exists())
         .map(|(name, path)| load_gif(
             path, name,
@@ -313,12 +337,20 @@ fn main() -> io::Result<()> {
     let mut front_slot = 0usize;
     let mut has_shown_frame = false;
 
+    // s_steps avoids float drift from repeated +=0.02; s = 1.0 + s_steps * 0.02.
+    let mut s_steps: i32 = 0;
+
     loop {
+        let s = 1.0 + s_steps as f32 * 0.02;
+        if (gifs[gif_idx].cached_s - s).abs() > 1e-6 {
+            recompute_braille(&mut gifs[gif_idx], s);
+        }
+
         let gif = &gifs[gif_idx];
         let frame = &gif.frames[frame_idx];
         let title = format!(
-            " {} — thresh: {} — frame {}/{} — ←/→ gif · t thresh · q quit ",
-            gif.name, mode_name(MODES[mode_idx]), frame_idx + 1, gif.frames.len()
+            " {} — thresh: {} (s={:.2}) — frame {}/{} — ←/→ gif · t thresh · [/] bias · q quit ",
+            gif.name, mode_name(MODES[mode_idx]), s, frame_idx + 1, gif.frames.len()
         );
 
         let render_lines = frame.braille[mode_idx].clone();
@@ -386,6 +418,12 @@ fn main() -> io::Result<()> {
                     KeyCode::Char('q') | KeyCode::Esc => break,
                     KeyCode::Char('t') => {
                         mode_idx = (mode_idx + 1) % MODES.len();
+                    }
+                    KeyCode::Char('[') => {
+                        s_steps = (s_steps - 1).max(-25); // floor s at 0.5
+                    }
+                    KeyCode::Char(']') => {
+                        s_steps = (s_steps + 1).min(25); // ceil s at 1.5
                     }
                     KeyCode::Right => {
                         gif_idx = (gif_idx + 1) % gifs.len();

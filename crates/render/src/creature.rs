@@ -3,6 +3,19 @@
 use crate::AnimatedSprite;
 use std::collections::HashMap;
 
+mod ember_wolf;
+pub use ember_wolf::ember_wolf;
+mod frost_lizard;
+pub use frost_lizard::frost_lizard;
+mod stone_golem;
+pub use stone_golem::stone_golem;
+mod storm_hawk;
+pub use storm_hawk::storm_hawk;
+mod verdant_treant;
+pub use verdant_treant::verdant_treant;
+mod shadow_cat;
+pub use shadow_cat::shadow_cat;
+
 /// The kind of animation a creature can play.
 ///
 /// Extension policy: add variants here, don't restructure. New kinds

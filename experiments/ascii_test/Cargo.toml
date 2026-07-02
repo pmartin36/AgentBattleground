@@ -17,6 +17,10 @@ name = "anim"
 path = "src/anim.rs"
 
 [[bin]]
+name = "anim_bias"
+path = "src/anim_bias.rs"
+
+[[bin]]
 name = "flow"
 path = "src/flow.rs"
 
