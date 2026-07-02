@@ -1,4 +1,6 @@
+use scene_core::inspect::FieldSchema;
 use scene_core::scene_id::SceneId;
+use scene_core::Inspectable;
 
 use crate::scene::Scene;
 use crate::scenes::{ArmyEditor, BattleViewer, Leaderboard, MainHub};
@@ -12,6 +14,21 @@ pub fn construct(id: SceneId) -> Box<dyn Scene> {
         SceneId::BattleViewer => Box::new(BattleViewer::default()),
         SceneId::ArmyEditor => Box::new(ArmyEditor),
         SceneId::Leaderboard => Box::new(Leaderboard),
+        other => unimplemented!("scene {:?} is not implemented in M1", other),
+    }
+}
+
+/// Type-level schema for `id` — the source of every `CatalogEntry.schema`
+/// (b5-t3). Dispatches on the concrete scene type WITHOUT constructing an
+/// instance (`Inspectable::schema()` is `where Self: Sized`, so it is not
+/// reachable through `dyn Scene`/`dyn Inspectable`). Mirrors `construct`'s
+/// exact implemented-id set and panic contract.
+pub fn schema_for(id: SceneId) -> FieldSchema {
+    match id {
+        SceneId::MainHub => <MainHub as Inspectable>::schema(),
+        SceneId::BattleViewer => <BattleViewer as Inspectable>::schema(),
+        SceneId::ArmyEditor => <ArmyEditor as Inspectable>::schema(),
+        SceneId::Leaderboard => <Leaderboard as Inspectable>::schema(),
         other => unimplemented!("scene {:?} is not implemented in M1", other),
     }
 }
@@ -94,6 +111,45 @@ mod tests {
 
         assert_eq!(actual_true, expected_true, "true-set mismatch");
         assert_eq!(actual_false, expected_false, "false-set mismatch");
+    }
+
+    // ------------------------------------------------------------ schema_for (b5-t3)
+
+    /// `schema_for(id)` must return exactly `<T as Inspectable>::schema()` for
+    /// each of the 4 implemented scenes — not a placeholder — since it is the
+    /// sole source of every `CatalogEntry.schema` (b5-t3).
+    #[test]
+    fn schema_for_returns_each_scene_type_schema() {
+        use scene_core::Inspectable;
+
+        assert_eq!(
+            schema_for(SceneId::MainHub),
+            <MainHub as Inspectable>::schema(),
+            "schema_for(MainHub) must equal <MainHub as Inspectable>::schema()"
+        );
+        assert_eq!(
+            schema_for(SceneId::BattleViewer),
+            <BattleViewer as Inspectable>::schema(),
+            "schema_for(BattleViewer) must equal <BattleViewer as Inspectable>::schema()"
+        );
+        assert_eq!(
+            schema_for(SceneId::ArmyEditor),
+            <ArmyEditor as Inspectable>::schema(),
+            "schema_for(ArmyEditor) must equal <ArmyEditor as Inspectable>::schema()"
+        );
+        assert_eq!(
+            schema_for(SceneId::Leaderboard),
+            <Leaderboard as Inspectable>::schema(),
+            "schema_for(Leaderboard) must equal <Leaderboard as Inspectable>::schema()"
+        );
+    }
+
+    /// `schema_for` must panic for an unimplemented id, mirroring `construct`'s
+    /// panic contract (same implemented/unimplemented partition as `is_implemented`).
+    #[test]
+    #[should_panic]
+    fn schema_for_panics_for_unimplemented() {
+        let _ = schema_for(SceneId::Settings);
     }
 
     #[test]

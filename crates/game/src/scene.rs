@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use scene_core::Inspectable;
 use scene_core::scene_id::SceneId;
 use serde_json::Value as JsonValue;
 
@@ -13,6 +14,11 @@ pub trait Scene {
     fn render(&self, frame: &mut Frame, area: Rect);
     fn handle_input(&mut self, ev: InputEvent) -> Option<Transition>;
     fn exit(&mut self, ctx: &mut EngineCtx);
+    /// M2 hook (spec 14 line 85): a live view into this scene's own
+    /// `Inspectable` state. Mutations through the returned reference must
+    /// persist on the real scene (b5-t2) — every implementor below is a
+    /// RED stub (`unimplemented!()`) pending the code-writer's real bodies.
+    fn inspect(&mut self) -> &mut dyn Inspectable;
 }
 
 /// A request to switch the active scene (spec 14 line 87).
@@ -29,3 +35,9 @@ pub struct EngineCtx;
 pub enum InputEvent {
     Key(crossterm::event::KeyEvent),
 }
+
+/// Shared placeholder `Inspectable` for scenes with no editable state (test
+/// doubles, examples). One DRY empty-`Struct` impl reused everywhere a scene
+/// has no real inspectable fields (b5-t2).
+#[derive(Default, Inspectable)]
+pub struct NoInspect;

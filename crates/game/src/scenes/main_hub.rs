@@ -4,11 +4,12 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use scene_core::color::Rgba;
 use scene_core::scene_id::SceneId;
+use scene_core::Inspectable;
 use serde_json::Value as JsonValue;
 
 use crate::scene::{EngineCtx, InputEvent, Scene, Transition};
 
-#[derive(Default)]
+#[derive(Default, Inspectable)]
 pub struct MainHub;
 
 impl MainHub {
@@ -35,4 +36,8 @@ impl Scene for MainHub {
     }
 
     fn exit(&mut self, _ctx: &mut EngineCtx) {}
+
+    fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+        self
+    }
 }

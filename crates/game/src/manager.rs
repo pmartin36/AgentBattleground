@@ -1,26 +1,13 @@
+use std::collections::BTreeMap;
 use std::sync::mpsc::Sender;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ratatui::Frame;
-use scene_core::inspect::{FieldSchema, FieldTag};
-use scene_core::ipc::{CatalogEntry, Hello, Message, SceneChanged};
+use scene_core::ipc::{
+    CatalogEntry, ErrorCode, ErrorPayload, Hello, Message, SceneChanged, StateSnapshot,
+};
 use scene_core::scene_id::SceneId;
 use serde_json::Value as JsonValue;
-
-/// Placeholder schema for a catalog entry until b5-t3 wires
-/// `registry::schema_for(id)` in with the real per-scene schema.
-fn stub_schema(id: SceneId) -> FieldSchema {
-    FieldSchema {
-        name: id.display_name().to_string(),
-        label: None,
-        tag: FieldTag::Struct,
-        readonly: false,
-        hidden: false,
-        range: None,
-        children: vec![],
-        variants: vec![],
-    }
-}
 
 use crate::ipc_server::Event;
 use crate::registry;
@@ -37,7 +24,19 @@ pub enum Command {
         target: SceneId,
         params: Option<JsonValue>,
     },
+    /// Apply a batch of field patches to scene `id` (must be the active scene).
+    ApplyState {
+        id: SceneId,
+        patch: BTreeMap<String, JsonValue>,
+    },
+    /// Toggle "apply on change" live mode (b5-t4: decode + route only; the
+    /// 10Hz-coalesced live-push behaviour is b5-t5).
+    Subscribe { live: bool },
 }
+
+/// Minimum wall-clock gap between automatic live-mode `StateSnapshot` pushes
+/// (spec 14 line 231 / spec 15: ~10 Hz coalescing while `Subscribe{live}` is on).
+const LIVE_SNAPSHOT_INTERVAL: Duration = Duration::from_millis(100);
 
 pub struct SceneManager {
     active: Box<dyn Scene>,
@@ -46,6 +45,12 @@ pub struct SceneManager {
     /// calls to `set_gameplay_transition` are no-ops while this is set.
     pending_is_debug: bool,
     ctx: EngineCtx,
+    /// Set by `Command::Subscribe { live }`; gates `pump_live_snapshots` and
+    /// suppresses `ApplyState`'s immediate reply `StateSnapshot` (b5-t5).
+    live_subscribed: bool,
+    /// Wall-clock time of the last automatic live-mode `StateSnapshot` push;
+    /// `None` means "not yet pushed since subscribing" (next pump is due).
+    last_live_push: Option<Instant>,
 }
 
 impl SceneManager {
@@ -73,12 +78,21 @@ impl SceneManager {
             pending: None,
             pending_is_debug: false,
             ctx,
+            live_subscribed: false,
+            last_live_push: None,
         }
     }
 
     /// Return the id of the currently active scene.
     pub fn active_id(&self) -> SceneId {
         self.active.id()
+    }
+
+    /// Return the active scene's `Inspectable` hook (spec 14 line 85's M2
+    /// hook, b5-t2). Mutations through the returned reference persist on the
+    /// real active scene.
+    pub fn active_inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+        self.active.inspect()
     }
 
     /// Debug command: set `pending`, overriding any prior transition (debug always wins).
@@ -136,7 +150,7 @@ impl SceneManager {
             .map(|id| CatalogEntry {
                 id,
                 name: id.display_name().to_string(),
-                schema: stub_schema(id),
+                schema: registry::schema_for(id),
             })
             .collect();
         Hello {
@@ -147,7 +161,10 @@ impl SceneManager {
 
     /// Handle one inbound IPC command from the bridge.
     ///
-    /// - `ClientConnected` → push `Event { body: Message::Hello(self.hello()), reply_to: None }`.
+    /// - `ClientConnected` → push `Event { body: Message::Hello(self.hello()), reply_to: None }`,
+    ///   then an unprompted `Event { body: Message::StateSnapshot { id: active_id(),
+    ///   snapshot: active.inspect().snapshot() }, reply_to: None }` so a freshly
+    ///   connected inspector's panel has real values immediately (b5-t3).
     /// - `SwitchScene { target, params }` → `set_debug_transition`; no event pushed here
     ///   (SceneChanged is pushed by `process_pending_notify` after the swap).
     pub fn apply_command(&mut self, cmd: Command, events: &Sender<Event>) {
@@ -157,11 +174,85 @@ impl SceneManager {
                     body: Message::Hello(self.hello()),
                     reply_to: None,
                 });
+                self.push_state_snapshot(events);
             }
             Command::SwitchScene { target, params } => {
                 self.set_debug_transition(Transition { target, params });
             }
+            Command::ApplyState { id, patch } => {
+                if id != self.active_id() {
+                    let _ = events.send(Event {
+                        body: Message::Error(ErrorPayload {
+                            code: ErrorCode::NotActive,
+                            message: format!("scene {id:?} is not active"),
+                        }),
+                        reply_to: None,
+                    });
+                    return;
+                }
+                // SOLE OWNER of the batch-apply loop (spec point 7): body is
+                // here, not delegated to a shared helper.
+                let mut rejected: Vec<String> = Vec::new();
+                let mut applied_any = false;
+                for (path, value) in patch {
+                    match self.active_inspect().apply_patch(&path, value) {
+                        Ok(()) => applied_any = true,
+                        Err(e) => rejected.push(format!("{path}: {e}")),
+                    }
+                }
+                if !rejected.is_empty() {
+                    let _ = events.send(Event {
+                        body: Message::Error(ErrorPayload {
+                            code: ErrorCode::BadField,
+                            message: rejected.join(", "),
+                        }),
+                        reply_to: None,
+                    });
+                }
+                // In live mode the immediate reply is suppressed: the change
+                // is folded into the next pump_live_snapshots coalesced push.
+                if applied_any && !self.live_subscribed {
+                    self.push_state_snapshot(events);
+                }
+            }
+            Command::Subscribe { live } => {
+                self.live_subscribed = live;
+                if live {
+                    // Reset the clock so the next pump fires immediately.
+                    self.last_live_push = None;
+                }
+            }
         }
+    }
+
+    /// Shared `Event { StateSnapshot { id, snapshot }, reply_to: None }` push
+    /// for the active scene — reused by `ClientConnected`, `ApplyState`'s
+    /// (non-live) immediate reply, and `pump_live_snapshots`.
+    fn push_state_snapshot(&mut self, events: &Sender<Event>) {
+        let id = self.active_id();
+        let snapshot = self.active_inspect().snapshot();
+        let _ = events.send(Event {
+            body: Message::StateSnapshot(StateSnapshot { id, snapshot }),
+            reply_to: None,
+        });
+    }
+
+    /// Push at most one automatic `StateSnapshot` per `LIVE_SNAPSHOT_INTERVAL`
+    /// (~10 Hz) while `Subscribe{live:true}` is active. No-op when not
+    /// subscribed. The first pump after subscribing always pushes.
+    pub fn pump_live_snapshots(&mut self, events: &Sender<Event>, now: Instant) {
+        if !self.live_subscribed {
+            return;
+        }
+        let due = match self.last_live_push {
+            None => true,
+            Some(prev) => now.duration_since(prev) >= LIVE_SNAPSHOT_INTERVAL,
+        };
+        if !due {
+            return;
+        }
+        self.push_state_snapshot(events);
+        self.last_live_push = Some(now);
     }
 
     /// Notifying wrapper around `process_pending`: if a transition is pending,
@@ -170,11 +261,9 @@ impl SceneManager {
     /// Returns `Some(id)` when a switch occurred, `None` otherwise.
     pub fn process_pending_notify(&mut self, events: &Sender<Event>) -> Option<SceneId> {
         let id = self.process_pending()?;
+        let snapshot = self.active.inspect().snapshot();
         let _ = events.send(Event {
-            body: Message::SceneChanged(SceneChanged {
-                id,
-                snapshot: JsonValue::Null,
-            }),
+            body: Message::SceneChanged(SceneChanged { id, snapshot }),
             reply_to: None,
         });
         Some(id)
@@ -244,6 +333,7 @@ mod tests {
 
         struct TestScene {
             entered: Arc<Mutex<bool>>,
+            no_inspect: crate::scene::NoInspect,
         }
 
         impl Scene for TestScene {
@@ -265,10 +355,16 @@ mod tests {
                 None
             }
             fn exit(&mut self, _ctx: &mut EngineCtx) {}
+            fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+                &mut self.no_inspect
+            }
         }
 
         let entered = Arc::new(Mutex::new(false));
-        let scene = TestScene { entered: Arc::clone(&entered) };
+        let scene = TestScene {
+            entered: Arc::clone(&entered),
+            no_inspect: crate::scene::NoInspect,
+        };
         let mgr = SceneManager::with_scene(Box::new(scene));
 
         assert_eq!(
@@ -295,6 +391,7 @@ mod tests {
 
         struct ParamsCapturingScene {
             params: Arc<Mutex<Option<JsonValue>>>,
+            no_inspect: crate::scene::NoInspect,
         }
 
         impl Scene for ParamsCapturingScene {
@@ -316,10 +413,16 @@ mod tests {
                 None
             }
             fn exit(&mut self, _ctx: &mut EngineCtx) {}
+            fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+                &mut self.no_inspect
+            }
         }
 
         let captured = Arc::new(Mutex::new(None));
-        let scene = ParamsCapturingScene { params: Arc::clone(&captured) };
+        let scene = ParamsCapturingScene {
+            params: Arc::clone(&captured),
+            no_inspect: crate::scene::NoInspect,
+        };
         let expected = json!({"k": 1});
         let mgr = SceneManager::with_scene_and_params(Box::new(scene), Some(expected.clone()));
 
@@ -345,6 +448,7 @@ mod tests {
 
         struct ParamsCapturingScene {
             params: Arc<Mutex<Option<JsonValue>>>,
+            no_inspect: crate::scene::NoInspect,
         }
 
         impl Scene for ParamsCapturingScene {
@@ -366,10 +470,16 @@ mod tests {
                 None
             }
             fn exit(&mut self, _ctx: &mut EngineCtx) {}
+            fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+                &mut self.no_inspect
+            }
         }
 
         let captured = Arc::new(Mutex::new(Some(json!({"stale": true}))));
-        let scene = ParamsCapturingScene { params: Arc::clone(&captured) };
+        let scene = ParamsCapturingScene {
+            params: Arc::clone(&captured),
+            no_inspect: crate::scene::NoInspect,
+        };
         let _mgr = SceneManager::with_scene_and_params(Box::new(scene), None);
 
         assert_eq!(
@@ -615,31 +725,77 @@ mod tests {
         }
     }
 
-    /// `apply_command(ClientConnected, ..)` pushes exactly one event with
-    /// `body: Message::Hello(…)` and `reply_to: None`.
+    /// `apply_command(ClientConnected, ..)` pushes exactly TWO events, in
+    /// order: `Hello` then `StateSnapshot` for the active scene (b5-t3,
+    /// task brief point 13 / round-2 MEDIUM-2 fix) — REPLACES the
+    /// pre-b5-t3 "exactly one event" contract.
     #[test]
-    fn apply_command_client_connected_pushes_hello_event() {
+    fn client_connected_pushes_hello_then_statesnapshot_in_order() {
+        use scene_core::ipc::StateSnapshot;
+        use serde_json::json;
+
         let mut manager = SceneManager::new(SceneId::MainHub);
         let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
         manager.apply_command(Command::ClientConnected, &event_tx);
-        let ev = event_rx
+
+        let first = event_rx
             .recv_timeout(Duration::from_millis(200))
-            .expect("apply_command(ClientConnected) must push exactly one event");
+            .expect("apply_command(ClientConnected) must push a Hello event first");
         assert!(
-            ev.reply_to.is_none(),
+            first.reply_to.is_none(),
             "Hello push must have reply_to: None (unsolicited)"
         );
-        match ev.body {
+        match first.body {
             Message::Hello(h) => {
                 assert_eq!(h.active, SceneId::MainHub, "Hello.active must be MainHub");
                 assert_eq!(h.scenes.len(), 4, "Hello.scenes must list four M1 scenes");
             }
-            other => panic!("expected Hello body, got {:?}", other),
+            other => panic!("expected Hello body first, got {:?}", other),
         }
+
+        let second = event_rx.recv_timeout(Duration::from_millis(200)).expect(
+            "apply_command(ClientConnected) must push a second, unprompted \
+             StateSnapshot event for the active scene",
+        );
+        assert!(
+            second.reply_to.is_none(),
+            "StateSnapshot push must have reply_to: None (unsolicited)"
+        );
+        match second.body {
+            Message::StateSnapshot(StateSnapshot { id, snapshot }) => {
+                assert_eq!(id, SceneId::MainHub, "StateSnapshot.id must be the active scene");
+                assert_eq!(
+                    snapshot,
+                    json!({}),
+                    "StateSnapshot.snapshot must be the active scene's real \
+                     inspect().snapshot() (MainHub has no fields, so {{}})"
+                );
+            }
+            other => panic!("expected StateSnapshot body second, got {:?}", other),
+        }
+
         assert!(
             event_rx.try_recv().is_err(),
-            "ClientConnected must push exactly one event"
+            "ClientConnected must push exactly two events (Hello, StateSnapshot)"
         );
+    }
+
+    /// Every `CatalogEntry.schema` in `hello()` must equal
+    /// `registry::schema_for(entry.id)` — the real per-type schema, not a
+    /// stub (b5-t3, round-2 HIGH-2 fix).
+    #[test]
+    fn hello_entries_carry_real_schema_matching_schema_for() {
+        let manager = SceneManager::new(SceneId::MainHub);
+        let hello = manager.hello();
+        assert!(!hello.scenes.is_empty(), "hello() must list scenes to check");
+        for entry in &hello.scenes {
+            assert_eq!(
+                entry.schema,
+                crate::registry::schema_for(entry.id),
+                "CatalogEntry.schema for {:?} must equal registry::schema_for(id)",
+                entry.id
+            );
+        }
     }
 
     /// `apply_command(SwitchScene{target,params}, ..)` queues a debug transition
@@ -714,6 +870,41 @@ mod tests {
         );
     }
 
+    /// `process_pending_notify` after a switch must push `SceneChanged.snapshot`
+    /// equal to the NEW active scene's real `inspect().snapshot()` — not the
+    /// pre-b5-t3 `JsonValue::Null` placeholder (task brief point 13).
+    #[test]
+    fn process_pending_notify_scene_changed_snapshot_matches_new_scene() {
+        let mut manager = SceneManager::new(SceneId::MainHub);
+        let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
+        manager.set_debug_transition(Transition {
+            target: SceneId::BattleViewer,
+            params: None,
+        });
+        manager.process_pending_notify(&event_tx);
+        let ev = event_rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect("process_pending_notify must push a SceneChanged event after a switch");
+        match ev.body {
+            Message::SceneChanged(sc) => {
+                assert_eq!(sc.id, SceneId::BattleViewer);
+                assert_ne!(
+                    sc.snapshot,
+                    JsonValue::Null,
+                    "SceneChanged.snapshot must carry the new scene's real \
+                     values, not the Null placeholder"
+                );
+                let expected = manager.active_inspect().snapshot();
+                assert_eq!(
+                    sc.snapshot, expected,
+                    "SceneChanged.snapshot must equal the new active scene's \
+                     inspect().snapshot()"
+                );
+            }
+            other => panic!("expected SceneChanged body, got {:?}", other),
+        }
+    }
+
     /// `process_pending_notify` fires SceneChanged for a GAMEPLAY transition too,
     /// not only for debug ones — confirming the "any switch" contract.
     #[test]
@@ -741,5 +932,152 @@ mod tests {
             }
             other => panic!("expected SceneChanged body, got {:?}", other),
         }
+    }
+
+    // ------------------------------------------------------------- inspect (b5-t2)
+
+    /// `SceneManager::active_inspect()` (backed by `Scene::inspect()`) must return
+    /// a LIVE hook into the active scene, not a fresh/throwaway value: a mutation
+    /// applied through one call must be visible via the very next call.
+    #[test]
+    fn inspect_hooks_battle_viewer_live() {
+        use serde_json::json;
+
+        let mut mgr = SceneManager::new(SceneId::BattleViewer);
+        mgr.active_inspect()
+            .apply_patch("elapsed", json!(9.0))
+            .expect("elapsed is a plain, editable f32 field (b5-t1)");
+
+        assert_eq!(
+            mgr.active_inspect().snapshot()["elapsed"],
+            json!(9.0),
+            "inspect() must return a live hook into the real active scene — the \
+             patched value must be visible on the next inspect() call"
+        );
+    }
+
+    /// `MainHub` is a zero-field scene; its `inspect()` hook must still be
+    /// genuinely wired (real derive + `{ self }`), not a stub that merely
+    /// compiles — the exact "silently unreal" risk this task guards against.
+    #[test]
+    fn trivial_scene_inspect_snapshot_is_empty_object() {
+        use serde_json::json;
+
+        let mut hub = MainHub;
+        assert_eq!(
+            hub.inspect().snapshot(),
+            json!({}),
+            "MainHub::inspect() must expose a real (derived) Inspectable \
+             snapshot, not an unimplemented stub"
+        );
+    }
+
+    // ═══════════════════ b5-t5: live-mode 10Hz-coalesced StateSnapshot ═════════
+
+    /// While `Subscribe{live:true}` is active, `pump_live_snapshots` pushes at
+    /// most one `StateSnapshot` per ~100ms window: first call after subscribe
+    /// pushes immediately; a second call <100ms later is a no-op; a third call
+    /// >=100ms after the FIRST push pushes again.
+    #[test]
+    fn pump_live_snapshots_gated_to_one_per_100ms_window() {
+        use std::time::Instant;
+
+        let mut mgr = SceneManager::new(SceneId::BattleViewer);
+        let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
+        mgr.apply_command(Command::Subscribe { live: true }, &event_tx);
+
+        let t0 = Instant::now();
+        mgr.pump_live_snapshots(&event_tx, t0);
+        let first = event_rx.try_recv().expect(
+            "first pump_live_snapshots call after Subscribe{live:true} must push a StateSnapshot",
+        );
+        match first.body {
+            Message::StateSnapshot(StateSnapshot { id, .. }) => {
+                assert_eq!(id, SceneId::BattleViewer, "pumped StateSnapshot.id must be active scene");
+            }
+            other => panic!("expected StateSnapshot, got {:?}", other),
+        }
+
+        mgr.pump_live_snapshots(&event_tx, t0 + Duration::from_millis(50));
+        assert!(
+            event_rx.try_recv().is_err(),
+            "a pump call 50ms after the first push (within the 100ms window) must not push again"
+        );
+
+        mgr.pump_live_snapshots(&event_tx, t0 + Duration::from_millis(100));
+        assert!(
+            event_rx.try_recv().is_ok(),
+            "a pump call >=100ms after the first push must push a second StateSnapshot"
+        );
+    }
+
+    /// `pump_live_snapshots` is a no-op when not subscribed, and becomes a
+    /// no-op again after `Subscribe{live:false}` turns live mode off.
+    #[test]
+    fn pump_live_snapshots_noop_when_not_subscribed() {
+        use std::time::Instant;
+
+        let mut mgr = SceneManager::new(SceneId::BattleViewer);
+        let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
+
+        mgr.pump_live_snapshots(&event_tx, Instant::now());
+        assert!(
+            event_rx.try_recv().is_err(),
+            "pump_live_snapshots must push nothing before any Subscribe{{live:true}}"
+        );
+
+        mgr.apply_command(Command::Subscribe { live: true }, &event_tx);
+        let t0 = Instant::now();
+        mgr.pump_live_snapshots(&event_tx, t0);
+        event_rx.try_recv().expect("expected the initial push while subscribed");
+
+        mgr.apply_command(Command::Subscribe { live: false }, &event_tx);
+        mgr.pump_live_snapshots(&event_tx, t0 + Duration::from_millis(500));
+        assert!(
+            event_rx.try_recv().is_err(),
+            "pump_live_snapshots must push nothing after Subscribe{{live:false}}"
+        );
+    }
+
+    /// Regression guard for b5-t4's contract + the new live gate: a valid
+    /// `ApplyState` still pushes its immediate reply `StateSnapshot` when NOT
+    /// subscribed, but that immediate push is suppressed while
+    /// `Subscribe{live:true}` is active (coalesced into the pump instead).
+    #[test]
+    fn apply_state_immediate_snapshot_suppressed_only_in_live_mode() {
+        use serde_json::json;
+
+        // Not subscribed: immediate StateSnapshot reply is retained.
+        let mut mgr = SceneManager::new(SceneId::BattleViewer);
+        let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
+        let mut patch = BTreeMap::new();
+        patch.insert("elapsed".to_string(), json!(2.0));
+        mgr.apply_command(
+            Command::ApplyState { id: mgr.active_id(), patch },
+            &event_tx,
+        );
+        assert!(
+            matches!(
+                event_rx.recv_timeout(Duration::from_millis(200)).map(|e| e.body),
+                Ok(Message::StateSnapshot(_))
+            ),
+            "non-live ApplyState must still push an immediate StateSnapshot (b5-t4 contract)"
+        );
+
+        // Subscribed live: immediate StateSnapshot reply must be suppressed.
+        let mut mgr = SceneManager::new(SceneId::BattleViewer);
+        let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
+        mgr.apply_command(Command::Subscribe { live: true }, &event_tx);
+        let mut patch = BTreeMap::new();
+        patch.insert("elapsed".to_string(), json!(2.0));
+        mgr.apply_command(
+            Command::ApplyState { id: mgr.active_id(), patch },
+            &event_tx,
+        );
+        assert!(
+            event_rx.try_recv().is_err(),
+            "live-mode ApplyState must NOT push an immediate StateSnapshot — it is \
+             coalesced into the next pump_live_snapshots push instead"
+        );
     }
 }

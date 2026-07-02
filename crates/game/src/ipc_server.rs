@@ -203,7 +203,9 @@ pub fn socket_path() -> PathBuf {
 ///
 /// - `Message::SwitchScene` with a known target → forwards `Command::SwitchScene`.
 /// - `Message::SwitchScene` with an unknown target → pushes `Event{Error{UnknownScene}}`.
-/// - Other body types → ignored (M1 only accepts SwitchScene inbound).
+/// - `Message::ApplyState` → forwards `Command::ApplyState` + replies `Ack{reply_to: seq}`.
+/// - `Message::Subscribe` → forwards `Command::Subscribe` + replies `Ack{reply_to: seq}`.
+/// - Other body types → ignored.
 /// - `IpcError::Io` → connection closed: clear slot, release `connected`, return.
 /// - `IpcError::BadFrame` / `IpcError::UnknownType` → push `Event{Error{code}}`, continue.
 fn reader_loop(
@@ -239,6 +241,23 @@ fn reader_loop(
                             });
                         }
                     },
+                    Message::ApplyState(a) => {
+                        let _ = cmd_tx.send(Command::ApplyState {
+                            id: a.id,
+                            patch: a.patch,
+                        });
+                        let _ = event_tx.send(Event {
+                            body: Message::Ack,
+                            reply_to: Some(env.seq),
+                        });
+                    }
+                    Message::Subscribe(s) => {
+                        let _ = cmd_tx.send(Command::Subscribe { live: s.live });
+                        let _ = event_tx.send(Event {
+                            body: Message::Ack,
+                            reply_to: Some(env.seq),
+                        });
+                    }
                     _ => {
                         // All other message types are ignored in M1.
                     }
@@ -338,6 +357,9 @@ mod tests {
                     SceneId::BattleViewer,
                     "forwarded Command target must be BattleViewer"
                 );
+            }
+            Command::ApplyState { .. } | Command::Subscribe { .. } => {
+                panic!("expected SwitchScene, got ApplyState/Subscribe")
             }
         }
     }
@@ -498,6 +520,9 @@ mod tests {
                     "A's Command target must be BattleViewer"
                 );
             }
+            Command::ApplyState { .. } | Command::Subscribe { .. } => {
+                panic!("expected SwitchScene, got ApplyState/Subscribe")
+            }
         }
     }
 
@@ -583,6 +608,10 @@ mod tests {
                             }),
                             reply_to: None,
                         });
+                    }
+                    Command::ApplyState { .. } | Command::Subscribe { .. } => {
+                        // Not exercised by this harness (b4-t2 stub predates
+                        // b5-t4); no-op.
                     }
                 }
             }

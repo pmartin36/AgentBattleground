@@ -109,6 +109,27 @@ fn e2e_connect_then_switch_battle_viewer() {
             );
         }
 
+        // ClientConnected also pushes an unprompted StateSnapshot for the
+        // active scene immediately after Hello (b5-t3) — consume it before
+        // driving the SwitchScene exchange.
+        let snapshot_env =
+            read_frame(&mut client).expect("StateSnapshot must arrive after Hello");
+        assert!(
+            snapshot_env.reply_to.is_none(),
+            "initial StateSnapshot must be unsolicited (reply_to: None), got: {:?}",
+            snapshot_env.reply_to
+        );
+        match snapshot_env.body {
+            Message::StateSnapshot(ref payload) => {
+                assert_eq!(
+                    payload.id,
+                    SceneId::MainHub,
+                    "initial StateSnapshot.id must be the active scene (MainHub)"
+                );
+            }
+            ref other => panic!("expected StateSnapshot after Hello, got {:?}", other),
+        }
+
         // Step 3: send SwitchScene{BattleViewer} with seq=1.
         let req_seq: u64 = 1;
         let req = Envelope::new(

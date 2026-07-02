@@ -40,6 +40,7 @@ const MARKER: &str = "---FRAME-BREAK---";
 struct Tier2Scene {
     sprite: render::AnimatedSprite,
     elapsed: Duration,
+    no_inspect: game::scene::NoInspect,
 }
 
 impl Tier2Scene {
@@ -51,6 +52,7 @@ impl Tier2Scene {
             )
             .expect("decode wizard.gif"),
             elapsed: Duration::ZERO,
+            no_inspect: game::scene::NoInspect,
         }
     }
 }
@@ -77,6 +79,10 @@ impl Scene for Tier2Scene {
     fn render(&self, frame: &mut Frame, area: Rect) {
         let grid = render::convert(self.sprite.frame_at(self.elapsed), area);
         render::draw_grid(frame.buffer_mut(), area, &grid);
+    }
+
+    fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+        &mut self.no_inspect
     }
 }
 

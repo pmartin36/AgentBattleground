@@ -64,6 +64,7 @@ struct Wizard {
 struct Tier3Scene {
     wizards: Vec<Wizard>,
     elapsed: Duration,
+    no_inspect: game::scene::NoInspect,
 }
 
 impl Tier3Scene {
@@ -101,6 +102,7 @@ impl Tier3Scene {
                 make(2.0, 14, 7, 66), // front  — depth=row=7, drawn last (on top)
             ],
             elapsed: Duration::ZERO,
+            no_inspect: game::scene::NoInspect,
         }
     }
 }
@@ -158,6 +160,10 @@ impl Scene for Tier3Scene {
 
         let composed = render::composite(cols, rows, &placements);
         render::draw_grid(frame.buffer_mut(), area, &composed);
+    }
+
+    fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+        &mut self.no_inspect
     }
 }
 

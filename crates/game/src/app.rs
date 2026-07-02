@@ -122,6 +122,9 @@ pub fn run_with_params(
         // 4. Apply any pending scene transition; notify inspector of the switch.
         mgr.process_pending_notify(&events);
 
+        // 4b. While Subscribe{live} is on, push a coalesced ~10Hz StateSnapshot.
+        mgr.pump_live_snapshots(&events, Instant::now());
+
         // 5. Render.
         terminal.draw(|f| mgr.render(f))?;
 

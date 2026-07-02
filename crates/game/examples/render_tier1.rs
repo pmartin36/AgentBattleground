@@ -28,6 +28,7 @@ use game::scene::{EngineCtx, InputEvent, Scene, Transition};
 
 struct Tier1Scene {
     img: image::DynamicImage,
+    no_inspect: game::scene::NoInspect,
 }
 
 impl Tier1Scene {
@@ -35,6 +36,7 @@ impl Tier1Scene {
         Tier1Scene {
             img: image::load_from_memory(include_bytes!("assets/wizard_still.png"))
                 .expect("decode wizard_still.png"),
+            no_inspect: game::scene::NoInspect,
         }
     }
 }
@@ -60,6 +62,10 @@ impl Scene for Tier1Scene {
     fn render(&self, frame: &mut Frame, area: Rect) {
         let grid = render::convert(&self.img, area);
         render::draw_grid(frame.buffer_mut(), area, &grid);
+    }
+
+    fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+        &mut self.no_inspect
     }
 }
 

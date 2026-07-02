@@ -372,6 +372,7 @@ mod tests {
 
         struct ParamsCapturingScene {
             params: Arc<Mutex<Option<JsonValue>>>,
+            no_inspect: crate::scene::NoInspect,
         }
 
         impl Scene for ParamsCapturingScene {
@@ -393,6 +394,9 @@ mod tests {
                 None
             }
             fn exit(&mut self, _ctx: &mut EngineCtx) {}
+            fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+                &mut self.no_inspect
+            }
         }
 
         let path = write_temp_json(
@@ -407,7 +411,10 @@ mod tests {
         assert_eq!(id, SceneId::BattleViewer);
 
         let captured = Arc::new(Mutex::new(None));
-        let scene = ParamsCapturingScene { params: Arc::clone(&captured) };
+        let scene = ParamsCapturingScene {
+            params: Arc::clone(&captured),
+            no_inspect: crate::scene::NoInspect,
+        };
         let _mgr = SceneManager::with_scene_and_params(Box::new(scene), params);
 
         assert_eq!(

@@ -90,6 +90,7 @@ struct RenderMovementScene {
     wizards: Vec<Wizard>,
     camera: SideView,
     elapsed: Duration,
+    no_inspect: game::scene::NoInspect,
 }
 
 impl RenderMovementScene {
@@ -109,6 +110,7 @@ impl RenderMovementScene {
             wizards,
             camera: SideView::new(SCALE_DOTS),
             elapsed: Duration::ZERO,
+            no_inspect: game::scene::NoInspect,
         }
     }
 }
@@ -176,6 +178,10 @@ impl Scene for RenderMovementScene {
         let composed = render::composite::composite_dots(cols * 2, rows * 4, &placements);
         let grid = render::dots::dots_to_grid(&composed);
         render::draw_grid(frame.buffer_mut(), area, &grid);
+    }
+
+    fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+        &mut self.no_inspect
     }
 }
 

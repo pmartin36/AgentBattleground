@@ -11,6 +11,7 @@ use render::transform::{place, rasterize, Transform, Vec2};
 use render::{draw_grid, AnimatedSprite};
 use scene_core::color::Rgba;
 use scene_core::scene_id::SceneId;
+use scene_core::Inspectable;
 use serde_json::Value as JsonValue;
 
 use crate::scene::{EngineCtx, InputEvent, Scene, Transition};
@@ -130,7 +131,7 @@ pub fn draw_board_lines(buf: &mut Buffer, geom: &BoardGeometry) {
 
 /// Which side a piece belongs to. Rendering differences (tint, mirror) are
 /// added by b4-t3; this enum carries only identity.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Inspectable)]
 pub enum Team {
     A,
     B,
@@ -144,9 +145,11 @@ pub const TEAM_B_ROW: u16 = BOARD_ROWS - 1;
 /// within a team, Team A before Team B) used later by b4-t3's phase-stagger.
 /// `transform`/`color` are owned, seeded once at construction by `Piece::new`
 /// (b2-t1) — no `Eq`/`Hash`, since `Transform` has `f32` fields.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Inspectable)]
 pub struct Piece {
+    #[inspect(readonly)]
     pub col: u16,
+    #[inspect(readonly)]
     pub row: u16,
     pub team: Team,
     pub index: usize,
@@ -279,8 +282,10 @@ pub fn place_piece<'a>(
 /// constant is the single source of truth for animation speed.
 const WIZARD_FRAME_DUR: Duration = Duration::from_millis(100);
 
+#[derive(Inspectable)]
 pub struct BattleViewer {
     elapsed: f32,
+    #[inspect(hidden)]
     sprite: AnimatedSprite,
     /// Owned piece state, seeded once from `pieces()` at construction.
     /// `render()` reads each piece's own `transform`/`color` fields directly
@@ -346,6 +351,10 @@ impl Scene for BattleViewer {
     }
 
     fn exit(&mut self, _ctx: &mut EngineCtx) {}
+
+    fn inspect(&mut self) -> &mut dyn Inspectable {
+        self
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1064,5 +1073,150 @@ mod battle_viewer_scene_wiring_tests {
             "expected elapsed ~= 0.15 seconds after a 150ms update(), got {}",
             scene.elapsed
         );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: `#[derive(Inspectable)]` on Piece/Team/BattleViewer (b5-t1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod inspectable_tests {
+    use super::*;
+    use scene_core::{FieldSchema, FieldTag, PatchError};
+
+    fn field<'a>(schema: &'a FieldSchema, name: &str) -> &'a FieldSchema {
+        schema
+            .children
+            .iter()
+            .find(|c| c.name == name)
+            .unwrap_or_else(|| panic!("missing field `{name}` in schema {schema:?}"))
+    }
+
+    /// DELIVERABLE: `Piece::schema()` reports `col`/`row` as readonly `Int`,
+    /// `team` as `Enum` (with Team's two variant names), `index` as a plain
+    /// (non-readonly) `Int`, `transform` as a `Struct` with b3-t1's nested
+    /// `translate`/`rotation`/`scale` leaves, and `color` as `Color`.
+    #[test]
+    fn piece_schema_reports_readonly_ints_enum_struct_and_color_fields() {
+        let schema = Piece::schema();
+        assert_eq!(schema.tag, FieldTag::Struct);
+
+        let col = field(&schema, "col");
+        assert_eq!(col.tag, FieldTag::Int);
+        assert!(col.readonly, "col must be readonly");
+
+        let row = field(&schema, "row");
+        assert_eq!(row.tag, FieldTag::Int);
+        assert!(row.readonly, "row must be readonly");
+
+        let team = field(&schema, "team");
+        assert_eq!(team.tag, FieldTag::Enum);
+        assert_eq!(team.variants, vec!["A".to_string(), "B".to_string()]);
+
+        let index = field(&schema, "index");
+        assert_eq!(index.tag, FieldTag::Int);
+        assert!(!index.readonly, "index must be editable, not readonly");
+
+        let transform = field(&schema, "transform");
+        assert_eq!(transform.tag, FieldTag::Struct);
+        let transform_children: Vec<&str> =
+            transform.children.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(transform_children, vec!["translate", "rotation", "scale"]);
+
+        let color = field(&schema, "color");
+        assert_eq!(color.tag, FieldTag::Color);
+    }
+
+    /// DELIVERABLE: `apply_patch` on a `Piece` value for `"team"` changes
+    /// only `team` — `color`/`transform` are byte-unchanged.
+    #[test]
+    fn piece_apply_patch_on_team_changes_only_team() {
+        let mut piece = Piece::new(1, TEAM_A_ROW, Team::A, 0);
+        let before_color = piece.color;
+        let before_transform = piece.transform;
+
+        piece
+            .apply_patch("team", serde_json::json!("B"))
+            .expect("apply_patch on team must succeed");
+
+        assert_eq!(piece.team, Team::B, "team must change");
+        assert_eq!(piece.color, before_color, "color must be untouched by a team patch");
+        assert_eq!(
+            piece.transform, before_transform,
+            "transform must be untouched by a team patch"
+        );
+    }
+
+    /// DELIVERABLE: `apply_patch` for `"col"` returns `Err` (readonly
+    /// rejection) and leaves the value unchanged.
+    #[test]
+    fn piece_apply_patch_on_readonly_col_is_err_and_unchanged() {
+        let mut piece = Piece::new(1, TEAM_A_ROW, Team::A, 0);
+        let before = piece;
+
+        let result = piece.apply_patch("col", serde_json::json!(5));
+
+        assert_eq!(result, Err(PatchError::Readonly));
+        assert_eq!(
+            piece, before,
+            "piece must be byte-unchanged after a rejected readonly patch"
+        );
+    }
+
+    /// DELIVERABLE: `BattleViewer::schema()` reports `elapsed` as an
+    /// editable `Float` and `pieces` as a `List` of `Piece`-shaped elements;
+    /// the `#[inspect(hidden)]` `sprite` field is absent entirely.
+    #[test]
+    fn battle_viewer_schema_reports_editable_elapsed_and_pieces_list_hides_sprite() {
+        let schema = BattleViewer::schema();
+        assert_eq!(schema.tag, FieldTag::Struct);
+
+        let names: Vec<&str> = schema.children.iter().map(|c| c.name.as_str()).collect();
+        assert!(
+            !names.contains(&"sprite"),
+            "hidden sprite field must be absent from schema: {names:?}"
+        );
+
+        let elapsed = field(&schema, "elapsed");
+        assert_eq!(elapsed.tag, FieldTag::Float);
+        assert!(!elapsed.readonly, "elapsed must be editable");
+
+        let pieces = field(&schema, "pieces");
+        assert_eq!(pieces.tag, FieldTag::List);
+        assert_eq!(pieces.children.len(), 1, "List schema carries one element template");
+        assert_eq!(
+            pieces.children[0].tag,
+            FieldTag::Struct,
+            "pieces element template must be Piece-shaped (Struct)"
+        );
+    }
+
+    /// DELIVERABLE: the fixed 12-piece layout (b4-t2) round-trips through
+    /// `snapshot()` as a `pieces` array of exactly 12 Piece-shaped objects,
+    /// and the hidden `sprite` field never appears in the snapshot either.
+    #[test]
+    fn battle_viewer_default_snapshot_has_twelve_piece_shaped_elements_and_hides_sprite() {
+        let scene = BattleViewer::default();
+        let snap = scene.snapshot();
+        let obj = snap.as_object().expect("BattleViewer snapshot must be a JSON object");
+
+        assert!(
+            !obj.contains_key("sprite"),
+            "hidden sprite field must be absent from snapshot"
+        );
+
+        let pieces = obj
+            .get("pieces")
+            .expect("pieces key must be present")
+            .as_array()
+            .expect("pieces snapshot must be an array");
+        assert_eq!(pieces.len(), 12, "expected 12 seeded pieces in the snapshot");
+        for p in pieces {
+            let p = p.as_object().expect("each piece snapshot must be an object");
+            for key in ["col", "row", "team", "index", "transform", "color"] {
+                assert!(p.contains_key(key), "piece snapshot missing key `{key}`");
+            }
+        }
     }
 }
