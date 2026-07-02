@@ -25,6 +25,8 @@ fn main() {
     let path = &args[1];
     let mut width = 100u32;
     let mut color = true;
+    let mut chroma: Option<(u8, u8, u8)> = None;
+    let mut chroma_thresh = 50u32;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
@@ -33,9 +35,27 @@ fn main() {
                 i += 2;
             }
             "--no-color" => { color = false; i += 1; }
+            "--chroma" if i + 1 < args.len() => {
+                let v: Vec<u8> = args[i + 1].split(',').filter_map(|s| s.trim().parse().ok()).collect();
+                if v.len() == 3 { chroma = Some((v[0], v[1], v[2])); }
+                i += 2;
+            }
+            "--chroma-thresh" if i + 1 < args.len() => {
+                chroma_thresh = args[i + 1].parse().unwrap_or(50); i += 2;
+            }
             _ => i += 1,
         }
     }
+    let chroma_thresh2 = chroma_thresh * chroma_thresh;
+    // A pixel is transparent if its alpha is low OR (chroma set) it's near the key color.
+    let is_transparent = |p: &[u8; 4]| -> bool {
+        if p[3] < 128 { return true; }
+        if let Some((kr, kg, kb)) = chroma {
+            let (dr, dg, db) = (p[0] as i32 - kr as i32, p[1] as i32 - kg as i32, p[2] as i32 - kb as i32);
+            if (dr*dr + dg*dg + db*db) as u32 <= chroma_thresh2 { return true; }
+        }
+        false
+    };
 
     let img = match image::open(path) {
         Ok(im) => im,
@@ -57,7 +77,7 @@ fn main() {
                 .map(|(dx, dy, _)| img.get_pixel(px + dx, py + dy).0)
                 .collect();
             let lumas: Vec<Option<u8>> = pixels.iter()
-                .map(|p| if p[3] < 128 { None } else { Some(luma(p[0], p[1], p[2])) })
+                .map(|p| if is_transparent(p) { None } else { Some(luma(p[0], p[1], p[2])) })
                 .collect();
             let visible: Vec<u8> = lumas.iter().filter_map(|l| *l).collect();
             if visible.is_empty() { out.push(' '); continue; }

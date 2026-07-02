@@ -75,6 +75,11 @@ The current art-style decision excludes: posterization, sprite outlining, and in
 - `src/anim.rs` — animated GIF playback in braille with transparency
 - `src/flow.rs` — multi-sprite depth-layer crowd ("tidal wave") compositing
 - `src/downrez.rs` — standalone CLI: image → colored braille (the down-rezzer both front-ends use)
+- `src/playframes.rs` — braille frame-sequence player: PNG-dir or GIF → animated braille (chroma-key + ping-pong loop)
+
+`experiments/creature_lab/` is the generation rig (stable-diffusion.cpp CLI):
+- `generate.sh` — high-detail creature + img2img-simplified battlefield form → braille preview of both
+- `animate.sh` — Wan 2.2 I2V animates a low-detail sprite → braille loop (low detail downrezzes cleanly *and* the video model drifts less)
 
 ## Validation
 The renderer is validated in three tiers of increasing difficulty. Each tier pairs an automated **golden test** (the gate) with an **example that renders through the real engine loop** (the eyeball check). The conversion algorithm is ported from the prototypes in `experiments/ascii_test/`; correctness is pinned by **hand-derived expectations** for known inputs (independent of any implementation), with the prototypes as the visual reference.

@@ -130,6 +130,7 @@ pub struct Piece {
     pub index: usize,
     pub transform: Transform,
     pub color: Rgba,
+    pub alive: bool,
 }
 
 impl Piece {
@@ -152,6 +153,7 @@ impl Piece {
             index,
             transform,
             color,
+            alive: true,
         }
     }
 }
@@ -263,6 +265,48 @@ pub fn place_piece<'a>(
 /// GIF's own per-frame delays are intentionally ignored by `from_gif`; this
 /// constant is the single source of truth for animation speed.
 const WIZARD_FRAME_DUR: Duration = Duration::from_millis(100);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Playback event data model (b1-t2). Data shape only — not yet wired into
+// `BattleViewer`/`update()`/`render()` (that starts at b2-t1).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A single playback event: a `Move` or `Die` acting on one piece, active
+/// during `[start_time, start_time + duration)`. `turn` is a separate,
+/// discrete grouping tag: multiple events may share the same `turn` while
+/// having different `start_time`s — `turn` does not replace the clock, it
+/// only labels which turn produced each event.
+///
+/// `EventKind::Move` carries only a destination (`to`), never a `from` — the
+/// glide interpolates from wherever the piece's `Transform.translate` (or,
+/// for `Die`, `Transform.scale`) actually is when the event's window opens,
+/// via the existing `Tween`/`ease_in_out` utility. Remembering that starting
+/// value for the duration of a multi-frame tween is transient, scene-internal
+/// runtime bookkeeping (e.g. a small cache populated the frame an event's
+/// window begins), not part of the authored `Event` data — the same way
+/// `18-battle-viewer-baseline` keeps per-frame render state separate from the
+/// data it derives from. This bookkeeping cache lives on `BattleViewer`
+/// (added in b2-t1), not on `Event` itself.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Event {
+    pub turn: u32,
+    pub start_time: f32,
+    pub duration: f32,
+    pub kind: EventKind,
+}
+
+/// The kind of playback event. `piece_index` targets `Piece.index` — resolve
+/// via `.iter()`/`.iter_mut().find(|p| p.index == piece_index)`, never
+/// `pieces[piece_index]` — independent of `Piece.team`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum EventKind {
+    /// Moves the piece to `to`. Carries only a destination, no `from` field
+    /// (MUST NOT gain one — the from-value is transient runtime bookkeeping,
+    /// not authored data; see the doc comment on `Event` above).
+    Move { piece_index: usize, to: (u16, u16) },
+    /// Marks the piece dead.
+    Die { piece_index: usize },
+}
 
 #[derive(Inspectable)]
 pub struct BattleViewer {
@@ -838,6 +882,14 @@ mod piece_render_tests {
         assert_eq!(piece_b.color, TEAM_B_COLOR, "Team B piece must seed color = TEAM_B_COLOR");
     }
 
+    /// b1-t1 DELIVERABLE: `Piece::new` seeds `alive = true` — a freshly
+    /// constructed piece starts alive.
+    #[test]
+    fn piece_new_defaults_alive_true() {
+        let piece = Piece::new(1, TEAM_A_ROW, Team::A, 0);
+        assert!(piece.alive, "Piece::new must seed alive = true");
+    }
+
     /// DELIVERABLE (3): using a synthetic multi-frame `AnimatedSprite`, two
     /// pieces with different `index` at the same `elapsed` must resolve to
     /// different frame indices for at least one tested `elapsed` — proves the
@@ -898,6 +950,123 @@ mod piece_render_tests {
                 "sprite_base_dot_rows must equal (scale_dots * SPRITE_DOT_RATIO).round() for scale {scale}"
             );
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: playback event data model (b1-t2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod event_data_model_tests {
+    use super::*;
+
+    /// SUGGESTED_TESTS: every field of a `Move` and a `Die` `Event` round-trips.
+    #[test]
+    fn event_move_and_die_fields_round_trip() {
+        let mv = Event {
+            turn: 3,
+            start_time: 1.5,
+            duration: 0.4,
+            kind: EventKind::Move {
+                piece_index: 2,
+                to: (5, 6),
+            },
+        };
+        assert_eq!(mv.turn, 3);
+        assert_eq!(mv.start_time, 1.5);
+        assert_eq!(mv.duration, 0.4);
+        match mv.kind {
+            EventKind::Move { piece_index, to } => {
+                assert_eq!(piece_index, 2);
+                assert_eq!(to, (5, 6));
+            }
+            _ => panic!("expected EventKind::Move"),
+        }
+
+        let die = Event {
+            turn: 7,
+            start_time: 2.0,
+            duration: 0.8,
+            kind: EventKind::Die { piece_index: 9 },
+        };
+        assert_eq!(die.turn, 7);
+        assert_eq!(die.start_time, 2.0);
+        assert_eq!(die.duration, 0.8);
+        match die.kind {
+            EventKind::Die { piece_index } => assert_eq!(piece_index, 9),
+            _ => panic!("expected EventKind::Die"),
+        }
+    }
+
+    /// `turn` is a separate grouping tag, independent of `start_time`: two
+    /// events sharing the same `turn` but different `start_time`s must both
+    /// be preserved independently (proves `turn` doesn't collapse/alias with
+    /// `start_time`).
+    #[test]
+    fn turn_does_not_alias_start_time() {
+        let e1 = Event {
+            turn: 4,
+            start_time: 0.1,
+            duration: 0.2,
+            kind: EventKind::Die { piece_index: 0 },
+        };
+        let e2 = Event {
+            turn: 4,
+            start_time: 0.9,
+            duration: 0.2,
+            kind: EventKind::Die { piece_index: 1 },
+        };
+        assert_eq!(e1.turn, e2.turn, "both events share the same turn");
+        assert_ne!(
+            e1.start_time, e2.start_time,
+            "start_time is independent of turn and must not be aliased"
+        );
+    }
+
+    /// Compile-time guard: `EventKind::Move` has EXACTLY `piece_index` and
+    /// `to` — no `from` field. An exhaustive struct-pattern destructure (no
+    /// `..`) fails to COMPILE the moment an extra field (e.g. `from`) is
+    /// added to the variant, per the spec's explicit "MUST NOT gain a `from`
+    /// field."
+    #[test]
+    fn move_variant_has_exactly_piece_index_and_to_no_from() {
+        let kind = EventKind::Move {
+            piece_index: 0,
+            to: (0, 0),
+        };
+        let EventKind::Move { piece_index, to } = kind else {
+            panic!("expected EventKind::Move");
+        };
+        assert_eq!(piece_index, 0);
+        assert_eq!(to, (0, 0));
+    }
+
+    /// A doc comment documenting the transient from-value bookkeeping
+    /// mechanism (populated the frame an event's window begins, scene-
+    /// internal runtime state, not part of the authored `Event` data) must be
+    /// present near the `Event`/`EventKind` declarations — grep-verifiable.
+    #[test]
+    fn doc_comment_documents_transient_from_value_bookkeeping() {
+        let src = include_str!("battle_viewer.rs");
+        let event_decl = src
+            .find("pub struct Event")
+            .expect("Event struct must exist in this file");
+        let battle_viewer_decl = src
+            .find("pub struct BattleViewer")
+            .expect("BattleViewer struct must exist in this file");
+        let section = &src[..battle_viewer_decl];
+        assert!(
+            event_decl < battle_viewer_decl,
+            "Event must be declared before BattleViewer"
+        );
+        let lower = section.to_lowercase();
+        assert!(
+            lower.contains("transient") && lower.contains("bookkeeping"),
+            "a doc comment on Event/EventKind must document the transient \
+             from-value bookkeeping mechanism (expected the words \
+             'transient' and 'bookkeeping' somewhere before BattleViewer)"
+        );
     }
 }
 

@@ -23,3 +23,7 @@ path = "src/flow.rs"
 [[bin]]
 name = "downrez"
 path = "src/downrez.rs"
+
+[[bin]]
+name = "playframes"
+path = "src/playframes.rs"
