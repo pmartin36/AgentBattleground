@@ -1,6 +1,10 @@
+> # ✅ DONE! — Completed 2026-07-02
+
 # Piece Identity Data Model
 
-> **Status: draft (not started).** The first real slice of a piece's eventual data model: a name and a catalog of named animations ("sprite data" — what animations exist, how to play one). A narrow foundational cut of `03-army-skill-editing` and `12-data-model-sync`'s fuller vision, in the same spirit as `21-mouse-hover-input` — build the piece this round's actual consumer (`24-roster-carousel`) needs, shaped so it survives being reused later rather than thrown away.
+> **Status: implemented.** The first real slice of a piece's eventual data model: a name and a catalog of named animations ("sprite data" — what animations exist, how to play one). A narrow foundational cut of `03-army-skill-editing` and `12-data-model-sync`'s fuller vision, in the same spirit as `21-mouse-hover-input` — build the piece this round's actual consumer (`24-roster-carousel`) needs, shaped so it survives being reused later rather than thrown away.
+>
+> All 6 creatures were generated via `experiments/creature_lab` (`generate.sh` + `animate.sh`) and bundled as real multi-frame GIFs (32 frames each) — visually distinct, thematically matching the target concepts below.
 
 ## Purpose
 Every piece the player owns needs an identity beyond "the wizard placeholder, tinted": a name, and a way to look up "play this creature's idle animation" (and, later, its attack/hurt/death animations, without redesigning the type when those are added). This spec defines that shape and populates it with 6 real, distinct creatures — the first non-placeholder art in the game.
