@@ -3,13 +3,17 @@ use std::time::{Duration, Instant};
 
 use crossterm::{
     cursor::{Hide, Show},
-    event::{self, Event},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 
-use crate::{inspect, ipc_server, manager, manager::SceneManager, scene::Scene};
+use crate::{
+    inspect, ipc_server, manager,
+    manager::SceneManager,
+    scene::{InputEvent, Scene},
+};
 
 /// RAII guard: restores the terminal on drop (covers both normal exit and panic).
 pub(crate) struct TerminalGuard;
@@ -17,7 +21,7 @@ pub(crate) struct TerminalGuard;
 impl TerminalGuard {
     pub(crate) fn new() -> io::Result<Self> {
         enable_raw_mode()?;
-        execute!(io::stdout(), EnterAlternateScreen, Hide)?;
+        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture, Hide)?;
         Ok(TerminalGuard)
     }
 }
@@ -25,7 +29,7 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen, Show);
+        let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen, Show);
     }
 }
 
@@ -105,10 +109,18 @@ pub fn run_with_params(
         // 2. Poll crossterm input (non-blocking). All key routing (1–4 / q / Ctrl-C)
         //    is handled by route_key.
         if event::poll(Duration::ZERO)? {
-            if let Event::Key(key) = event::read()? {
-                if mgr.route_key(key) {
-                    break;
+            match event::read()? {
+                Event::Key(key) => {
+                    if mgr.route_key(key) {
+                        break;
+                    }
                 }
+                Event::Mouse(me) => {
+                    if let Some(t) = mgr.handle_input(InputEvent::Mouse(me)) {
+                        mgr.set_gameplay_transition(t);
+                    }
+                }
+                _ => {}
             }
         }
 

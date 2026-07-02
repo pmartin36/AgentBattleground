@@ -34,6 +34,7 @@ pub struct EngineCtx;
 /// A single input event delivered to the active scene.
 pub enum InputEvent {
     Key(crossterm::event::KeyEvent),
+    Mouse(crossterm::event::MouseEvent),
 }
 
 /// Shared placeholder `Inspectable` for scenes with no editable state (test

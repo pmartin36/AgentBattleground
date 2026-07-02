@@ -489,6 +489,70 @@ mod tests {
         );
     }
 
+    // ------------------------------------------------------ handle_input (b1-t1)
+
+    /// `SceneManager::handle_input(InputEvent::Mouse(me))` forwards the exact
+    /// `MouseEvent` payload to the active scene's `handle_input` — pinning the
+    /// generic-forwarding contract for the new `Mouse` variant.
+    #[test]
+    fn handle_input_forwards_mouse_event_to_active_scene() {
+        use std::sync::{Arc, Mutex};
+        use ratatui::layout::Rect;
+        use serde_json::Value as JsonValue;
+        use crossterm::event::{MouseEvent, MouseEventKind};
+
+        struct MouseCapturingScene {
+            captured: Arc<Mutex<Option<MouseEvent>>>,
+            no_inspect: crate::scene::NoInspect,
+        }
+
+        impl Scene for MouseCapturingScene {
+            fn id(&self) -> SceneId {
+                SceneId::Leaderboard
+            }
+            fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {}
+            fn update(
+                &mut self,
+                _ctx: &mut EngineCtx,
+                _dt: std::time::Duration,
+            ) -> Option<Transition> {
+                None
+            }
+            fn render(&self, _frame: &mut ratatui::Frame, _area: Rect) {}
+            fn handle_input(&mut self, ev: InputEvent) -> Option<Transition> {
+                if let InputEvent::Mouse(me) = ev {
+                    *self.captured.lock().unwrap() = Some(me);
+                }
+                None
+            }
+            fn exit(&mut self, _ctx: &mut EngineCtx) {}
+            fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+                &mut self.no_inspect
+            }
+        }
+
+        let captured = Arc::new(Mutex::new(None));
+        let scene = MouseCapturingScene {
+            captured: Arc::clone(&captured),
+            no_inspect: crate::scene::NoInspect,
+        };
+        let mut mgr = SceneManager::with_scene(Box::new(scene));
+
+        let me = MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 7,
+            row: 3,
+            modifiers: KeyModifiers::empty(),
+        };
+        mgr.handle_input(InputEvent::Mouse(me));
+
+        assert_eq!(
+            *captured.lock().unwrap(),
+            Some(me),
+            "handle_input must forward the exact MouseEvent to the active scene"
+        );
+    }
+
     // ------------------------------------------------------------------ boot
 
     /// `SceneManager::new(MainHub)` boots with `active_id() == MainHub` and
