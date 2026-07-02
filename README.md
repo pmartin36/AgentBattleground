@@ -60,7 +60,7 @@ High-level design specs for each segment of the game live in `/specs`:
 | 18 | [Battle Viewer — Baseline](specs/18-battle-viewer-baseline.md) ✅ |
 | 19 | [Debug Inspector — Advanced Editing](specs/19-debug-inspector-advanced-editing.md) |
 | 20 | [Battle Viewer — Event Playback](specs/20-battle-viewer-event-playback.md) ✅ |
-| 21 | [Mouse & Hover Input](specs/21-mouse-hover-input.md) |
+| 21 | [Mouse & Hover Input](specs/21-mouse-hover-input.md) ✅ |
 | 22 | [Braille UI Chrome — Buttons & Panels](specs/22-braille-ui-chrome.md) |
 | 23 | [Piece Identity Data Model](specs/23-piece-identity-data-model.md) |
 | 24 | [Roster — Carousel](specs/24-roster-carousel.md) |

@@ -1,6 +1,8 @@
+> # ✅ DONE! — Completed 2026-07-02
+
 # Mouse & Hover Input
 
-> **Status: draft (not started).** Extends `14-scene-architecture`'s shared `InputEvent` enum with mouse support — clicks *and* continuous hover tracking — so any scene can build clickable, hover-reactive UI. Foundational engine capability, not a scene. Required by `22-braille-ui-chrome` (button hover/press states) and `24-roster-carousel` (clickable arrows/home button); also what the not-yet-written Main Hub Navigation spec will need for a clickable menu.
+> **Status: implemented.** Extends `14-scene-architecture`'s shared `InputEvent` enum with mouse support — clicks *and* continuous hover tracking — so any scene can build clickable, hover-reactive UI. Foundational engine capability, not a scene. Required by `22-braille-ui-chrome` (button hover/press states) and `24-roster-carousel` (clickable arrows/home button); also what the not-yet-written Main Hub Navigation spec will need for a clickable menu.
 
 ## Purpose
 Give scenes a way to know "the mouse is at (col, row)" every frame and "a button was pressed/released at (col, row)" as discrete events — the two primitives a hover-reactive, clickable UI needs. Today the engine has neither: `InputEvent` has exactly one variant (`Key`), and `crossterm`'s mouse capture is never enabled.
