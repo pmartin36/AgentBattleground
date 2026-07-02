@@ -9,7 +9,12 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
 
-use scene_core::ipc::{read_frame, write_frame, Envelope, IpcError, Message, SwitchScene};
+use std::collections::BTreeMap;
+
+use scene_core::ipc::{
+    read_frame, write_frame, ApplyState, Envelope, IpcError, Message, Subscribe, SwitchScene,
+};
+use scene_core::scene_id::SceneId;
 
 /// Live connection to the game's inspect socket. Owns the write half and the
 /// receiver of decoded inbound messages. Dropping it closes the write half;
@@ -66,6 +71,28 @@ impl InspectorClient {
             target: target.to_string(),
             params,
         });
+        let env = Envelope::new(self.seq, None, body);
+        write_frame(&mut self.write, &env)?;
+        self.seq += 1;
+        Ok(())
+    }
+
+    /// Frame + write an `ApplyState{id, patch}`, stamping the next seq (b4-t9).
+    pub fn send_apply_state(
+        &mut self,
+        id: SceneId,
+        patch: BTreeMap<String, serde_json::Value>,
+    ) -> Result<(), IpcError> {
+        let body = Message::ApplyState(ApplyState { id, patch });
+        let env = Envelope::new(self.seq, None, body);
+        write_frame(&mut self.write, &env)?;
+        self.seq += 1;
+        Ok(())
+    }
+
+    /// Frame + write a `Subscribe{live}`, stamping the next seq (b4-t9).
+    pub fn send_subscribe(&mut self, live: bool) -> Result<(), IpcError> {
+        let body = Message::Subscribe(Subscribe { live });
         let env = Envelope::new(self.seq, None, body);
         write_frame(&mut self.write, &env)?;
         self.seq += 1;
@@ -273,6 +300,106 @@ mod tests {
                 }
             }
         }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ── b4-t9: send_apply_state / send_subscribe ────────────────────────────
+
+    /// `send_apply_state` must arrive at the stub server framed as an
+    /// `ApplyState` with the exact id + patch passed in.
+    #[test]
+    fn send_apply_state_arrives_framed_at_server() {
+        let (listener, path) = tmp_listener("apply-state");
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let env = read_frame(&mut stream).expect("read_frame ApplyState");
+            tx.send(env).ok();
+        });
+
+        let mut client = connect(&path).expect("connect must succeed");
+        let mut patch = std::collections::BTreeMap::new();
+        patch.insert("power".to_string(), serde_json::json!(5.0));
+        client
+            .send_apply_state(SceneId::BattleViewer, patch.clone())
+            .expect("send_apply_state must succeed");
+
+        let env = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("ApplyState frame must arrive at stub");
+
+        match env.body {
+            Message::ApplyState(a) => {
+                assert_eq!(a.id, SceneId::BattleViewer);
+                assert_eq!(a.patch, patch);
+            }
+            other => panic!("expected ApplyState, got {:?}", other),
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// `send_subscribe` must arrive at the stub server framed as a
+    /// `Subscribe` with the exact `live` flag passed in.
+    #[test]
+    fn send_subscribe_arrives_framed_at_server() {
+        let (listener, path) = tmp_listener("subscribe");
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let env = read_frame(&mut stream).expect("read_frame Subscribe");
+            tx.send(env).ok();
+        });
+
+        let mut client = connect(&path).expect("connect must succeed");
+        client
+            .send_subscribe(true)
+            .expect("send_subscribe must succeed");
+
+        let env = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Subscribe frame must arrive at stub");
+
+        match env.body {
+            Message::Subscribe(s) => {
+                assert!(s.live, "live flag must be true");
+            }
+            other => panic!("expected Subscribe, got {:?}", other),
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// seq must stay monotonic across the new senders, exactly like
+    /// `send_switch` (mirrors `send_switch_seq_is_monotonic`).
+    #[test]
+    fn new_senders_seq_is_monotonic() {
+        let (listener, path) = tmp_listener("new-senders-seq");
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(2);
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            for _ in 0..2 {
+                if let Ok(env) = read_frame(&mut stream) {
+                    tx.send(env.seq).ok();
+                }
+            }
+        });
+
+        let mut client = connect(&path).expect("connect");
+        client
+            .send_apply_state(SceneId::BattleViewer, std::collections::BTreeMap::new())
+            .expect("send 0");
+        client.send_subscribe(true).expect("send 1");
+
+        let seq0 = rx.recv_timeout(Duration::from_secs(2)).expect("seq 0");
+        let seq1 = rx.recv_timeout(Duration::from_secs(2)).expect("seq 1");
+
+        assert_eq!(seq0, 0, "send_apply_state must stamp seq=0");
+        assert_eq!(seq1, 1, "send_subscribe must stamp seq=1");
 
         let _ = std::fs::remove_file(&path);
     }
