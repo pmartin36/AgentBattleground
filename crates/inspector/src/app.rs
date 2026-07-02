@@ -520,7 +520,7 @@ fn recolor_keep_alpha(current: Option<&serde_json::Value>, new_rgb: [u8; 3]) -> 
 pub struct InspectorApp {
     state: SwitcherState,
     client: InspectorClient,
-    /// "Apply on change" toggle (b4-t9); off by default per spec 15 line 46.
+    /// "Apply on change" toggle (b4-t9); on by default (b2-t1).
     #[allow(dead_code)]
     live_apply: bool,
 }
@@ -530,7 +530,7 @@ impl InspectorApp {
         InspectorApp {
             state: SwitcherState::new(),
             client,
-            live_apply: false,
+            live_apply: true,
         }
     }
 
@@ -576,6 +576,14 @@ impl InspectorApp {
             let _ = self.client.send_subscribe(on);
             self.live_apply = on;
         }
+    }
+
+    /// Send the initial `Subscribe` reflecting `live_apply`'s default,
+    /// exactly once at startup (b2-t1). Callers must invoke this exactly
+    /// once, right after construction — it does not run automatically.
+    #[allow(dead_code)]
+    pub fn start(&mut self) {
+        let _ = self.client.send_subscribe(self.live_apply);
     }
 
     /// Drain this frame's live-edit signal; while `live_apply` is on, send
@@ -660,27 +668,48 @@ impl InspectorApp {
                 ui.strong("Fields");
                 scroll_field_panel(ui, &mut self.state);
 
-                ui.horizontal(|ui| {
-                    let dirty_empty = self.state.dirty_patch().is_empty();
-                    if ui
-                        .add_enabled(!dirty_empty, egui::Button::new("Submit"))
-                        .clicked()
-                    {
-                        self.submit();
-                    }
-                    if ui.button("Revert").clicked() {
-                        self.revert();
-                    }
-                    let mut live_apply = self.live_apply;
-                    if ui.checkbox(&mut live_apply, "Apply on change").changed() {
-                        self.set_live_apply(live_apply);
-                    }
-                });
+                let _ = self.render_action_row(ui);
             })
             .response;
 
         (selector, editor)
     }
+
+    /// Submit / Revert / Apply-on-change row. Returns the Submit and Revert
+    /// button responses so tests can assert their enabled state. Both buttons
+    /// share one `dirty_empty` gate.
+    fn render_action_row(&mut self, ui: &mut egui::Ui) -> ActionRow {
+        ui.horizontal(|ui| {
+            let dirty_empty = self.state.dirty_patch().is_empty();
+
+            let submit = ui.add_enabled(!dirty_empty, egui::Button::new("Submit"));
+            if submit.clicked() {
+                self.submit();
+            }
+
+            let revert = ui.add_enabled(!dirty_empty, egui::Button::new("Revert"));
+            if revert.clicked() {
+                self.revert();
+            }
+
+            let mut live_apply = self.live_apply;
+            if ui.checkbox(&mut live_apply, "Apply on change").changed() {
+                self.set_live_apply(live_apply);
+            }
+
+            ActionRow { submit, revert }
+        })
+        .inner
+    }
+}
+
+/// Submit / Revert button `Response`s from the action row, surfaced so tests
+/// can inspect `Response::enabled()` (b2-t2).
+struct ActionRow {
+    #[allow(dead_code)]
+    submit: egui::Response,
+    #[allow(dead_code)]
+    revert: egui::Response,
 }
 
 impl eframe::App for InspectorApp {
@@ -2319,6 +2348,65 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    // ── b2-t2: gate Revert on dirty_empty (mirror Submit's existing gate) ──
+
+    /// The Revert button must render disabled while the dirty buffer is
+    /// empty and enabled once a field has been marked dirty — mirroring
+    /// Submit's existing `dirty_empty` gate exactly (round-2 issue 6).
+    #[test]
+    fn revert_button_disabled_when_dirty_empty_enabled_when_dirty() {
+        let (mut app, _frame_rx, _server_write, path) = stub_app_harness("revert-gate");
+        app.state.apply(&four_scene_hello());
+
+        let ctx = egui::Context::default();
+
+        let mut captured: Option<ActionRow> = None;
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 1000.0),
+                )),
+                time: Some(0.0),
+                ..Default::default()
+            },
+            |ui| {
+                captured = Some(app.render_action_row(ui));
+            },
+        );
+        let row =
+            captured.expect("render_action_row must be invoked by run_ui's closure");
+        assert!(
+            !row.revert.enabled(),
+            "Revert must render disabled when the dirty buffer is empty"
+        );
+
+        app.state.mark_dirty("f0", serde_json::json!(true));
+
+        let mut captured: Option<ActionRow> = None;
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 1000.0),
+                )),
+                time: Some(1.0),
+                ..Default::default()
+            },
+            |ui| {
+                captured = Some(app.render_action_row(ui));
+            },
+        );
+        let row =
+            captured.expect("render_action_row must be invoked by run_ui's closure");
+        assert!(
+            row.revert.enabled(),
+            "Revert must render enabled once a field is marked dirty"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
     /// Enabling "apply on change" sends exactly one `Subscribe{live:true}` on
     /// the transition (a repeat call does not resend), and a subsequent edit
     /// sends its own `ApplyState` without waiting for Submit.
@@ -2333,10 +2421,21 @@ mod tests {
             .expect("write Hello");
         pump_until(&mut app, |a| a.state.connected, Duration::from_secs(2));
 
+        // live_apply now defaults to true (b2-t1); toggle it off first so the
+        // subsequent ON transition below is a real transition to observe.
+        app.set_live_apply(false);
+        let env = frame_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Subscribe must arrive on the OFF transition from the true default");
+        match env.body {
+            Message::Subscribe(s) => assert!(!s.live, "Subscribe.live must be false"),
+            other => panic!("expected Subscribe, got {:?}", other),
+        }
+
         app.set_live_apply(true);
         let env = frame_rx
             .recv_timeout(Duration::from_secs(2))
-            .expect("Subscribe must arrive on the first ON transition");
+            .expect("Subscribe must arrive on the ON transition");
         match env.body {
             Message::Subscribe(s) => assert!(s.live, "Subscribe.live must be true"),
             other => panic!("expected Subscribe, got {:?}", other),
@@ -2369,6 +2468,49 @@ mod tests {
                 );
             }
             other => panic!("expected ApplyState, got {:?}", other),
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ── b2-t1: auto-apply default + startup Subscribe ──────────────────────
+
+    /// `InspectorApp::new` must default `live_apply` to `true` — the
+    /// "Apply on change" checkbox starts checked (spec: auto-apply on by
+    /// default).
+    #[test]
+    fn new_defaults_live_apply_to_true() {
+        let (app, _frame_rx, _server_write, path) = stub_app_harness("default-live-apply");
+
+        assert!(
+            app.live_apply,
+            "InspectorApp::new must default live_apply to true"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Calling `start()` once at startup must result in exactly one framed
+    /// `Subscribe{live: true}` arriving at the connected server — proving the
+    /// wire message is actually sent, not just that the field defaults to
+    /// true.
+    #[test]
+    fn start_sends_subscribe_live_true_at_startup() {
+        use std::time::Duration;
+
+        let (mut app, frame_rx, _server_write, path) = stub_app_harness("start-subscribe");
+
+        app.start();
+
+        let env = frame_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Subscribe must arrive at the server after start()");
+        match env.body {
+            Message::Subscribe(s) => assert!(
+                s.live,
+                "start() must send Subscribe{{live:true}} reflecting the true default"
+            ),
+            other => panic!("expected Subscribe, got {:?}", other),
         }
 
         let _ = std::fs::remove_file(&path);

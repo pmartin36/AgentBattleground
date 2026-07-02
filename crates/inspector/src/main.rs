@@ -22,7 +22,11 @@ fn main() {
     if let Err(e) = eframe::run_native(
         "Agent Battleground Inspector",
         native_options,
-        Box::new(|_cc| Ok(Box::new(app::InspectorApp::new(client)))),
+        Box::new(|_cc| {
+            let mut app = app::InspectorApp::new(client);
+            app.start();
+            Ok(Box::new(app))
+        }),
     ) {
         eprintln!("inspector: eframe error: {e}");
         std::process::exit(1);
