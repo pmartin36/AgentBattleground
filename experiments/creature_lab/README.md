@@ -99,8 +99,8 @@ ping-pong loop, `q` to quit).
 |---|---|---|
 | `FRAMES` | `17` | video frames (must be 4n+1). Ping-pong ~doubles the effective loop |
 | `RES` | `512` | square gen resolution (Wan also likes 480/832 — tune if quality is poor) |
-| `CHROMA` | `255,255,255` | background key color (matches the white bg from `generate.sh`) |
-| `CHROMA_THRESH` | `50` | key tolerance — raise if bg speckles remain, lower if the creature gets eaten |
+| `CHROMA` | `auto` | background key color; `auto` samples the bg per-frame (robust to drift). Or `R,G,B` |
+| `CHROMA_THRESH` | `95` | key tolerance — raise if bg speckles remain, lower if the creature gets eaten |
 
 **It takes a few minutes and looks idle while working.** Wan samples all frames, then does one big
 VAE decode at the end — *nothing is written to disk until decode finishes*, so the output dir stays
@@ -114,8 +114,33 @@ A clip is an **offline content step** (once per creature), never a battle-time c
 handled by ping-pong playback; for a true seamless loop later, sd.cpp supports Wan FLF2V
 (first frame = last frame) via `--init-img`/`--end-img`.
 
-`downrez` also gained `--chroma R,G,B [--chroma-thresh N]` for keying a single still (same keyer as
-`playframes`), e.g. `downrez out/mouse_anim/frame_008.png --chroma 245,242,240 --width 54`.
+`downrez` also gained `--chroma R,G,B|auto [--chroma-thresh N]` for keying a single still (same keyer
+as `playframes`), e.g. `downrez out/greenmouse_field_raw.png --chroma auto --width 54`.
+
+## Background keying (green screen)
+
+Video diffusion can't emit alpha, so the background is removed by **chroma-keying** a solid backdrop.
+The pipeline generates creatures on a **green screen** and keys it out.
+
+**Why green, not white:** the key color must be far from every color the creature contains. White
+fails badly — a motion-blurred silver blade blurs to near-white and gets eaten, and the "white" bg
+itself drifts darker frame-to-frame and leaks through. Green sits far from typical creature colors,
+so it survives both. `--chroma auto` samples the bg per-frame, absorbing the drift.
+
+**Green creatures (the frog problem):** a green frog on a green screen keys *itself* out. Immediate
+fix: override to magenta — `BG="...solid magenta screen background..." CHROMA=255,0,255`.
+
+**Productionize plan (adaptive key color) — not built yet:** don't summarize the creature to one
+color (mean loses the distribution; mode ignores secondaries like a sword). Instead: rembg-isolate
+the creature, histogram its colors, and pick the key color that **maximizes the minimum distance to
+any creature color** (max-min) — pragmatically, score a small palette (green/magenta/blue/orange)
+and take the best-separated. Inject it at the **composite step** (generate → isolate → analyze → pick
+→ composite creature onto the chosen solid bg → I2V → key it); no chicken-and-egg since the bg is
+chosen *after* seeing the creature.
+
+**Color-agnostic fallback:** per-frame **segmentation** (rembg on each frame) cuts by shape, not
+color — *no* frog problem. Its costs (edge flicker, dropping thin motion-blurred bits) matter much
+less in chunky braille. Keep it as the escape hatch for creatures that collide with every screen color.
 
 ## Notes
 - `models/`, `out/`, `stable-diffusion.cpp/`, and `.venv/` are git-ignored (large / machine-specific).

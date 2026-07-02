@@ -120,6 +120,7 @@ fn main() -> io::Result<()> {
     let mut thresh = 60u32;
     let mut pingpong = false;
     let mut fps = 12u32;
+    let mut ease = String::from("none");
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
@@ -136,6 +137,7 @@ fn main() -> io::Result<()> {
             "--chroma-thresh" if i+1 < args.len() => { thresh = args[i+1].parse().unwrap_or(60); if let Some(k)=key.as_mut(){k.thresh2=thresh*thresh;} i += 2; }
             "--pingpong" => { pingpong = true; i += 1; }
             "--fps" if i+1 < args.len() => { fps = args[i+1].parse().unwrap_or(12).max(1); i += 2; }
+            "--ease" if i+1 < args.len() => { ease = args[i+1].clone(); i += 2; }
             _ => i += 1,
         }
     }
@@ -174,7 +176,25 @@ fn main() -> io::Result<()> {
         order.extend((1..frames.len()-1).rev());
     }
 
-    let frame_dur = Duration::from_millis((1000 / fps) as u64);
+    // Per-position playback durations. --ease redistributes time (total loop length unchanged) so
+    // linearly-interpolated frames FEEL dynamic:
+    //   anticipate = slow windup, fast strike-snap, brief settle (for slashes/attacks)
+    //   smooth     = ease-in-out (slow at the ends, quick through the middle)
+    let base_ms = 1000.0 / fps as f32;
+    let n = order.len().max(1);
+    let weight = |p: f32| -> f32 {
+        match ease.as_str() {
+            "anticipate" => { if p < 0.35 { 2.2 } else if p < 0.55 { 0.35 } else { 1.4 } }
+            "smooth" => 0.55 + 1.1 * (std::f32::consts::PI * p).sin(),
+            _ => 1.0,
+        }
+    };
+    let raw: Vec<f32> = (0..n).map(|j| weight(if n > 1 { j as f32 / (n - 1) as f32 } else { 0.0 })).collect();
+    let mean = (raw.iter().sum::<f32>() / n as f32).max(0.01);
+    let durations: Vec<Duration> = raw.iter()
+        .map(|w| Duration::from_millis(((base_ms * w / mean) as u64).max(1)))
+        .collect();
+
     let mut idx = 0usize;
     let mut last = Instant::now();
 
@@ -183,7 +203,7 @@ fn main() -> io::Result<()> {
         terminal.draw(|f| {
             f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), f.area());
         })?;
-        if last.elapsed() >= frame_dur {
+        if last.elapsed() >= durations[idx] {
             idx = (idx + 1) % order.len();
             last = Instant::now();
         }
