@@ -1,6 +1,8 @@
+> # ✅ DONE! — Completed 2026-07-02
+
 # Debug Inspector — Field Editing
 
-> **Status: draft (not started).** The debug inspector's process, egui shell, connection lifecycle, **scene-switch UI, and message log shipped with `14-scene-architecture` (done).** This spec covers the remaining, unbuilt half: **live field editing** — reading and tweaking a scene's exposed state. Read `14` first. The `asset` widget and dynamic (add/remove) collection editing are cut from this spec's scope — both live in `19-debug-inspector-advanced-editing`.
+> **Status: implemented.** Live field editing — schema-driven widgets, buffered edits, Submit/Revert/live-apply — is built and validated end-to-end against a real scene (`BattleViewer`). The `Inspectable` derive macro, wire protocol extensions, and widget matrix are all real, tested code (see *Dependencies* for the built pieces this extends). The `asset` widget and dynamic (add/remove) collection editing are cut from this spec's scope — both live in `19-debug-inspector-advanced-editing`.
 
 ## Purpose
 Extend the (already-built) debug inspector from scene *switching* to scene-state *editing*: let a developer read and change a scene's exposed fields live, without touching code or rebuilding.
@@ -14,7 +16,7 @@ Out of scope (all built with `14`): the inspector process + egui shell, the laun
 
 ## Decisions
 - **Schema-driven**: every widget is generated from the field schema; the inspector hard-codes no scene-specific UI.
-- **Schema generation is automatic.** The field schema (`Inspectable`/`schema()`, per `14`'s M2 hook) is derived directly from each scene struct's fields via a `#[derive(Inspectable)]`-style macro — the same way `serde`'s `#[derive(Serialize, Deserialize)]` already does for wire types in this codebase — so struct and schema can't drift. Exact derive grammar/attributes are TBD (see Open Questions).
+- **Schema generation is automatic.** The field schema (`Inspectable`/`schema()`, per `14`'s M2 hook) is derived directly from each scene struct's fields via `#[derive(Inspectable)]` (a real proc-macro, `scene-core-derive`) — the same way `serde`'s `#[derive(Serialize, Deserialize)]` already does for wire types in this codebase — so struct and schema can't drift. Attribute grammar is serde-style: `#[inspect(label = "...", range = a..b, readonly, hidden)]` per field.
 - **Bidirectional / live**: the inspector reflects the game's current field values and pushes edits back.
 
 ---
@@ -52,7 +54,6 @@ Switching scenes (via the built switcher) rebuilds the panel for the new scene f
 Connect (via the built switcher) → switch to a scene → its schema-driven fields render → edit an exposed field → **Submit** → change is visible in the game. Plus: widget selection per type, dirty highlighting, Revert, live-apply toggle.
 
 ## Open Questions / TBDs
-- `#[derive(Inspectable)]` grammar/attributes (labels, ranges, hidden/readonly).
 - Presets: save/load a set of field values per scene?
 - Undo/redo of applied changes?
 - Triggering scene-specific debug *actions* (buttons/commands), not just field edits — future extension?
