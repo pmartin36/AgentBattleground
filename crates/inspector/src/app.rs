@@ -19,6 +19,7 @@ use crate::client::InspectorClient;
 /// egui's default `item_spacing.y` (~3.0) so the sections read as visually
 /// distinct, not jammed together.
 const SECTION_GAP: f32 = 12.0;
+const ACTION_ROW_PADDING: f32 = 6.0;
 
 /// Pure UI state — the testable controller layer (no egui, no client).
 pub struct SwitcherState {
@@ -677,27 +678,31 @@ impl InspectorApp {
     /// button responses so tests can assert their enabled state. Both buttons
     /// share one `dirty_empty` gate.
     fn render_action_row(&mut self, ui: &mut egui::Ui) -> ActionRow {
-        ui.horizontal(|ui| {
-            let dirty_empty = self.state.dirty_patch().is_empty();
+        ui.add_space(ACTION_ROW_PADDING);
+        let row = ui
+            .horizontal(|ui| {
+                let dirty_empty = self.state.dirty_patch().is_empty();
 
-            let submit = ui.add_enabled(!dirty_empty, egui::Button::new("Submit"));
-            if submit.clicked() {
-                self.submit();
-            }
+                let submit = ui.add_enabled(!dirty_empty, egui::Button::new("Submit"));
+                if submit.clicked() {
+                    self.submit();
+                }
 
-            let revert = ui.add_enabled(!dirty_empty, egui::Button::new("Revert"));
-            if revert.clicked() {
-                self.revert();
-            }
+                let revert = ui.add_enabled(!dirty_empty, egui::Button::new("Revert"));
+                if revert.clicked() {
+                    self.revert();
+                }
 
-            let mut live_apply = self.live_apply;
-            if ui.checkbox(&mut live_apply, "Apply on change").changed() {
-                self.set_live_apply(live_apply);
-            }
+                let mut live_apply = self.live_apply;
+                if ui.checkbox(&mut live_apply, "Apply on change").changed() {
+                    self.set_live_apply(live_apply);
+                }
 
-            ActionRow { submit, revert }
-        })
-        .inner
+                ActionRow { submit, revert }
+            })
+            .inner;
+        ui.add_space(ACTION_ROW_PADDING);
+        row
     }
 
     /// Production entry point: docks the action row and the rest of the
@@ -2226,10 +2231,19 @@ mod tests {
             ..Default::default()
         };
 
+        // Bottom-panel height negotiation needs one settle frame (egui
+        // remembers last frame's measured content height when placing this
+        // frame's panel) before the allocated rect reflects the padding
+        // added by ACTION_ROW_PADDING — mirrors the settle-frame pattern
+        // used elsewhere in this file for popups.
         let mut captured: Option<ActionRow> = None;
-        let _ = ctx.run_ui(input, |ui| {
-            captured = Some(app.render(ui));
-        });
+        for t in [0.0, 1.0] {
+            let mut input = input.clone();
+            input.time = Some(t);
+            let _ = ctx.run_ui(input, |ui| {
+                captured = Some(app.render(ui));
+            });
+        }
         let row = captured.expect("app.render must be invoked by run_ui's closure");
 
         assert!(
