@@ -9,6 +9,7 @@
 //! replace `fill`/`label` in place. Do not extend the solid-fill approach.
 
 pub mod anim;
+pub mod assets;
 pub mod button;
 pub mod camera;
 pub mod composite;
