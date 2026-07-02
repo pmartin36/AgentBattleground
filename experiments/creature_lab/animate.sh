@@ -31,8 +31,8 @@ WAN_VAE="${WAN_VAE:-$MODELS/wan2.2_vae.safetensors}"
 T5="${T5:-$MODELS/umt5-xxl-encoder-Q8_0.gguf}"
 FRAMES="${FRAMES:-17}"   # must be 4n+1 (Wan temporal). 17=4·4+1; ping-pong ~doubles the effective loop
 RES="${RES:-512}"
-CHROMA="${CHROMA:-255,255,255}"
-CHROMA_THRESH="${CHROMA_THRESH:-50}"
+CHROMA="${CHROMA:-auto}"          # green screen; 'auto' samples the bg per-frame (robust to drift)
+CHROMA_THRESH="${CHROMA_THRESH:-95}"
 
 INPUT="${1:?usage: animate.sh <input.png> [\"motion prompt\"] [name]}"
 MOTION="${2:-idle breathing, subtle sway, gentle motion}"
@@ -59,7 +59,7 @@ echo "         written at the very end (after VAE decode), so the output dir sta
 "$SD_CLI" -M vid_gen \
   --diffusion-model "$WAN" --vae "$WAN_VAE" --t5xxl "$T5" \
   -i "$INPUT" \
-  -p "$MOTION, static locked camera, subject centered and animating in place, solid flat white background, simple flat-color low-detail creature" \
+  -p "$MOTION, static locked camera, subject centered and animating in place, solid flat vivid green screen background, simple flat-color low-detail creature" \
   -n "$NEG" \
   --cfg-scale 6.0 --sampling-method euler --flow-shift 3.0 \
   -W "$RES" -H "$RES" --video-frames "$FRAMES" --diffusion-fa --offload-to-cpu --vae-on-cpu -v \

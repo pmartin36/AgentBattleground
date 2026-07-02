@@ -7,6 +7,7 @@ use render::camera::{SideView, WorldPos};
 use render::composite::{composite_dots, DotPlacement};
 use render::dots::{dots_to_grid, tint, Dot, DotBuffer};
 use render::transform::{place, rasterize, Transform, Vec2};
+use render::tween::Tween;
 use render::{draw_grid, AnimatedSprite};
 use scene_core::color::Rgba;
 use scene_core::scene_id::SceneId;
@@ -317,6 +318,30 @@ pub struct BattleViewer {
     /// `render()` reads each piece's own `transform`/`color` fields directly
     /// — mutating an entry here changes what the next `render()` draws.
     pub pieces: Vec<Piece>,
+    /// Playback event sequence (b1-t2's `Event`/`EventKind`). Hidden from the
+    /// inspector: playback-internal runtime state, not part of the
+    /// `Piece`-level editable surface. Empty until b3-t1 hand-authors a demo
+    /// sequence; not yet read by `update()`/`render()` (that starts at
+    /// b2-t2/b2-t3).
+    #[inspect(hidden)]
+    pub events: Vec<Event>,
+    /// Transient, scene-internal bookkeeping documented on `Event` above (NOT
+    /// part of the authored `Event` data): the piece's starting
+    /// `Transform.translate`/`Transform.scale` `(x, y)` captured the frame an
+    /// event's window opens, keyed by `piece_index`. Populated/consumed by
+    /// `update()`'s per-event driving loop (b2-t2/b2-t3) and empty otherwise.
+    #[inspect(hidden)]
+    pub event_from_values: std::collections::HashMap<usize, (f32, f32)>,
+    /// Indices (into `events`) of events whose window has fully elapsed and
+    /// already been finalized (exact landing assigned, `event_from_values`
+    /// entry cleared). Distinct from `event_from_values`'s presence/absence
+    /// because that alone can't tell "never started" apart from "already
+    /// finalized" once its entry is removed — this set is the single source
+    /// of truth `update()`'s driving loop checks to guarantee an event is
+    /// only ever finalized once, so it never re-fights a later external edit
+    /// (e.g. an inspector edit) to the same piece's `transform`.
+    #[inspect(hidden)]
+    settled_events: std::collections::HashSet<usize>,
 }
 
 impl Default for BattleViewer {
@@ -330,6 +355,98 @@ impl Default for BattleViewer {
             elapsed: 0.0,
             sprite,
             pieces: pieces(),
+            // Empty until b3-t1 hand-authors a demo sequence; not yet read by
+            // `update()`/`render()` (that starts at b2-t2/b2-t3).
+            events: Vec::new(),
+            event_from_values: std::collections::HashMap::new(),
+            settled_events: std::collections::HashSet::new(),
+        }
+    }
+}
+
+impl BattleViewer {
+    /// Drives every event whose window has begun and is not yet settled,
+    /// every frame — independent of any other event, per the spec's overlap
+    /// rule ("the playback clock evaluates which events are active at the
+    /// current elapsed time every frame and drives every affected piece
+    /// simultaneously"). Handles both `Move` (b2-t2) and `Die` (b2-t3) via
+    /// the same loop shape.
+    fn drive_events(&mut self) {
+        for event_index in 0..self.events.len() {
+            let event = self.events[event_index];
+            if self.elapsed < event.start_time || self.settled_events.contains(&event_index) {
+                continue;
+            }
+            match event.kind {
+                EventKind::Move { piece_index, to } => {
+                    let Some(piece) = self.pieces.iter_mut().find(|p| p.index == piece_index)
+                    else {
+                        continue;
+                    };
+
+                    // Gameplay truth commits instantly the frame the window opens;
+                    // capture the from-value for the cosmetic tween in the same
+                    // instant (transient bookkeeping, not authored `Event` data).
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        self.event_from_values.entry(piece_index)
+                    {
+                        entry.insert((piece.transform.translate.x, piece.transform.translate.y));
+                        piece.col = to.0;
+                        piece.row = to.1;
+                    }
+
+                    let target = world_pos_for_cell(to.0, to.1);
+                    let end_time = event.start_time + event.duration;
+                    if self.elapsed >= end_time {
+                        // Exact landing — no residual Tween float drift — and settle
+                        // once so a later external edit is never re-fought.
+                        piece.transform.translate = target;
+                        self.event_from_values.remove(&piece_index);
+                        self.settled_events.insert(event_index);
+                    } else {
+                        let (from_x, from_y) = self.event_from_values[&piece_index];
+                        let since_start =
+                            Duration::from_secs_f32((self.elapsed - event.start_time).max(0.0));
+                        let dur = Duration::from_secs_f32(event.duration);
+                        let x = Tween::new(from_x, target.x, dur).at(since_start);
+                        let y = Tween::new(from_y, target.y, dur).at(since_start);
+                        piece.transform.translate = WorldPos::new(x, y);
+                    }
+                }
+                EventKind::Die { piece_index } => {
+                    let Some(piece) = self.pieces.iter_mut().find(|p| p.index == piece_index)
+                    else {
+                        continue;
+                    };
+
+                    // First frame the window is open: capture starting scale
+                    // (no col/row commit — Die does not move the piece).
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        self.event_from_values.entry(piece_index)
+                    {
+                        entry.insert((piece.transform.scale.x, piece.transform.scale.y));
+                    }
+
+                    let end_time = event.start_time + event.duration;
+                    if self.elapsed >= end_time {
+                        // Exact landing — no residual Tween float drift — and settle
+                        // once so a later external edit (e.g. a revive) is never
+                        // re-fought.
+                        piece.transform.scale = Vec2::splat(0.0);
+                        piece.alive = false;
+                        self.event_from_values.remove(&piece_index);
+                        self.settled_events.insert(event_index);
+                    } else {
+                        let (from_x, from_y) = self.event_from_values[&piece_index];
+                        let since_start =
+                            Duration::from_secs_f32((self.elapsed - event.start_time).max(0.0));
+                        let dur = Duration::from_secs_f32(event.duration);
+                        let x = Tween::new(from_x, 0.0, dur).at(since_start);
+                        let y = Tween::new(from_y, 0.0, dur).at(since_start);
+                        piece.transform.scale = Vec2::new(x, y);
+                    }
+                }
+            }
         }
     }
 }
@@ -343,6 +460,7 @@ impl Scene for BattleViewer {
 
     fn update(&mut self, _ctx: &mut EngineCtx, dt: Duration) -> Option<Transition> {
         self.elapsed += dt.as_secs_f32();
+        self.drive_events();
         None
     }
 
@@ -351,16 +469,15 @@ impl Scene for BattleViewer {
         draw_board_lines(frame.buffer_mut(), &geom);
 
         let elapsed = Duration::from_secs_f32(self.elapsed);
-        let dotbufs: Vec<DotBuffer> = self
-            .pieces
+        let alive: Vec<&Piece> = self.pieces.iter().filter(|p| p.alive).collect();
+        let dotbufs: Vec<DotBuffer> = alive
             .iter()
-            .map(|p| piece_dots(p, &self.sprite, elapsed, &geom))
+            .map(|&p| piece_dots(p, &self.sprite, elapsed, &geom))
             .collect();
-        let placements: Vec<DotPlacement> = self
-            .pieces
+        let placements: Vec<DotPlacement> = alive
             .iter()
             .zip(&dotbufs)
-            .map(|(p, dots)| place_piece(dots, p, &geom))
+            .map(|(&p, dots)| place_piece(dots, p, &geom))
             .collect();
 
         let composed = composite_dots(
@@ -1071,6 +1188,381 @@ mod event_data_model_tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Tests: BattleViewer.events / event_from_values wiring (b2-t1) — fields
+// exist and default empty; update()/render() are not yet touched.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod event_playback_wiring_tests {
+    use super::*;
+
+    /// DELIVERABLE: `BattleViewer::default()` carries no playback events —
+    /// no demo content is authored until b3-t1.
+    #[test]
+    fn default_events_is_empty() {
+        let scene = BattleViewer::default();
+        assert!(
+            scene.events.is_empty(),
+            "BattleViewer::default().events must be empty until b3-t1 hand-authors a demo \
+             sequence, got {:?}",
+            scene.events
+        );
+    }
+
+    /// DELIVERABLE: the transient from-value bookkeeping cache (documented on
+    /// `Event` above) starts empty — nothing has captured a starting
+    /// translate/scale before any event has begun driving.
+    #[test]
+    fn default_event_from_values_is_empty() {
+        let scene = BattleViewer::default();
+        assert!(
+            scene.event_from_values.is_empty(),
+            "BattleViewer::default().event_from_values must start empty, got {:?}",
+            scene.event_from_values
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: `Move` event driving in `update()` (b2-t2) — instant col/row commit,
+// cosmetic transform.translate lerp via Tween/ease_in_out, exact landing,
+// settle-once (does not re-fight an externally mutated transform.translate
+// after the event has completed).
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod move_event_driving_tests {
+    use super::*;
+    use crate::scene::EngineCtx;
+
+    /// Builds a fresh default scene with piece 0's only playback event: a
+    /// `Move` from its seeded start cell to `to`, active on
+    /// `[start_time, start_time + duration)`.
+    fn scene_with_single_move(start_time: f32, duration: f32, to: (u16, u16)) -> BattleViewer {
+        BattleViewer {
+            events: vec![Event {
+                turn: 1,
+                start_time,
+                duration,
+                kind: EventKind::Move {
+                    piece_index: 0,
+                    to,
+                },
+            }],
+            ..BattleViewer::default()
+        }
+    }
+
+    /// DELIVERABLE (3): `col`/`row` commit to `to` in the SAME instant the
+    /// event's window opens (`elapsed >= start_time`), not before.
+    #[test]
+    fn move_col_row_commits_instantly_at_window_open_not_before() {
+        let mut ctx = EngineCtx;
+
+        let mut before = scene_with_single_move(1.0, 1.0, (5, 0));
+        before.update(&mut ctx, Duration::from_secs_f32(0.999));
+        assert_eq!(
+            (before.pieces[0].col, before.pieces[0].row),
+            (1, 0),
+            "col/row must NOT yet commit to `to` before start_time"
+        );
+
+        let mut at_open = scene_with_single_move(1.0, 1.0, (5, 0));
+        at_open.update(&mut ctx, Duration::from_secs_f32(1.0));
+        assert_eq!(
+            (at_open.pieces[0].col, at_open.pieces[0].row),
+            (5, 0),
+            "col/row must commit to `to` the instant elapsed reaches start_time"
+        );
+    }
+
+    /// DELIVERABLE (1): strictly between `start_time` and
+    /// `start_time + duration`, `transform.translate` is mid-glide — neither
+    /// the old cell's world position nor the new cell's world position.
+    #[test]
+    fn move_transform_translate_strictly_between_endpoints_mid_tween() {
+        let mut ctx = EngineCtx;
+        let mut scene = scene_with_single_move(1.0, 1.0, (5, 0));
+        let from = world_pos_for_cell(1, 0);
+        let to = world_pos_for_cell(5, 0);
+
+        scene.update(&mut ctx, Duration::from_secs_f32(1.5));
+        let mid = scene.pieces[0].transform.translate;
+
+        assert_eq!(mid.y, from.y, "row is unchanged, y must not move");
+        assert!(
+            mid.x > from.x.min(to.x) && mid.x < from.x.max(to.x),
+            "mid-tween translate.x ({}) must be strictly between the start ({}) and end ({}) x",
+            mid.x,
+            from.x,
+            to.x
+        );
+    }
+
+    /// DELIVERABLE (2): at/after `start_time + duration`, `transform.translate`
+    /// lands EXACTLY on `world_pos_for_cell(to)` — no residual Tween float
+    /// drift.
+    #[test]
+    fn move_transform_translate_lands_exactly_at_target_after_duration() {
+        let mut ctx = EngineCtx;
+        let mut scene = scene_with_single_move(1.0, 1.0, (5, 0));
+
+        scene.update(&mut ctx, Duration::from_secs_f32(2.0));
+
+        assert_eq!(
+            scene.pieces[0].transform.translate,
+            world_pos_for_cell(5, 0),
+            "transform.translate must land exactly on the target cell's center once the \
+             event's window has fully elapsed"
+        );
+    }
+
+    /// DELIVERABLE (4) settle regression: once the `Move` event has fully
+    /// completed, an externally-mutated `transform.translate` (e.g. an
+    /// inspector edit) must NOT be re-derived/overwritten by a later
+    /// `update()` call for the same already-settled event.
+    #[test]
+    fn move_settled_event_does_not_refight_externally_mutated_translate() {
+        let mut ctx = EngineCtx;
+        let mut scene = scene_with_single_move(1.0, 1.0, (5, 0));
+
+        // Complete the event.
+        scene.update(&mut ctx, Duration::from_secs_f32(2.0));
+        assert_eq!(
+            scene.pieces[0].transform.translate,
+            world_pos_for_cell(5, 0),
+            "test setup: event must have landed exactly before the external-edit step"
+        );
+
+        // Simulate an external (e.g. inspector) edit after settling.
+        let external = WorldPos::new(9.25, 9.25);
+        scene.pieces[0].transform.translate = external;
+
+        // Further updates must not touch the already-settled event's piece.
+        scene.update(&mut ctx, Duration::from_secs_f32(1.0));
+        assert_eq!(
+            scene.pieces[0].transform.translate, external,
+            "an already-settled Move event must not overwrite a later external edit to \
+             transform.translate"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: Die event driving in update() (b2-t3) — scale-to-zero lerp, `alive`
+// flip, settle-once (does not re-fight an externally revived `alive` after
+// the event has completed).
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod die_event_driving_tests {
+    use super::*;
+    use crate::scene::EngineCtx;
+
+    /// Builds a fresh default scene with piece 0's only playback event: a
+    /// `Die`, active on `[start_time, start_time + duration)`.
+    fn scene_with_single_die(start_time: f32, duration: f32) -> BattleViewer {
+        BattleViewer {
+            events: vec![Event {
+                turn: 1,
+                start_time,
+                duration,
+                kind: EventKind::Die { piece_index: 0 },
+            }],
+            ..BattleViewer::default()
+        }
+    }
+
+    /// DELIVERABLE (1): sampling `transform.scale`'s magnitude at several
+    /// strictly-increasing elapsed times within the event's active window
+    /// shows strictly decreasing magnitude (progressive shrink, not a jump to
+    /// zero).
+    #[test]
+    fn die_scale_magnitude_strictly_decreases_within_window() {
+        let mut ctx = EngineCtx;
+
+        let mut prev_mag = f32::MAX;
+        for t in [1.25_f32, 1.5, 1.75] {
+            // Fresh scene per sample: the event is re-driven from t=0 each
+            // time so each sample reflects only elapsed time `t`, not
+            // accumulated per-frame drift.
+            let mut probe = scene_with_single_die(1.0, 1.0);
+            probe.update(&mut ctx, Duration::from_secs_f32(t));
+            let s = probe.pieces[0].transform.scale;
+            let mag = (s.x * s.x + s.y * s.y).sqrt();
+            assert!(
+                mag < prev_mag,
+                "scale magnitude at t={t} ({mag}) must be strictly less than the previous \
+                 sample ({prev_mag})"
+            );
+            prev_mag = mag;
+        }
+    }
+
+    /// DELIVERABLE (2): `alive` is `true` up to just before
+    /// `start_time + duration`, and exactly `false` (with `scale` snapped to
+    /// zero) at/after it.
+    #[test]
+    fn die_alive_flips_false_exactly_at_completion() {
+        let mut ctx = EngineCtx;
+
+        let mut before = scene_with_single_die(1.0, 1.0);
+        before.update(&mut ctx, Duration::from_secs_f32(1.999));
+        assert!(
+            before.pieces[0].alive,
+            "alive must still be true strictly before start_time + duration"
+        );
+
+        let mut at_complete = scene_with_single_die(1.0, 1.0);
+        at_complete.update(&mut ctx, Duration::from_secs_f32(2.0));
+        assert!(
+            !at_complete.pieces[0].alive,
+            "alive must be false the instant elapsed reaches start_time + duration"
+        );
+        assert_eq!(
+            at_complete.pieces[0].transform.scale,
+            Vec2::splat(0.0),
+            "transform.scale must land exactly on zero once the event's window has fully \
+             elapsed"
+        );
+    }
+
+    /// DELIVERABLE (3) settle regression: once the `Die` event has fully
+    /// completed (`alive == false`), an externally-revived `alive` (the
+    /// spec's named hypothetical revive mechanic) must NOT be re-flipped back
+    /// to `false` by a later `update()` call for the same already-settled
+    /// event.
+    #[test]
+    fn die_settled_event_does_not_refight_external_revive() {
+        let mut ctx = EngineCtx;
+        let mut scene = scene_with_single_die(1.0, 1.0);
+
+        // Complete the event.
+        scene.update(&mut ctx, Duration::from_secs_f32(2.0));
+        assert!(
+            !scene.pieces[0].alive,
+            "test setup: event must have settled (alive == false) before the revive step"
+        );
+
+        // Simulate an external revive after settling.
+        scene.pieces[0].alive = true;
+
+        // Further updates must not touch the already-settled event's piece.
+        scene.update(&mut ctx, Duration::from_secs_f32(1.0));
+        assert!(
+            scene.pieces[0].alive,
+            "an already-settled Die event must not re-flip an externally revived `alive` \
+             back to false"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: overlapping/simultaneous multi-piece events in one frame (b2-t5) —
+// proves the spec's "Events may overlap in time... drives every affected
+// piece simultaneously" bullet: a single update() landing two different
+// events (on two different pieces) mid-flight drives BOTH independently, with
+// no leakage between them.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod overlapping_events_tests {
+    use super::*;
+    use crate::scene::EngineCtx;
+
+    /// Builds a scene with two simultaneous, independent events on different
+    /// pieces: piece 0 (Team A) `Move`s to `(5, 0)`, piece 6 (Team B) `Die`s —
+    /// both active on the same `[start_time, start_time + duration)` window.
+    fn scene_with_overlapping_move_and_die(start_time: f32, duration: f32) -> BattleViewer {
+        BattleViewer {
+            events: vec![
+                Event {
+                    turn: 1,
+                    start_time,
+                    duration,
+                    kind: EventKind::Move {
+                        piece_index: 0,
+                        to: (5, 0),
+                    },
+                },
+                Event {
+                    turn: 1,
+                    start_time,
+                    duration,
+                    kind: EventKind::Die { piece_index: 6 },
+                },
+            ],
+            ..BattleViewer::default()
+        }
+    }
+
+    /// DELIVERABLE: a single `update()` landing both events' windows
+    /// mid-flight drives both target pieces to correct, independent partial
+    /// progress — neither stuck at its start state, neither jumped to its end
+    /// state — and neither event leaks into the other piece.
+    #[test]
+    fn overlapping_move_and_die_on_different_pieces_both_progress_independently_mid_flight() {
+        let mut ctx = EngineCtx;
+        let mut scene = scene_with_overlapping_move_and_die(1.0, 1.0);
+
+        let move_from = world_pos_for_cell(1, 0);
+        let move_to = world_pos_for_cell(5, 0);
+        let die_start_scale = scene.pieces[6].transform.scale;
+        let die_start_translate = scene.pieces[6].transform.translate;
+        let move_start_scale = scene.pieces[0].transform.scale;
+
+        scene.update(&mut ctx, Duration::from_secs_f32(1.5));
+
+        // (a) Move piece (0): col/row committed instantly, translate mid-glide.
+        assert_eq!(
+            (scene.pieces[0].col, scene.pieces[0].row),
+            (5, 0),
+            "Move piece's col/row must already be committed to `to` mid-flight"
+        );
+        let move_x = scene.pieces[0].transform.translate.x;
+        assert!(
+            move_x > move_from.x.min(move_to.x) && move_x < move_from.x.max(move_to.x),
+            "Move piece's translate.x ({move_x}) must be strictly between start ({}) and end ({}) \
+             x while the Die event is simultaneously active",
+            move_from.x,
+            move_to.x
+        );
+
+        // (b) Die piece (6): still alive, scale shrinking but not yet zero.
+        assert!(
+            scene.pieces[6].alive,
+            "Die piece must still be alive mid-flight, while the Move event is simultaneously \
+             active"
+        );
+        let die_scale = scene.pieces[6].transform.scale;
+        let die_mag = (die_scale.x * die_scale.x + die_scale.y * die_scale.y).sqrt();
+        let start_mag = (die_start_scale.x * die_start_scale.x
+            + die_start_scale.y * die_start_scale.y)
+            .sqrt();
+        assert!(
+            die_mag > 0.0 && die_mag < start_mag,
+            "Die piece's scale magnitude ({die_mag}) must be strictly between 0 and its starting \
+             magnitude ({start_mag}) mid-flight"
+        );
+
+        // (c) Cross-independence: neither event leaks into the other piece.
+        assert_eq!(
+            scene.pieces[0].transform.scale, move_start_scale,
+            "the Move piece's scale must be untouched by the simultaneously-active Die event"
+        );
+        assert_eq!(
+            (scene.pieces[6].col, scene.pieces[6].row),
+            (1, TEAM_B_ROW),
+            "the Die piece's col/row must be untouched by the simultaneously-active Move event"
+        );
+        assert_eq!(
+            scene.pieces[6].transform.translate, die_start_translate,
+            "the Die piece's translate must be untouched by the simultaneously-active Move event"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tests: BattleViewer scene wiring (b4-t4) — replaces fill_and_label with the
 // real board + 6v6 team-tinted idle-animating pieces.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1331,6 +1823,91 @@ mod battle_viewer_scene_wiring_tests {
             !has_piece_glyph_near(old_center),
             "no piece glyph should remain near the OLD col/row-derived cell {old_center:?} \
              after transform.translate was mutated away from it"
+        );
+    }
+
+    /// Scans a `WINDOW`-cell box around `center` for any non-grid-line
+    /// braille glyph — the same piece-glyph-presence probe used by
+    /// `render_reflects_mutated_stored_piece_transform_translate`.
+    fn has_piece_glyph_near(buf: &Buffer, geom: &BoardGeometry, center: (i32, i32)) -> bool {
+        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR.r, GRID_LINE_COLOR.g, GRID_LINE_COLOR.b);
+        const WINDOW: i32 = 8;
+        for dy in -WINDOW..=WINDOW {
+            for dx in -WINDOW..=WINDOW {
+                let x = center.0 + dx;
+                let y = center.1 + dy;
+                if x < geom.board_rect.x as i32
+                    || y < geom.board_rect.y as i32
+                    || x >= geom.board_rect.right() as i32
+                    || y >= geom.board_rect.bottom() as i32
+                {
+                    continue;
+                }
+                let cell = buf.cell((x as u16, y as u16)).unwrap();
+                if is_braille_glyph(cell.symbol()) && cell.fg != grid_line_fg {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// b2-t4 DELIVERABLE: a piece with `alive == false` contributes NO glyph
+    /// to the composited render, while a still-alive, spatially-disjoint
+    /// sibling's glyphs remain present. `transform` is left intact on the
+    /// dead piece (not driven through a real `Die` event) so the ONLY reason
+    /// it can vanish is `render()`'s new `alive` filter, not a collapsed
+    /// zero scale.
+    #[test]
+    fn render_excludes_dead_piece_keeps_alive_sibling() {
+        let mut scene = BattleViewer::default();
+        let area = Rect::new(0, 0, 100, 50);
+        let geom = board_geometry(area);
+
+        let target_center = terminal_center_cell(scene.pieces[0].transform.translate, &geom);
+        let sibling_center = terminal_center_cell(scene.pieces[6].transform.translate, &geom);
+        assert_eq!(scene.pieces[0].team, Team::A, "test setup: target must be Team A");
+        assert_eq!(scene.pieces[6].team, Team::B, "test setup: sibling must be Team B");
+
+        scene.pieces[0].alive = false;
+
+        let buf = render_to_buffer(&scene, 100, 50);
+
+        assert!(
+            !has_piece_glyph_near(&buf, &geom, target_center),
+            "no piece glyph should remain near a dead piece's center {target_center:?}"
+        );
+        assert!(
+            has_piece_glyph_near(&buf, &geom, sibling_center),
+            "a still-alive sibling's glyphs must remain present near {sibling_center:?}"
+        );
+    }
+
+    /// b2-t4 DELIVERABLE (revive, no special-casing): flipping a previously
+    /// excluded piece's `alive` back to `true` (transform untouched) makes
+    /// its glyphs reappear on the very next `render()`, with no other code
+    /// change — proving exclusion is a pure per-frame filter on `alive`, not
+    /// a one-way/sticky removal.
+    #[test]
+    fn render_reincludes_piece_when_alive_flipped_back_true() {
+        let mut scene = BattleViewer::default();
+        let area = Rect::new(0, 0, 100, 50);
+        let geom = board_geometry(area);
+
+        let target_center = terminal_center_cell(scene.pieces[0].transform.translate, &geom);
+
+        scene.pieces[0].alive = false;
+        let buf_dead = render_to_buffer(&scene, 100, 50);
+        assert!(
+            !has_piece_glyph_near(&buf_dead, &geom, target_center),
+            "test setup: piece must be excluded while alive == false"
+        );
+
+        scene.pieces[0].alive = true;
+        let buf_revived = render_to_buffer(&scene, 100, 50);
+        assert!(
+            has_piece_glyph_near(&buf_revived, &geom, target_center),
+            "piece glyph must reappear near {target_center:?} once alive is flipped back to true"
         );
     }
 

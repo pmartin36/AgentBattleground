@@ -26,6 +26,7 @@ fn main() {
     let mut width = 100u32;
     let mut color = true;
     let mut chroma: Option<(u8, u8, u8)> = None;
+    let mut chroma_auto = false;
     let mut chroma_thresh = 50u32;
     let mut i = 2;
     while i < args.len() {
@@ -36,8 +37,12 @@ fn main() {
             }
             "--no-color" => { color = false; i += 1; }
             "--chroma" if i + 1 < args.len() => {
-                let v: Vec<u8> = args[i + 1].split(',').filter_map(|s| s.trim().parse().ok()).collect();
-                if v.len() == 3 { chroma = Some((v[0], v[1], v[2])); }
+                if args[i + 1] == "auto" {
+                    chroma_auto = true;
+                } else {
+                    let v: Vec<u8> = args[i + 1].split(',').filter_map(|s| s.trim().parse().ok()).collect();
+                    if v.len() == 3 { chroma = Some((v[0], v[1], v[2])); }
+                }
                 i += 2;
             }
             "--chroma-thresh" if i + 1 < args.len() => {
@@ -46,6 +51,24 @@ fn main() {
             _ => i += 1,
         }
     }
+    let img = match image::open(path) {
+        Ok(im) => im,
+        Err(e) => { eprintln!("downrez: cannot open {}: {}", path, e); std::process::exit(1); }
+    };
+
+    // --chroma auto: sample the key color as the average of the four image corners.
+    if chroma_auto {
+        let (w, h) = (img.width(), img.height());
+        let corners = [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)];
+        let (mut r, mut g, mut b) = (0u32, 0u32, 0u32);
+        for (x, y) in corners {
+            let p = img.get_pixel(x, y).0;
+            r += p[0] as u32; g += p[1] as u32; b += p[2] as u32;
+        }
+        chroma = Some(((r / 4) as u8, (g / 4) as u8, (b / 4) as u8));
+        eprintln!("downrez: auto chroma key = {:?}", chroma.unwrap());
+    }
+
     let chroma_thresh2 = chroma_thresh * chroma_thresh;
     // A pixel is transparent if its alpha is low OR (chroma set) it's near the key color.
     let is_transparent = |p: &[u8; 4]| -> bool {
@@ -55,11 +78,6 @@ fn main() {
             if (dr*dr + dg*dg + db*db) as u32 <= chroma_thresh2 { return true; }
         }
         false
-    };
-
-    let img = match image::open(path) {
-        Ok(im) => im,
-        Err(e) => { eprintln!("downrez: cannot open {}: {}", path, e); std::process::exit(1); }
     };
 
     let (sw, sh) = (img.width() as f32, img.height() as f32);

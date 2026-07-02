@@ -36,7 +36,20 @@ fn luma(r: u8, g: u8, b: u8) -> u8 {
     (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) as u8
 }
 
+#[derive(Clone, Copy)]
 struct Key { rgb: (u8, u8, u8), thresh2: u32 }
+
+// Sample the key color from a frame's four corners (handles a background that drifts frame-to-frame).
+fn corner_key(img: &RgbaImage, thresh: u32) -> Key {
+    let (w, h) = (img.width(), img.height());
+    let corners = [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)];
+    let (mut r, mut g, mut b) = (0u32, 0u32, 0u32);
+    for (x, y) in corners {
+        let p = img.get_pixel(x, y).0;
+        r += p[0] as u32; g += p[1] as u32; b += p[2] as u32;
+    }
+    Key { rgb: ((r / 4) as u8, (g / 4) as u8, (b / 4) as u8), thresh2: thresh * thresh }
+}
 
 fn transparent(p: [u8; 4], key: &Option<Key>) -> bool {
     if p[3] < 128 { return true; }
@@ -103,6 +116,7 @@ fn main() -> io::Result<()> {
     let src = args[1].clone();
     let mut width: Option<u32> = None;
     let mut key: Option<Key> = None;
+    let mut chroma_auto = false;
     let mut thresh = 60u32;
     let mut pingpong = false;
     let mut fps = 12u32;
@@ -111,8 +125,12 @@ fn main() -> io::Result<()> {
         match args[i].as_str() {
             "--width" if i+1 < args.len() => { width = args[i+1].parse().ok(); i += 2; }
             "--chroma" if i+1 < args.len() => {
-                let v: Vec<u8> = args[i+1].split(',').filter_map(|s| s.trim().parse().ok()).collect();
-                if v.len() == 3 { key = Some(Key { rgb: (v[0],v[1],v[2]), thresh2: thresh*thresh }); }
+                if args[i+1] == "auto" {
+                    chroma_auto = true;
+                } else {
+                    let v: Vec<u8> = args[i+1].split(',').filter_map(|s| s.trim().parse().ok()).collect();
+                    if v.len() == 3 { key = Some(Key { rgb: (v[0],v[1],v[2]), thresh2: thresh*thresh }); }
+                }
                 i += 2;
             }
             "--chroma-thresh" if i+1 < args.len() => { thresh = args[i+1].parse().unwrap_or(60); if let Some(k)=key.as_mut(){k.thresh2=thresh*thresh;} i += 2; }
@@ -142,8 +160,12 @@ fn main() -> io::Result<()> {
     let mut rows = ((cols as f32) / (2.0 * aspect)).round().max(1.0) as u32;
     if rows > max_rows { rows = max_rows; cols = ((rows as f32) * 2.0 * aspect).round().max(1.0) as u32; }
 
+    // --chroma auto samples each frame's own corners, so a drifting background still keys cleanly.
     let frames: Vec<Vec<Line>> = frames_raw.iter()
-        .map(|f| render_braille(&DynamicImage::ImageRgba8(f.clone()), cols, rows, &key))
+        .map(|f| {
+            let fkey = if chroma_auto { Some(corner_key(f, thresh)) } else { key };
+            render_braille(&DynamicImage::ImageRgba8(f.clone()), cols, rows, &fkey)
+        })
         .collect();
 
     // playback order (ping-pong appends the reverse, minus endpoints)

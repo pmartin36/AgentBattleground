@@ -38,7 +38,9 @@ STRENGTH="${STRENGTH:-0.5}"
 # Background suppression. Z-Image Turbo runs at cfg 1.0 (negative prompts are inert there),
 # so an isolated subject has to be pushed through the POSITIVE prompt. A flat solid backdrop
 # also makes the rembg cutout trivial.
-BG="${BG:-isolated subject, full body, centered, plain solid white background, flat studio backdrop, no scenery, no environment, no foreground objects, no ground detail}"
+# Green screen: key on a saturated color the subject won't contain (survives motion-blur + bg drift
+# far better than white). For green creatures (frogs), override BG+CHROMA to magenta.
+BG="${BG:-isolated subject, full body, centered, solid flat vivid chroma-key green background, uniform bright green screen backdrop, no scenery, no environment, no foreground objects, no ground detail, no shadow}"
 
 PROMPT="${1:?usage: generate.sh \"<creature prompt>\" [name]}"
 NAME="${2:-creature}"
