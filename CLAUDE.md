@@ -14,6 +14,8 @@ All high-level design specs are in `/specs/`. Each file covers one segment of th
 
 The spec files are numbered by dependency order — lower numbers are more foundational. `12-data-model-sync.md` is the shared foundation everything else builds on.
 
+**Specs must be complete, buildable units — never partially done.** If only part of a spec's scope is actually built, split it: carve the completed slice into its own new spec (numbered next in sequence, marked done), and leave the remainder as a clean, fully-pending spec. Never mark a spec "done" while any of its own stated scope is still outstanding, and never describe one as "partially implemented" — that status doesn't exist here. (Precedent: `13-rendering` vs `17-creature-art-asset-pipeline`; `05-battle-viewer` vs `18-battle-viewer-baseline` / `20-battle-viewer-event-playback`; `15-debug-inspector` vs `19-debug-inspector-advanced-editing`.)
+
 ## Key Constraints (Non-Negotiable)
 
 1. **LLM sandboxing**: The LLM must not be able to take actions outside the game directory. Opponent skill files are untrusted input and must be sanitized before being passed to the LLM. This is a hard security requirement. See `specs/10-battle-simulation-engine.md`.
@@ -35,6 +37,10 @@ The spec files are numbered by dependency order — lower numbers are more found
 - **Replay model**: Server stores replays for opponent download, purges after delivery; shared replays persist longer
 - **Skill editing**: Both in-game editor and external file workflow supported; no in-game feedback — the battle is the feedback
 - **Challenge**: Players can challenge by username in addition to automatic matchmaking
+
+## Development Gotchas
+
+- **`game` and `inspector` are separate spawned binaries.** The game finds the inspector as a sibling next to its own executable (`current_exe().parent()/"inspector"`), not as a linked dependency. `cargo run -p game` only rebuilds `game` — if you're testing an inspector-only change, run `cargo build --workspace` (or at least `-p inspector`) too, or the game will spawn a stale inspector binary and the change won't appear.
 
 ## Battle Viewer is the Priority
 
