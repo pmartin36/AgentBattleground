@@ -3,10 +3,9 @@ use std::time::Duration;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
 use render::camera::{SideView, WorldPos};
 use render::composite::{composite_dots, DotPlacement};
-use render::dots::{dots_to_grid, tint, DotBuffer};
+use render::dots::{dots_to_grid, tint, Dot, DotBuffer};
 use render::transform::{place, rasterize, Transform, Vec2};
 use render::{draw_grid, AnimatedSprite};
 use scene_core::color::Rgba;
@@ -62,71 +61,47 @@ pub fn board_geometry(area: Rect) -> BoardGeometry {
     }
 }
 
-/// Draws box-drawing border/grid lines for a `BOARD_COLS x BOARD_ROWS` grid
-/// of `geom.cell_width_cols` x `geom.cell_height_rows`-sized cells, positioned
-/// at `geom.board_rect`. Uses ONLY the fields of the `BoardGeometry` passed
-/// in — no independent re-derivation of cell size/position. Cell interiors
-/// are left untouched (lines only). Clips instead of panicking on an
-/// undersized buffer.
+/// Draws thin braille grid lines for a `BOARD_COLS x BOARD_ROWS` grid of
+/// `geom.cell_width_cols` x `geom.cell_height_rows`-sized cells, positioned at
+/// `geom.board_rect`. Uses ONLY the fields of the `BoardGeometry` passed in —
+/// no independent re-derivation of cell size/position. Builds a `DotBuffer`
+/// sized `board_rect.width*2 x board_rect.height*4` (the same dot-sizing
+/// convention the piece composite uses), lights one dot-column per vertical
+/// boundary (dx=0 within its terminal cell) and one dot-row per horizontal
+/// boundary (dy=0 within its terminal cell), converts via `dots_to_grid`, and
+/// blits via `draw_grid` — junctions emerge purely as the bitwise union of
+/// overlapping lit dots, no special-cased glyph table. Point-8 fencepost: the
+/// outermost right/bottom boundary would land one dot past the last valid dot
+/// index, so it is clamped to the last valid dot (one dot short) instead.
+/// Cell interiors are left `Transparent` (lines only). Clips instead of
+/// panicking on an undersized buffer.
 pub fn draw_board_lines(buf: &mut Buffer, geom: &BoardGeometry) {
     let cw = geom.cell_width_cols;
     let chh = geom.cell_height_rows;
-    let x0 = geom.board_rect.x;
-    let y0 = geom.board_rect.y;
-
-    let put = |buf: &mut Buffer, x: u16, y: u16, ch: char| {
-        if let Some(cell) = buf.cell_mut((x, y)) {
-            cell.set_char(ch);
-            cell.set_fg(Color::Rgb(0x55, 0x55, 0x55));
-        }
-    };
-
-    // Junctions: every grid-line intersection, glyph chosen by which edges
-    // (if any) the intersection sits on.
-    for j in 0..=BOARD_ROWS {
-        let y = y0.saturating_add(j.saturating_mul(chh));
-        let top = j == 0;
-        let bottom = j == BOARD_ROWS;
-        for i in 0..=BOARD_COLS {
-            let x = x0.saturating_add(i.saturating_mul(cw));
-            let left = i == 0;
-            let right = i == BOARD_COLS;
-            let ch = match (left, right, top, bottom) {
-                (true, false, true, false) => '┌',
-                (false, true, true, false) => '┐',
-                (true, false, false, true) => '└',
-                (false, true, false, true) => '┘',
-                (true, false, false, false) => '├',
-                (false, true, false, false) => '┤',
-                (false, false, true, false) => '┬',
-                (false, false, false, true) => '┴',
-                _ => '┼',
-            };
-            put(buf, x, y, ch);
-        }
+    let buf_cols = geom.board_rect.width as usize * 2;
+    let buf_rows = geom.board_rect.height as usize * 4;
+    if buf_cols == 0 || buf_rows == 0 {
+        return;
     }
 
-    // Horizontal runs: between consecutive vlines, along every hline row.
-    for j in 0..=BOARD_ROWS {
-        let y = y0.saturating_add(j.saturating_mul(chh));
-        for i in 0..BOARD_COLS {
-            let base_x = x0.saturating_add(i.saturating_mul(cw));
-            for dx in 1..cw {
-                put(buf, base_x.saturating_add(dx), y, '─');
-            }
-        }
-    }
+    let mut dots = DotBuffer::new(buf_cols, buf_rows);
 
-    // Vertical runs: between consecutive hlines, along every vline column.
     for i in 0..=BOARD_COLS {
-        let x = x0.saturating_add(i.saturating_mul(cw));
-        for j in 0..BOARD_ROWS {
-            let base_y = y0.saturating_add(j.saturating_mul(chh));
-            for dy in 1..chh {
-                put(buf, x, base_y.saturating_add(dy), '│');
-            }
+        let dot_x = ((i * cw) as usize * 2).min(buf_cols - 1);
+        for y in 0..buf_rows {
+            dots.set(dot_x, y, Dot::Lit(GRID_LINE_COLOR));
         }
     }
+
+    for j in 0..=BOARD_ROWS {
+        let dot_y = ((j * chh) as usize * 4).min(buf_rows - 1);
+        for x in 0..buf_cols {
+            dots.set(x, dot_y, Dot::Lit(GRID_LINE_COLOR));
+        }
+    }
+
+    let grid = dots_to_grid(&dots);
+    draw_grid(buf, geom.board_rect, &grid);
 }
 
 /// Which side a piece belongs to. Rendering differences (tint, mirror) are
@@ -217,6 +192,11 @@ pub const SPRITE_DOT_RATIO: f32 = 1.2;
 pub const TEAM_A_COLOR: Rgba = Rgba::rgb(0xff, 0xe8, 0xb0);
 /// Team B tint (pale mint).
 pub const TEAM_B_COLOR: Rgba = Rgba::rgb(0xb0, 0xff, 0xe0);
+
+/// Grid-line color for board chrome (`draw_board_lines`). Single source of
+/// truth referenced by both the drawing code and every test needing the
+/// exact value — never re-hardcoded as a bare `0x55` literal elsewhere.
+pub const GRID_LINE_COLOR: Rgba = Rgba::rgb(0x55, 0x55, 0x55);
 
 impl Team {
     /// This team's tint color: A -> `TEAM_A_COLOR`, B -> `TEAM_B_COLOR`.
@@ -480,11 +460,18 @@ mod board_geometry_tests {
 mod draw_board_lines_tests {
     use super::*;
     use ratatui::buffer::Buffer;
+    use ratatui::style::Color;
 
     /// Hand-picked geometry used by every case below: board_rect origin
     /// (2,1), cell_width_cols=4, cell_height_rows=2, in a 40x20 buffer.
-    /// vlines land at x in {2,6,10,14,18,22,26,30,34};
-    /// hlines land at y in {1,3,5,7,9,11,13,15,17}.
+    /// DotBuffer is board_rect.width*2 x board_rect.height*4 = 64x64 dots
+    /// (8x8 dots per board cell). Vertical boundaries i=0..=8 land at
+    /// terminal x in {2,6,10,14,18,22,26,30, 33(clamped)}; horizontal
+    /// boundaries j=0..=8 land at terminal y in
+    /// {1,3,5,7,9,11,13,15, 16(clamped)}. For every i<8/j<8 the boundary's
+    /// dot sits at dx=0/dy=0 within its terminal cell (exact, no clamp); only
+    /// the outermost i==8/j==8 boundary clamps to the LAST valid dot index
+    /// (dx=1/dy=3 — one dot short of board_rect.right()/bottom()).
     fn geom() -> BoardGeometry {
         BoardGeometry {
             cell_width_cols: 4,
@@ -494,49 +481,75 @@ mod draw_board_lines_tests {
         }
     }
 
+    /// GRID_LINE_COLOR converted to the ratatui fg representation `draw_grid`
+    /// writes it as — never a duplicated `0x55` literal.
+    fn grid_fg() -> Color {
+        Color::Rgb(GRID_LINE_COLOR.r, GRID_LINE_COLOR.g, GRID_LINE_COLOR.b)
+    }
+
     #[test]
-    fn four_corners_are_box_corners() {
+    fn grid_line_color_is_the_hoisted_gray_constant() {
+        assert_eq!(GRID_LINE_COLOR, Rgba::rgb(0x55, 0x55, 0x55));
+    }
+
+    /// Top-left corner: vertical boundary i=0 (left dot-column, full height,
+    /// mask 0x47) union horizontal boundary j=0 (top dot-row, full width,
+    /// mask 0x09) = mask 0x4F -> '\u{284F}' (⡏). No special-cased junction
+    /// glyph logic — this is the emergent bitwise union.
+    #[test]
+    fn corner_glyph_is_union_of_vertical_and_horizontal_masks() {
         let g = geom();
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 20));
         draw_board_lines(&mut buf, &g);
 
-        assert_eq!(buf.cell((2, 1)).unwrap().symbol(), "┌");
-        assert_eq!(buf.cell((34, 1)).unwrap().symbol(), "┐");
-        assert_eq!(buf.cell((2, 17)).unwrap().symbol(), "└");
-        assert_eq!(buf.cell((34, 17)).unwrap().symbol(), "┘");
+        let cell = buf.cell((2, 1)).unwrap();
+        assert_eq!(cell.symbol(), "\u{284F}");
+        assert_eq!(cell.fg, grid_fg());
     }
 
+    /// Interior crossing (i=1,j=1 boundary, both non-edge) collapses to the
+    /// SAME union glyph as a corner — braille lines are 1-dot-thin L-joins,
+    /// so every junction kind (corner/tee/cross) is indistinguishable.
     #[test]
-    fn interior_crossing_is_cross() {
+    fn interior_crossing_collapses_to_same_union_glyph_as_corner() {
         let g = geom();
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 20));
         draw_board_lines(&mut buf, &g);
 
-        assert_eq!(buf.cell((6, 3)).unwrap().symbol(), "┼");
+        let cell = buf.cell((6, 3)).unwrap();
+        assert_eq!(cell.symbol(), "\u{284F}");
+        assert_eq!(cell.fg, grid_fg());
     }
 
+    /// A cell touched only by a vertical boundary (left dot-column lit all 4
+    /// rows, no horizontal boundary through it) -> mask 0x47 -> '\u{2847}' (⡇).
     #[test]
-    fn top_edge_tee_and_left_edge_tee() {
+    fn lone_vertical_run_cell_is_left_column_mask() {
         let g = geom();
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 20));
         draw_board_lines(&mut buf, &g);
 
-        assert_eq!(buf.cell((6, 1)).unwrap().symbol(), "┬");
-        assert_eq!(buf.cell((2, 3)).unwrap().symbol(), "├");
+        let cell = buf.cell((2, 2)).unwrap();
+        assert_eq!(cell.symbol(), "\u{2847}");
+        assert_eq!(cell.fg, grid_fg());
     }
 
+    /// A cell touched only by a horizontal boundary (top dot-row lit both
+    /// columns, no vertical boundary through it) -> mask 0x09 -> '\u{2809}' (⠉).
     #[test]
-    fn straight_runs() {
+    fn lone_horizontal_run_cell_is_top_row_mask() {
         let g = geom();
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 20));
         draw_board_lines(&mut buf, &g);
 
-        assert_eq!(buf.cell((3, 1)).unwrap().symbol(), "─");
-        assert_eq!(buf.cell((2, 2)).unwrap().symbol(), "│");
+        let cell = buf.cell((3, 1)).unwrap();
+        assert_eq!(cell.symbol(), "\u{2809}");
+        assert_eq!(cell.fg, grid_fg());
     }
 
-    /// A cell interior (neither on a vline nor an hline) must be left
-    /// untouched — proves no fill, lines only.
+    /// A true interior cell (no boundary anywhere in it) must stay
+    /// `Cell::Transparent` — draw_grid leaves prior buffer content untouched,
+    /// proving lines-only, no fill.
     #[test]
     fn cell_interior_untouched() {
         let g = geom();
@@ -547,15 +560,40 @@ mod draw_board_lines_tests {
         assert_eq!(buf.cell((4, 2)).unwrap().symbol(), "X");
     }
 
+    /// Point-8 fencepost resolution (chosen: clamp to the last valid dot
+    /// index, one dot short): board_rect=(2,1,32,16) -> right()=34, so the
+    /// outermost vertical boundary (i=8) cannot sit at dot_x=64 (one past the
+    /// last valid dot 63); it clamps to dot_x=63, landing in the RIGHT
+    /// dot-column (dx=1) of the LAST valid cell (terminal x=33), not at x=34.
+    /// That cell's top-right corner: right dot-column full height (mask 0xB8)
+    /// union top dot-row full width (mask 0x09) = mask 0xB9 -> '\u{28B9}'.
+    /// Nothing is drawn at the naive unclamped position x=34.
+    #[test]
+    fn far_boundary_is_clamped_one_dot_short_not_out_of_bounds() {
+        let g = geom();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 20));
+        draw_board_lines(&mut buf, &g);
+
+        let clamped = buf.cell((33, 1)).unwrap();
+        assert_eq!(clamped.symbol(), "\u{28B9}");
+        assert_eq!(clamped.fg, grid_fg());
+
+        assert_eq!(
+            buf.cell((34, 1)).unwrap().symbol(),
+            " ",
+            "nothing must be drawn one dot past board_rect's right edge"
+        );
+    }
+
     /// Drawing into a buffer smaller than board_rect must not panic — the
-    /// out-of-bounds far border is silently clipped.
+    /// out-of-bounds far border is silently clipped by draw_grid.
     #[test]
     fn no_panic_on_undersized_buffer() {
         let g = geom();
         let mut buf = Buffer::empty(Rect::new(0, 0, 10, 5));
         draw_board_lines(&mut buf, &g);
         // Top-left corner is still in-bounds and drawn.
-        assert_eq!(buf.cell((2, 1)).unwrap().symbol(), "┌");
+        assert_eq!(buf.cell((2, 1)).unwrap().symbol(), "\u{284F}");
     }
 
     /// Two different BoardGeometry values (from two different areas) must
@@ -573,28 +611,28 @@ mod draw_board_lines_tests {
         draw_board_lines(&mut buf_a, &ga);
         assert_eq!(
             buf_a.cell((ga.board_rect.x, ga.board_rect.y)).unwrap().symbol(),
-            "┌"
+            "\u{284F}"
         );
         assert_eq!(
             buf_a
                 .cell((ga.board_rect.x + ga.cell_width_cols, ga.board_rect.y))
                 .unwrap()
                 .symbol(),
-            "┬"
+            "\u{284F}"
         );
 
         let mut buf_b = Buffer::empty(area_b);
         draw_board_lines(&mut buf_b, &gb);
         assert_eq!(
             buf_b.cell((gb.board_rect.x, gb.board_rect.y)).unwrap().symbol(),
-            "┌"
+            "\u{284F}"
         );
         assert_eq!(
             buf_b
                 .cell((gb.board_rect.x + gb.cell_width_cols, gb.board_rect.y))
                 .unwrap()
                 .symbol(),
-            "┬"
+            "\u{284F}"
         );
     }
 }
@@ -899,10 +937,16 @@ mod battle_viewer_scene_wiring_tests {
         let corner = buf
             .cell((geom.board_rect.x, geom.board_rect.y))
             .expect("board_rect origin must be within the rendered buffer");
+        assert!(
+            is_braille_glyph(corner.symbol()),
+            "top-left board corner must be a braille grid-line glyph at board_geometry(area)'s \
+             predicted board_rect origin, got {:?}",
+            corner.symbol()
+        );
         assert_eq!(
-            corner.symbol(),
-            "┌",
-            "top-left board corner glyph must be present at board_geometry(area)'s predicted board_rect origin"
+            corner.fg,
+            Color::Rgb(GRID_LINE_COLOR.r, GRID_LINE_COLOR.g, GRID_LINE_COLOR.b),
+            "top-left board corner must be colored GRID_LINE_COLOR"
         );
     }
 
@@ -934,11 +978,15 @@ mod battle_viewer_scene_wiring_tests {
         let mut top_colors: HashSet<(u8, u8, u8)> = HashSet::new();
         let mut bottom_colors: HashSet<(u8, u8, u8)> = HashSet::new();
 
+        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR.r, GRID_LINE_COLOR.g, GRID_LINE_COLOR.b);
         for y in geom.board_rect.y..geom.board_rect.bottom() {
             for x in geom.board_rect.x..geom.board_rect.right() {
                 let cell = buf.cell((x, y)).unwrap();
                 if !is_braille_glyph(cell.symbol()) {
                     continue;
+                }
+                if cell.fg == grid_line_fg {
+                    continue; // board grid-line glyph, not piece tint
                 }
                 if let Color::Rgb(r, g, b) = cell.fg {
                     if y < mid_y {
@@ -1019,6 +1067,7 @@ mod battle_viewer_scene_wiring_tests {
         }
 
         let buf = render_to_buffer(&scene, 100, 50);
+        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR.r, GRID_LINE_COLOR.g, GRID_LINE_COLOR.b);
 
         let mut found_glyph = false;
         for y in geom.board_rect.y..geom.board_rect.bottom() {
@@ -1026,6 +1075,9 @@ mod battle_viewer_scene_wiring_tests {
                 let cell = buf.cell((x, y)).unwrap();
                 if !is_braille_glyph(cell.symbol()) {
                     continue;
+                }
+                if cell.fg == grid_line_fg {
+                    continue; // board grid-line glyph, not a piece
                 }
                 found_glyph = true;
                 assert_eq!(
