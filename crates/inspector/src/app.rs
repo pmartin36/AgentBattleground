@@ -667,8 +667,6 @@ impl InspectorApp {
 
                 ui.strong("Fields");
                 scroll_field_panel(ui, &mut self.state);
-
-                let _ = self.render_action_row(ui);
             })
             .response;
 
@@ -701,6 +699,23 @@ impl InspectorApp {
         })
         .inner
     }
+
+    /// Production entry point: docks the action row and the rest of the
+    /// body together so the action row stays reachable regardless of
+    /// field-list content height (b1-t1). The action row is pinned to a
+    /// bottom panel (shown first, per egui's panel-ordering rule) and the
+    /// scene-selector + field-editor body occupies the remaining central
+    /// panel, which naturally caps the field list's scroll area to the
+    /// remaining middle space.
+    fn render(&mut self, ui: &mut egui::Ui) -> ActionRow {
+        let action = egui::Panel::bottom("inspector_action_row")
+            .show(ui, |ui| self.render_action_row(ui))
+            .inner;
+        egui::CentralPanel::default().show(ui, |ui| {
+            let _ = self.render_body(ui);
+        });
+        action
+    }
 }
 
 /// Submit / Revert button `Response`s from the action row, surfaced so tests
@@ -721,7 +736,7 @@ impl eframe::App for InspectorApp {
             return;
         }
 
-        let _ = self.render_body(ui);
+        let _ = self.render(ui);
         self.flush_edits();
 
         ui.ctx().request_repaint();
@@ -2173,6 +2188,66 @@ mod tests {
             !out.inner.is_empty(),
             "scroll_field_panel must still return the wrapped panel's field Responses"
         );
+    }
+
+    // ── b1-t1: action row stays reachable when the field list overflows ────
+
+    /// The Submit/Revert action row must be reachable (its rendered
+    /// `Response` rects must lie entirely within the visible screen rect)
+    /// through the real production wiring (`app.render`, not `render_body`
+    /// alone), even when a 12-element list-of-structs field panel (at least
+    /// as large as `BattleViewer`'s) overflows a deliberately small
+    /// viewport. Regression guard for the unbounded-`ScrollArea` bug that
+    /// could push the action row below the visible window.
+    #[test]
+    fn action_row_stays_within_viewport_when_field_list_overflows() {
+        let (mut app, _frame_rx, _server_write, path) = stub_app_harness("action-row-pin");
+        app.state.apply(&four_scene_hello());
+
+        let element = struct_schema(
+            "piece",
+            vec![
+                leaf("a", FieldTag::Int),
+                leaf("b", FieldTag::Float),
+                leaf("c", FieldTag::Bool),
+            ],
+        );
+        app.state.panel_schema = Some(struct_schema("Root", vec![list_schema("pieces", element)]));
+        let pieces: Vec<serde_json::Value> = (0..12)
+            .map(|_| serde_json::json!({"a": 0, "b": 0.0, "c": false}))
+            .collect();
+        app.state.panel_snapshot = serde_json::json!({ "pieces": pieces });
+
+        let ctx = egui::Context::default();
+        let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0));
+        let input = egui::RawInput {
+            screen_rect: Some(screen_rect),
+            time: Some(0.0),
+            ..Default::default()
+        };
+
+        let mut captured: Option<ActionRow> = None;
+        let _ = ctx.run_ui(input, |ui| {
+            captured = Some(app.render(ui));
+        });
+        let row = captured.expect("app.render must be invoked by run_ui's closure");
+
+        assert!(
+            row.submit.rect.min.y >= screen_rect.min.y && row.submit.rect.max.y <= screen_rect.max.y,
+            "Submit button rect ({:?}) must lie entirely within the screen rect ({:?}) \
+             even when the field list overflows",
+            row.submit.rect,
+            screen_rect
+        );
+        assert!(
+            row.revert.rect.min.y >= screen_rect.min.y && row.revert.rect.max.y <= screen_rect.max.y,
+            "Revert button rect ({:?}) must lie entirely within the screen rect ({:?}) \
+             even when the field list overflows",
+            row.revert.rect,
+            screen_rect
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 
     /// Calls `app.pump()` in a loop until `pred` is true or `timeout` elapses.
