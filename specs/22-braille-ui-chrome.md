@@ -1,0 +1,38 @@
+# Braille UI Chrome — Buttons & Panels
+
+> **Status: draft (not started).** A reusable, clickable, hover-reactive button component — rounded-corner panel, icon, idle/hover/press tint states — rendered entirely through the existing braille dot pipeline. No plain Unicode/ASCII chrome anywhere: per `CLAUDE.md`, "the only thing that's not braille is text," and that applies to buttons and icons exactly as much as sprites and grid lines. Required by `24-roster-carousel` (arrows, home button) and reusable by the not-yet-written Main Hub Navigation spec's menu.
+
+## Purpose
+Today `render` has exactly two draw primitives: `fill` (solid-color rect) and `label` (centered plain text). Neither supports a rounded-corner panel, an icon, or a hover/press visual state. This spec adds one reusable `Button` building block that does, without inventing a new geometric rasterizer — it reuses the existing image→braille conversion and tint pipeline end to end, the same way every sprite in the game already works.
+
+## Scope
+- **Chrome is an image asset, not procedural geometry.** A button's rounded-rect background is a small raster image (a rounded-rect panel with alpha-transparent corners) run through `render::convert` exactly like a creature sprite — no new rounded-rect rasterizer is written. "Rounded" corners come from the source image's alpha channel, the same mechanism that already gives sprites clean silhouettes.
+- **Icons are images, not glyphs.** The home icon and the left/right arrow icons are small raster images (sourced online or hand-drawn), run through `render::convert` the same way. Never a Unicode character (✕ no `⌂`, no `◀`/`▶`) — those would violate the braille-only-exception-is-text rule.
+- **Three visual states via existing `tint`.** `render::tint` (multiply-blend, already built and used for `BattleViewer` team colors) is reused unmodified — no new blend mode:
+  - **Idle** — a dimmed tint (e.g. ~78% gray, `Rgba::rgb(0xc8,0xc8,0xc8)`), so hover reads as *brighter*.
+  - **Hover** — full brightness (no tint / pass-through `Rgba::rgb(0xff,0xff,0xff)`), visibly lighter than idle.
+  - **Press** — a darker tint than idle (e.g. ~55% gray, `Rgba::rgb(0x8c,0x8c,0x8c)`), visibly darker than both.
+- **Hit-testing and state machine.** A `Button` owns its on-screen `Rect` and tracks state from the `Mouse` events `21-mouse-hover-input` delivers:
+  - `MouseEventKind::Moved` inside the rect → `Hover`; outside → back to `Idle` (unless currently `Pressed`).
+  - `MouseEventKind::Down` inside the rect while `Idle`/`Hover` → `Pressed`.
+  - `MouseEventKind::Up` while `Pressed`: if the up position is still inside the rect → fires a completed **click** and returns to `Hover`; if outside (dragged off before releasing) → cancels, no click, returns to `Idle`.
+  - A scene using a `Button` checks, once per frame after routing input to it, whether it produced a completed click this frame, and reacts (e.g. advance the carousel, transition scenes).
+- **Keyboard-equivalent affordance is the consuming scene's job.** E.g. `24-roster-carousel`'s left/right arrow *keys* trigger the same action as clicking the arrow *buttons* — that wiring lives in the scene, not in `Button` itself. `Button` only owns the mouse-driven half.
+
+Out of scope:
+- Text labels inside a button (none of the current consumers need button text; `render::label`'s existing plain-text path already covers scene labels elsewhere).
+- Keyboard focus rings / tab order — no current scene needs keyboard-driven focus traversal between multiple buttons.
+- Generic layout/anchoring helpers (e.g. "pin to top-right") — each consuming scene computes its own button `Rect`s the same way it computes any other layout `Rect`, via ordinary `ratatui::layout::Layout`.
+- Disabled/toggled button states — no current consumer needs them.
+
+## Decisions (v1)
+- **Where it lives:** the `render` crate (already the home of `AnimatedSprite`, `tint`, `convert`) — not `scene-core` (no dependency on image/sprite types) and not duplicated per-scene.
+- **Asset sourcing:** the rounded-rect panel background and the house/arrow icons are small bundled raster images (`include_bytes!`, same pattern as `battle_viewer.rs`'s `wizard.gif`), sourced from a simple, clearly-licensed source (flat single-shape icons read best at small braille sizes — same lesson `creature_lab`'s README documents for creature sprites: simple silhouettes survive the downrez, busy detail turns to mush).
+- **No new blend mode.** Idle/Hover/Press are achieved purely by choosing different `tint()` input colors, not by adding a lightening blend — `tint`'s existing multiply-blend already covers all three because Idle intentionally starts dimmed rather than at full brightness.
+- **One `Button` type, multiple instances.** The home button and each arrow are separate `Button` instances (different icon asset, different `Rect`, independently tracked state) — not a shared "menu" abstraction. A future Main Hub Nav menu is expected to construct its own `Button`s the same way, not through a new grouping type invented here.
+
+## Dependencies
+- `13-rendering` ✅ — `render::convert`, `render::tint`, the `DotBuffer`/`Grid` pipeline this is built entirely out of.
+- `21-mouse-hover-input` — the `InputEvent::Mouse` events this component's state machine consumes.
+- Feeds `24-roster-carousel` — arrows and home button are `Button` instances.
+- Feeds the not-yet-written Main Hub Navigation spec — its clickable menu items are expected to be `Button` instances too.

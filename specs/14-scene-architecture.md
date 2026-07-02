@@ -48,7 +48,7 @@ A **scene** is a self-contained, full-screen game mode that owns its own state, 
 |---|---|
 | `Onboarding` | 01 |
 | `MainHub` | 02 |
-| `ArmyEditor` | 03 |
+| `RosterManager` | 03 |
 | `Matchmaking` | 04 |
 | `BattleViewer` | 05 |
 | `PostBattle` | 06 |
@@ -92,7 +92,7 @@ pub trait Scene {
 `SceneId` is a closed enum (scenes are code, so adding one is a recompile — acceptable). On the wire, ids are the variant **string** name (`"BattleViewer"`). The **registry** maps each id to a constructor and a human-readable display name:
 
 ```rust
-pub enum SceneId { Onboarding, MainHub, ArmyEditor, /* … */ Settings }
+pub enum SceneId { Onboarding, MainHub, RosterManager, /* … */ Settings }
 
 impl SceneId {
     pub fn all() -> &'static [SceneId];       // enumerates the catalog
@@ -178,7 +178,7 @@ Four minimal scenes prove switching. Each renders a full-screen solid braille fi
 |---|---|
 | `MainHub` | deep blue |
 | `BattleViewer` | crimson red |
-| `ArmyEditor` | green |
+| `RosterManager` | green |
 | `Leaderboard` | amber |
 
 These are stand-ins for the real scenes (`02`, `05`, `03`, `08`) so names and ids are real. Switching between them must visibly recolor the screen and change the label. (Editable per-scene fields are added in M2/spec 15; M1 scenes hold only their fixed color + name.)

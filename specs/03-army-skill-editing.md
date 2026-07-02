@@ -1,6 +1,6 @@
 # Army Management & Skill Editing
 
-> A minimal presentation-only slice of this spec — six placeholder pieces with sprites, no stats/skills yet — is split out as `21-roster-baseline` (not yet built).
+> A minimal presentation-only slice of this spec — a one-at-a-time creature carousel with real names and art, no stats/skills yet — is split out as `24-roster-carousel` (not yet built; depends on `21-mouse-hover-input`, `22-braille-ui-chrome`, `23-piece-identity-data-model`).
 
 ## Purpose
 The player's primary workspace between battles. View your pieces in detail and shape how they behave on the battlefield by editing their skills.
