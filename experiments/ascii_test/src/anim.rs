@@ -40,42 +40,8 @@ fn luma(r: u8, g: u8, b: u8) -> u8 {
     (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) as u8
 }
 
-// Lit/unlit decision modes — the thing we're A/B-ing.
-#[derive(Clone, Copy)]
-enum Thresh {
-    AdaptiveGt, // dot lit if luma  > its cell's 8-dot mean (strict — flat cells go fully blank)
-    AdaptiveGe, // dot lit if luma >= its cell's 8-dot mean (flat cells fill solid — fewer holes)
-    Global,     // dot lit if luma >= the whole-frame mean luma (stable per pixel value)
-    Bayer,      // ordered-dither: dot lit if luma >= a fixed Bayer threshold at its pixel position
-}
-const MODES: [Thresh; 4] = [Thresh::AdaptiveGt, Thresh::AdaptiveGe, Thresh::Global, Thresh::Bayer];
-fn mode_name(m: Thresh) -> &'static str {
-    match m {
-        Thresh::AdaptiveGt => "adaptive >",
-        Thresh::AdaptiveGe => "adaptive >=",
-        Thresh::Global => "global",
-        Thresh::Bayer => "bayer",
-    }
-}
-
-// 4x4 ordered-dither matrix.
-const BAYER: [[u32; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
-
-fn render_braille(img: &DynamicImage, cols: u32, rows: u32, mode: Thresh) -> Vec<Line<'static>> {
+fn render_braille(img: &DynamicImage, cols: u32, rows: u32) -> Vec<Line<'static>> {
     let img = img.resize_exact(cols * 2, rows * 4, image::imageops::FilterType::Lanczos3);
-
-    // Global mode: one threshold for the whole frame = mean luma of visible pixels.
-    let frame_thresh: u32 = if matches!(mode, Thresh::Global) {
-        let (mut sum, mut cnt) = (0u64, 0u64);
-        for y in 0..rows * 4 {
-            for x in 0..cols * 2 {
-                let p = img.get_pixel(x, y).0;
-                if p[3] >= 128 { sum += luma(p[0], p[1], p[2]) as u64; cnt += 1; }
-            }
-        }
-        if cnt > 0 { (sum / cnt) as u32 } else { 128 }
-    } else { 0 };
-
     let mut lines = Vec::with_capacity(rows as usize);
     for ty in 0..rows {
         let mut spans = Vec::with_capacity(cols as usize);
@@ -97,26 +63,16 @@ fn render_braille(img: &DynamicImage, cols: u32, rows: u32, mode: Thresh) -> Vec
                 continue;
             }
 
-            let cell_avg = visible.iter().map(|&l| l as u32).sum::<u32>() / visible.len() as u32;
+            let avg = visible.iter().map(|&l| l as u32).sum::<u32>() / visible.len() as u32;
 
             let mut mask = 0u32;
-            for (i, (dx, dy, bit)) in DOTS.iter().enumerate() {
+            for (i, (_, _, bit)) in DOTS.iter().enumerate() {
                 if let Some(l) = lumas[i] {
-                    let lit = match mode {
-                        Thresh::AdaptiveGt => l as u32 > cell_avg,
-                        Thresh::AdaptiveGe => l as u32 >= cell_avg,
-                        Thresh::Global => l as u32 >= frame_thresh,
-                        Thresh::Bayer => {
-                            let (ax, ay) = (px + dx, py + dy);
-                            let t = (BAYER[(ay % 4) as usize][(ax % 4) as usize] * 2 + 1) * 255 / 32;
-                            l as u32 >= t
-                        }
-                    };
-                    if lit { mask |= 1 << bit; }
+                    if l as u32 > avg { mask |= 1 << bit; }
                 }
             }
 
-            // Color = average of visible pixels (same across modes)
+            // Color = average of visible pixels
             let vis_pix: Vec<&[u8;4]> = pixels.iter().enumerate()
                 .filter(|(i,_)| lumas[*i].is_some()).map(|(_,p)| p).collect();
             let n = vis_pix.len() as u32;
@@ -203,7 +159,7 @@ struct Frame {
     rgba: Vec<u8>,
     width: u32,
     height: u32,
-    braille: Vec<Vec<Line<'static>>>, // one render per Thresh mode (indexed by MODES)
+    braille: Vec<Line<'static>>,
     delay: Duration,
 }
 
@@ -261,7 +217,7 @@ fn load_gif(
             rgba: buf.clone().into_raw(),
             width,
             height,
-            braille: MODES.iter().map(|&m| render_braille(&img, out_cols, out_rows, m)).collect(),
+            braille: render_braille(&img, out_cols, out_rows),
             delay,
         }
     }).collect();
@@ -307,7 +263,6 @@ fn main() -> io::Result<()> {
 
     let mut gif_idx = 0usize;
     let mut frame_idx = 0usize;
-    let mut mode_idx = 0usize;
     let mut last_frame = Instant::now();
     let mut last_sent: Option<(usize, usize)> = None;
     let mut front_slot = 0usize;
@@ -317,11 +272,11 @@ fn main() -> io::Result<()> {
         let gif = &gifs[gif_idx];
         let frame = &gif.frames[frame_idx];
         let title = format!(
-            " {} — thresh: {} — frame {}/{} — ←/→ gif · t thresh · q quit ",
-            gif.name, mode_name(MODES[mode_idx]), frame_idx + 1, gif.frames.len()
+            " {} — frame {}/{} — ←/→ switch GIF — q quit ",
+            gif.name, frame_idx + 1, gif.frames.len()
         );
 
-        let render_lines = frame.braille[mode_idx].clone();
+        let render_lines = frame.braille.clone();
         terminal.draw(|f| {
             let area = f.area();
             let panes = Layout::default()
@@ -384,9 +339,6 @@ fn main() -> io::Result<()> {
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => break,
-                    KeyCode::Char('t') => {
-                        mode_idx = (mode_idx + 1) % MODES.len();
-                    }
                     KeyCode::Right => {
                         gif_idx = (gif_idx + 1) % gifs.len();
                         frame_idx = 0;
