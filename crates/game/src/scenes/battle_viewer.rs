@@ -248,13 +248,15 @@ pub fn piece_dots(
 }
 
 /// Step d: thin reuse of `render::transform::place` through the shared
-/// camera — places `dots` at the piece's cell CENTER world position.
+/// camera — places `dots` at the piece's stored `transform.translate` world
+/// position (seeded to the cell center by `Piece::new`, thereafter
+/// live-editable).
 pub fn place_piece<'a>(
     dots: &'a DotBuffer,
     piece: &Piece,
     geom: &BoardGeometry,
 ) -> DotPlacement<'a> {
-    place(dots, world_pos_for_cell(piece.col, piece.row), &geom.camera)
+    place(dots, piece.transform.translate, &geom.camera)
 }
 
 /// Uniform per-frame playback speed for the bundled wizard idle GIF. The
@@ -912,6 +914,7 @@ mod battle_viewer_scene_wiring_tests {
     use ratatui::buffer::Buffer;
     use ratatui::style::Color;
     use ratatui::Terminal;
+    use render::camera::Camera;
 
     fn render_to_buffer(scene: &BattleViewer, w: u16, h: u16) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
@@ -1088,6 +1091,78 @@ mod battle_viewer_scene_wiring_tests {
             }
         }
         assert!(found_glyph, "expected at least one sprite glyph cell in the board");
+    }
+
+    /// Projects a world position to the terminal cell its sprite is CENTERED
+    /// on, using the same `geom.camera.project` + dot->cell conversion
+    /// (`/2` cols, `/4` rows) that `place`/`dots_to_grid`/`draw_grid` use.
+    fn terminal_center_cell(pos: WorldPos, geom: &BoardGeometry) -> (i32, i32) {
+        let (dot_x, dot_y) = geom.camera.project(pos);
+        (
+            geom.board_rect.x as i32 + dot_x / 2,
+            geom.board_rect.y as i32 + dot_y / 4,
+        )
+    }
+
+    /// b3-t1 DELIVERABLE: `place_piece` must place a sprite at the piece's own
+    /// stored, independently-editable `transform.translate`, not re-derive the
+    /// position fresh from `col`/`row` every call. Mutating
+    /// `pieces[0].transform.translate` to a distinct in-board world position
+    /// must move the rendered sprite glyph on the very next `render()`: a
+    /// glyph appears near the NEW projected cell, and none remains near the
+    /// OLD col/row-derived cell.
+    #[test]
+    fn render_reflects_mutated_stored_piece_transform_translate() {
+        let mut scene = BattleViewer::default();
+        scene.pieces.truncate(1); // isolate to exactly one sprite on the board
+        let area = Rect::new(0, 0, 100, 50);
+        let geom = board_geometry(area);
+
+        let old_translate = scene.pieces[0].transform.translate;
+        let old_center = terminal_center_cell(old_translate, &geom);
+
+        let new_translate = WorldPos::new(4.5, 4.5);
+        assert_ne!(
+            new_translate, old_translate,
+            "test setup: new translate must differ from the seeded default"
+        );
+        scene.pieces[0].transform.translate = new_translate;
+        let new_center = terminal_center_cell(new_translate, &geom);
+
+        let buf = render_to_buffer(&scene, 100, 50);
+        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR.r, GRID_LINE_COLOR.g, GRID_LINE_COLOR.b);
+
+        let has_piece_glyph_near = |center: (i32, i32)| -> bool {
+            const WINDOW: i32 = 8;
+            for dy in -WINDOW..=WINDOW {
+                for dx in -WINDOW..=WINDOW {
+                    let x = center.0 + dx;
+                    let y = center.1 + dy;
+                    if x < geom.board_rect.x as i32
+                        || y < geom.board_rect.y as i32
+                        || x >= geom.board_rect.right() as i32
+                        || y >= geom.board_rect.bottom() as i32
+                    {
+                        continue;
+                    }
+                    let cell = buf.cell((x as u16, y as u16)).unwrap();
+                    if is_braille_glyph(cell.symbol()) && cell.fg != grid_line_fg {
+                        return true;
+                    }
+                }
+            }
+            false
+        };
+
+        assert!(
+            has_piece_glyph_near(new_center),
+            "expected a piece glyph near the NEW transform.translate-projected cell {new_center:?}"
+        );
+        assert!(
+            !has_piece_glyph_near(old_center),
+            "no piece glyph should remain near the OLD col/row-derived cell {old_center:?} \
+             after transform.translate was mutated away from it"
+        );
     }
 
     /// b3-t1 DELIVERABLE: `BattleViewer::default().pieces` is seeded from the
