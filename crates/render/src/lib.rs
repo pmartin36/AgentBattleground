@@ -9,6 +9,7 @@
 //! replace `fill`/`label` in place. Do not extend the solid-fill approach.
 
 pub mod anim;
+pub mod button;
 pub mod camera;
 pub mod composite;
 pub mod convert;
@@ -17,6 +18,7 @@ pub mod grid;
 pub mod transform;
 pub mod tween;
 pub use anim::AnimatedSprite;
+pub use button::{Button, ButtonState};
 pub use composite::{composite, Placement};
 pub use convert::convert;
 pub use grid::{draw_grid, Cell, Grid};
