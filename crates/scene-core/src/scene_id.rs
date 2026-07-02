@@ -5,7 +5,7 @@
 pub enum SceneId {
     Onboarding,
     MainHub,
-    ArmyEditor,
+    RosterManager,
     Matchmaking,
     BattleViewer,
     PostBattle,
@@ -21,7 +21,7 @@ impl SceneId {
         &[
             Onboarding,
             MainHub,
-            ArmyEditor,
+            RosterManager,
             Matchmaking,
             BattleViewer,
             PostBattle,
@@ -36,7 +36,7 @@ impl SceneId {
         match self {
             SceneId::Onboarding => "Onboarding",
             SceneId::MainHub => "Main Hub",
-            SceneId::ArmyEditor => "Army Editor",
+            SceneId::RosterManager => "Roster",
             SceneId::Matchmaking => "Matchmaking",
             SceneId::BattleViewer => "Battle Viewer",
             SceneId::PostBattle => "Post Battle",
@@ -51,7 +51,7 @@ impl SceneId {
         match self {
             SceneId::Onboarding => "Onboarding",
             SceneId::MainHub => "MainHub",
-            SceneId::ArmyEditor => "ArmyEditor",
+            SceneId::RosterManager => "RosterManager",
             SceneId::Matchmaking => "Matchmaking",
             SceneId::BattleViewer => "BattleViewer",
             SceneId::PostBattle => "PostBattle",
@@ -121,6 +121,11 @@ mod tests {
         assert_eq!(SceneId::MainHub.wire_name(), "MainHub");
     }
 
+    #[test]
+    fn wire_name_equals_rust_variant_identifier_roster_manager() {
+        assert_eq!(SceneId::RosterManager.wire_name(), "RosterManager");
+    }
+
     // --- from_wire unknown / empty inputs ---
 
     #[test]
@@ -145,6 +150,16 @@ mod tests {
     fn display_name_battle_viewer_is_spaced() {
         // spec 14 pins this value explicitly in the Hello example
         assert_eq!(SceneId::BattleViewer.display_name(), "Battle Viewer");
+    }
+
+    #[test]
+    fn display_name_roster_manager_is_roster() {
+        assert_eq!(SceneId::RosterManager.display_name(), "Roster");
+    }
+
+    #[test]
+    fn from_wire_roster_manager_resolves() {
+        assert_eq!(SceneId::from_wire("RosterManager"), Some(SceneId::RosterManager));
     }
 
     // --- serde ---

@@ -3,7 +3,7 @@ use scene_core::scene_id::SceneId;
 use scene_core::Inspectable;
 
 use crate::scene::Scene;
-use crate::scenes::{ArmyEditor, BattleViewer, Leaderboard, MainHub};
+use crate::scenes::{BattleViewer, Leaderboard, MainHub, RosterManager};
 
 /// Build a fresh boxed instance of the scene for `id` (spec 14: fresh-construct
 /// on switch, state resets). M1 implements four scenes; the other five catalog
@@ -12,7 +12,7 @@ pub fn construct(id: SceneId) -> Box<dyn Scene> {
     match id {
         SceneId::MainHub => Box::new(MainHub),
         SceneId::BattleViewer => Box::new(BattleViewer::default()),
-        SceneId::ArmyEditor => Box::new(ArmyEditor),
+        SceneId::RosterManager => Box::new(RosterManager),
         SceneId::Leaderboard => Box::new(Leaderboard),
         other => unimplemented!("scene {:?} is not implemented in M1", other),
     }
@@ -27,7 +27,7 @@ pub fn schema_for(id: SceneId) -> FieldSchema {
     match id {
         SceneId::MainHub => <MainHub as Inspectable>::schema(),
         SceneId::BattleViewer => <BattleViewer as Inspectable>::schema(),
-        SceneId::ArmyEditor => <ArmyEditor as Inspectable>::schema(),
+        SceneId::RosterManager => <RosterManager as Inspectable>::schema(),
         SceneId::Leaderboard => <Leaderboard as Inspectable>::schema(),
         other => unimplemented!("scene {:?} is not implemented in M1", other),
     }
@@ -59,9 +59,9 @@ mod tests {
     }
 
     #[test]
-    fn construct_army_editor_id_roundtrip() {
-        let scene = construct(SceneId::ArmyEditor);
-        assert_eq!(scene.id(), SceneId::ArmyEditor);
+    fn construct_roster_manager_id_roundtrip() {
+        let scene = construct(SceneId::RosterManager);
+        assert_eq!(scene.id(), SceneId::RosterManager);
     }
 
     #[test]
@@ -84,7 +84,7 @@ mod tests {
         let expected_true: HashSet<SceneId> = [
             SceneId::MainHub,
             SceneId::BattleViewer,
-            SceneId::ArmyEditor,
+            SceneId::RosterManager,
             SceneId::Leaderboard,
         ]
         .into_iter()
@@ -133,9 +133,9 @@ mod tests {
             "schema_for(BattleViewer) must equal <BattleViewer as Inspectable>::schema()"
         );
         assert_eq!(
-            schema_for(SceneId::ArmyEditor),
-            <ArmyEditor as Inspectable>::schema(),
-            "schema_for(ArmyEditor) must equal <ArmyEditor as Inspectable>::schema()"
+            schema_for(SceneId::RosterManager),
+            <RosterManager as Inspectable>::schema(),
+            "schema_for(RosterManager) must equal <RosterManager as Inspectable>::schema()"
         );
         assert_eq!(
             schema_for(SceneId::Leaderboard),

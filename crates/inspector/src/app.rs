@@ -1418,9 +1418,9 @@ mod tests {
                     schema: stub_schema_with_fields("BattleViewer", 2),
                 },
                 CatalogEntry {
-                    id: SceneId::ArmyEditor,
-                    name: "Army Editor".to_string(),
-                    schema: stub_schema_with_fields("ArmyEditor", 3),
+                    id: SceneId::RosterManager,
+                    name: "Roster".to_string(),
+                    schema: stub_schema_with_fields("RosterManager", 3),
                 },
                 CatalogEntry {
                     id: SceneId::Leaderboard,
@@ -1438,9 +1438,9 @@ mod tests {
         Message::Hello(Hello {
             scenes: vec![
                 CatalogEntry {
-                    id: SceneId::ArmyEditor,
-                    name: "Army Editor".to_string(),
-                    schema: stub_schema_with_fields("ArmyEditor2", 5),
+                    id: SceneId::RosterManager,
+                    name: "Roster".to_string(),
+                    schema: stub_schema_with_fields("RosterManager2", 5),
                 },
                 CatalogEntry {
                     id: SceneId::Leaderboard,
@@ -1612,9 +1612,9 @@ mod tests {
             "cached schema for BattleViewer must equal its source entry's schema"
         );
         assert_eq!(
-            s.schema_cache.get(&SceneId::ArmyEditor),
-            Some(&stub_schema_with_fields("ArmyEditor", 3)),
-            "cached schema for ArmyEditor must equal its source entry's schema"
+            s.schema_cache.get(&SceneId::RosterManager),
+            Some(&stub_schema_with_fields("RosterManager", 3)),
+            "cached schema for RosterManager must equal its source entry's schema"
         );
         assert_eq!(
             s.schema_cache.get(&SceneId::Leaderboard),

@@ -4,17 +4,17 @@
 //! a scene switch is visibly obvious — that is their whole purpose. They are
 //! NOT representative of real game scenes or the real renderer. See
 //! `specs/13-rendering.md` (renderer) and `specs/14-scene-architecture.md`
-//! (scene model). Real scenes (battle viewer, army editor, …) replace these.
+//! (scene model). Real scenes (battle viewer, roster manager, …) replace these.
 
-pub mod army_editor;
 pub mod battle_viewer;
 pub mod leaderboard;
 pub mod main_hub;
+pub mod roster_manager;
 
-pub use army_editor::ArmyEditor;
 pub use battle_viewer::BattleViewer;
 pub use leaderboard::Leaderboard;
 pub use main_hub::MainHub;
+pub use roster_manager::RosterManager;
 
 use scene_core::scene_id::SceneId;
 
@@ -24,7 +24,7 @@ pub(crate) fn scene_for_digit(c: char) -> Option<SceneId> {
     match c {
         '1' => Some(SceneId::MainHub),
         '2' => Some(SceneId::BattleViewer),
-        '3' => Some(SceneId::ArmyEditor),
+        '3' => Some(SceneId::RosterManager),
         '4' => Some(SceneId::Leaderboard),
         _ => None,
     }
@@ -70,7 +70,7 @@ mod tests {
     #[test]
     fn all_scene_colors_are_distinct() {
         use std::collections::HashSet;
-        let colors = [MainHub::COLOR, ArmyEditor::COLOR, Leaderboard::COLOR];
+        let colors = [MainHub::COLOR, RosterManager::COLOR, Leaderboard::COLOR];
         let mut seen: HashSet<(u8, u8, u8)> = HashSet::new();
         for (i, c) in colors.iter().enumerate() {
             assert!(
@@ -130,9 +130,9 @@ mod tests {
         SceneId::MainHub
     );
     scene_fill_and_id_test!(
-        army_editor_fills_with_color_and_correct_id,
-        ArmyEditor,
-        SceneId::ArmyEditor
+        roster_manager_fills_with_color_and_correct_id,
+        RosterManager,
+        SceneId::RosterManager
     );
     scene_fill_and_id_test!(
         leaderboard_fills_with_color_and_correct_id,

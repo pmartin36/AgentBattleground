@@ -10,15 +10,15 @@ use serde_json::Value as JsonValue;
 use crate::scene::{EngineCtx, InputEvent, Scene, Transition};
 
 #[derive(Default, Inspectable)]
-pub struct ArmyEditor;
+pub struct RosterManager;
 
-impl ArmyEditor {
+impl RosterManager {
     pub const COLOR: Rgba = Rgba::rgb(0x1e, 0xc8, 0x3a);
 }
 
-impl Scene for ArmyEditor {
+impl Scene for RosterManager {
     fn id(&self) -> SceneId {
-        SceneId::ArmyEditor
+        SceneId::RosterManager
     }
 
     fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {}

@@ -88,7 +88,7 @@ fn e2e_connect_then_switch_battle_viewer() {
         let expected_ids = [
             SceneId::MainHub,
             SceneId::BattleViewer,
-            SceneId::ArmyEditor,
+            SceneId::RosterManager,
             SceneId::Leaderboard,
         ];
         let got_ids: Vec<SceneId> = hello.scenes.iter().map(|e| e.id).collect();

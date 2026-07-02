@@ -595,13 +595,13 @@ mod tests {
             params: None,
         });
         manager.set_debug_transition(Transition {
-            target: SceneId::ArmyEditor,
+            target: SceneId::RosterManager,
             params: None,
         });
         manager.process_pending();
         assert_eq!(
             manager.active_id(),
-            SceneId::ArmyEditor,
+            SceneId::RosterManager,
             "debug must override gameplay when gameplay transition was set first"
         );
     }
@@ -611,7 +611,7 @@ mod tests {
     fn debug_transition_overrides_gameplay_debug_first() {
         let mut manager = SceneManager::new(SceneId::MainHub);
         manager.set_debug_transition(Transition {
-            target: SceneId::ArmyEditor,
+            target: SceneId::RosterManager,
             params: None,
         });
         manager.set_gameplay_transition(Transition {
@@ -621,7 +621,7 @@ mod tests {
         manager.process_pending();
         assert_eq!(
             manager.active_id(),
-            SceneId::ArmyEditor,
+            SceneId::RosterManager,
             "debug must override gameplay when debug transition was set first"
         );
     }
@@ -741,7 +741,7 @@ mod tests {
         let mut manager = SceneManager::new(SceneId::MainHub);
         // Debug claims pending first.
         manager.set_debug_transition(Transition {
-            target: SceneId::ArmyEditor,
+            target: SceneId::RosterManager,
             params: None,
         });
         // Digit '2' tries the gameplay path; must be blocked by pending_is_debug.
@@ -749,7 +749,7 @@ mod tests {
         manager.process_pending();
         assert_eq!(
             manager.active_id(),
-            SceneId::ArmyEditor,
+            SceneId::RosterManager,
             "debug transition must override the digit gameplay transition"
         );
     }
@@ -757,7 +757,7 @@ mod tests {
     // ═══════════════════════════════════════ b4-t2: IPC protocol methods ═══════
 
     /// `hello()` returns exactly four M1 scenes in digit-key order
-    /// (MainHub, BattleViewer, ArmyEditor, Leaderboard), each name matching
+    /// (MainHub, BattleViewer, RosterManager, Leaderboard), each name matching
     /// `display_name()`, with `active` == current active id (MainHub at boot).
     #[test]
     fn hello_lists_four_scenes_active_main_hub() {
@@ -769,7 +769,7 @@ mod tests {
         for expected in [
             SceneId::MainHub,
             SceneId::BattleViewer,
-            SceneId::ArmyEditor,
+            SceneId::RosterManager,
             SceneId::Leaderboard,
         ] {
             assert!(
@@ -977,14 +977,14 @@ mod tests {
         let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
         // Use the gameplay path (not debug).
         manager.set_gameplay_transition(Transition {
-            target: SceneId::ArmyEditor,
+            target: SceneId::RosterManager,
             params: None,
         });
         let result = manager.process_pending_notify(&event_tx);
         assert_eq!(
             result,
-            Some(SceneId::ArmyEditor),
-            "process_pending_notify must return Some(ArmyEditor) for a gameplay transition"
+            Some(SceneId::RosterManager),
+            "process_pending_notify must return Some(RosterManager) for a gameplay transition"
         );
         let ev = event_rx
             .recv_timeout(Duration::from_millis(200))
@@ -992,7 +992,7 @@ mod tests {
         assert!(ev.reply_to.is_none());
         match ev.body {
             Message::SceneChanged(sc) => {
-                assert_eq!(sc.id, SceneId::ArmyEditor);
+                assert_eq!(sc.id, SceneId::RosterManager);
             }
             other => panic!("expected SceneChanged body, got {:?}", other),
         }

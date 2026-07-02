@@ -295,6 +295,12 @@ mod tests {
     }
 
     #[test]
+    fn resolve_boot_scene_flag_roster_manager_resolves_with_no_params() {
+        let result = resolve_boot(args(&["--scene", "RosterManager"]));
+        assert_eq!(result, Ok((SceneId::RosterManager, None)));
+    }
+
+    #[test]
     fn resolve_boot_scene_flag_unknown_name_errors() {
         let result = resolve_boot(args(&["--scene", "Nope"]));
         assert_eq!(result, Err(CliError::UnknownScene("Nope".to_string())));
