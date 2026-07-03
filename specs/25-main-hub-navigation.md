@@ -1,6 +1,10 @@
+> # ✅ DONE! — Completed 2026-07-03
+
 # Main Hub Navigation
 
-> **Status: draft (not started) — design confirmed with the project owner.** A slice of `02-main-hub-dashboard.md`: a real, clickable-and-keyboard-navigable menu on `SceneId::MainHub`, replacing its current placeholder fill. The full dashboard vision (server-backed status, notifications, daily battle gate) remains entirely out of scope — this is navigation only.
+> **Status: implemented.** A slice of `02-main-hub-dashboard.md`: a real, clickable-and-keyboard-navigable menu on `SceneId::MainHub`, replacing its current placeholder fill. The full dashboard vision (server-backed status, notifications, daily battle gate) remains entirely out of scope — this is navigation only.
+>
+> Known follow-up: the title box and menu buttons use `anchor`/`stack` (spec 26) which don't yet support a margin/inset parameter — see `28-anchor-margin-support` (queued).
 
 ## Purpose
 Give the player a real way to navigate from the hub to the rest of the game — Roster, Battle, Exit — via a boxed-title, bordered-button menu, replacing the debug-only digit-key switcher as the actual in-game navigation path (the digit-key switcher itself stays, additive, for debug use).
