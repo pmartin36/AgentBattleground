@@ -312,7 +312,6 @@ mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::backend::TestBackend;
-    use ratatui::style::Color;
     use ratatui::Terminal;
     use scene_core::ipc::Message;
     use scene_core::scene_id::SceneId;
@@ -563,10 +562,12 @@ mod tests {
     // ------------------------------------------------------------------ boot
 
     /// `SceneManager::new(MainHub)` boots with `active_id() == MainHub` and
-    /// renders cell (0,0) as the braille glyph ⣿ in MainHub's declared blue.
+    /// renders real title-box content (frame + logo, no bare display-name
+    /// text) — the title box's new contract per b5-t2, not the old
+    /// `fill_and_label` solid-fill placeholder.
     /// This doubles as the BEHAVIORAL render evidence (TestBackend, no real TTY).
     #[test]
-    fn boot_is_main_hub_and_renders_blue() {
+    fn boot_is_main_hub_and_renders_title_box() {
         let mut manager = SceneManager::new(SceneId::MainHub);
         assert_eq!(
             manager.active_id(),
@@ -578,16 +579,16 @@ mod tests {
         terminal.draw(|f| manager.render(f)).unwrap();
         let buf = terminal.backend().buffer().clone();
 
-        let cell = buf.cell((0, 0)).expect("cell (0,0) must exist in a 40×10 buffer");
-        assert_eq!(
-            cell.symbol(),
-            "⣿",
-            "boot render must fill cell (0,0) with braille glyph ⣿"
+        let painted = buf.content().iter().any(|cell| cell.symbol() != " ");
+        assert!(
+            painted,
+            "boot render must paint at least one non-space cell (title frame + logo)"
         );
-        assert_eq!(
-            cell.fg,
-            Color::Rgb(MainHub::COLOR.r, MainHub::COLOR.g, MainHub::COLOR.b),
-            "boot render fg must match MainHub::COLOR (blue 0x1e3ac8)"
+
+        let full_text: String = buf.content().iter().map(|cell| cell.symbol()).collect();
+        assert!(
+            !full_text.contains("Main Hub"),
+            "boot render must not contain the bare display-name text \"Main Hub\", got:\n{full_text}"
         );
     }
 
@@ -901,9 +902,10 @@ mod tests {
                 assert_eq!(id, SceneId::MainHub, "StateSnapshot.id must be the active scene");
                 assert_eq!(
                     snapshot,
-                    json!({}),
+                    json!({"cursor_index": 0}),
                     "StateSnapshot.snapshot must be the active scene's real \
-                     inspect().snapshot() (MainHub has no fields, so {{}})"
+                     inspect().snapshot() (MainHub's sole visible field is \
+                     cursor_index, default 0)"
                 );
             }
             other => panic!("expected StateSnapshot body second, got {:?}", other),
@@ -1091,17 +1093,18 @@ mod tests {
         );
     }
 
-    /// `MainHub` is a zero-field scene; its `inspect()` hook must still be
-    /// genuinely wired (real derive + `{ self }`), not a stub that merely
-    /// compiles — the exact "silently unreal" risk this task guards against.
+    /// `MainHub`'s only visible field is `cursor_index` (default 0, b5-t4);
+    /// its `inspect()` hook must still be genuinely wired (real derive +
+    /// `{ self }`), not a stub that merely compiles — the exact "silently
+    /// unreal" risk this task guards against.
     #[test]
     fn trivial_scene_inspect_snapshot_is_empty_object() {
         use serde_json::json;
 
-        let mut hub = MainHub;
+        let mut hub = MainHub::default();
         assert_eq!(
             hub.inspect().snapshot(),
-            json!({}),
+            json!({"cursor_index": 0}),
             "MainHub::inspect() must expose a real (derived) Inspectable \
              snapshot, not an unimplemented stub"
         );

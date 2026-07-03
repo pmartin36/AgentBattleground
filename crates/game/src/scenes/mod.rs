@@ -125,32 +125,16 @@ mod tests {
     }
 
     scene_fill_and_id_test!(
-        main_hub_fills_with_color_and_correct_id,
-        MainHub,
-        SceneId::MainHub
-    );
-    scene_fill_and_id_test!(
         leaderboard_fills_with_color_and_correct_id,
         Leaderboard,
         SceneId::Leaderboard
     );
 
-    // ------------------------------------------------------------------- label
+    // ------------------------------------------------------------ digit switch
 
-    /// MainHub's render must place the display name "Main Hub" on the center row.
+    /// Regression guard: digit '1' must keep routing to MainHub.
     #[test]
-    fn main_hub_center_row_contains_display_name() {
-        let scene = MainHub;
-        let (w, h) = (40u16, 10u16);
-        let buf = render_scene_to_buffer(&scene, w, h);
-        let center_y = h / 2;
-        let row_text: String = (0..w)
-            .map(|x| buf.cell((x, center_y)).unwrap().symbol().to_string())
-            .collect();
-        let trimmed = row_text.trim();
-        assert!(
-            trimmed.contains("Main Hub"),
-            "center row (y={center_y}) of MainHub render must contain the display name 'Main Hub', got: {trimmed:?}"
-        );
+    fn scene_for_digit_one_maps_to_main_hub() {
+        assert_eq!(scene_for_digit('1'), Some(SceneId::MainHub));
     }
 }

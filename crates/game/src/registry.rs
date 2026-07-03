@@ -10,7 +10,7 @@ use crate::scenes::{BattleViewer, Leaderboard, MainHub, RosterManager};
 /// variants are not yet built and panic via `unimplemented!`.
 pub fn construct(id: SceneId) -> Box<dyn Scene> {
     match id {
-        SceneId::MainHub => Box::new(MainHub),
+        SceneId::MainHub => Box::new(MainHub::default()),
         SceneId::BattleViewer => Box::new(BattleViewer::default()),
         SceneId::RosterManager => Box::new(RosterManager::new()),
         SceneId::Leaderboard => Box::new(Leaderboard),
