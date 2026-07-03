@@ -189,6 +189,60 @@ impl Button {
     }
 }
 
+/// Bordered hollow frame + centered text label — the second consumer of
+/// [`ButtonCore`] (spec 25 line 28). See `research.md` for b3-t1's blueprint;
+/// `render`/`handle_mouse` bodies below are stubs pending the code-writer.
+pub struct FrameButton {
+    core: ButtonCore,
+    frame: DynamicImage,
+    label: String,
+}
+
+impl FrameButton {
+    /// New frame button over `rect`, starting `Idle`, labeled with `label`.
+    pub fn new(rect: Rect, label: impl Into<String>) -> Self {
+        Self {
+            core: ButtonCore::new(rect),
+            frame: image::load_from_memory(assets::FRAME_PANEL)
+                .expect("FRAME_PANEL must decode — bundled first-party asset"),
+            label: label.into(),
+        }
+    }
+
+    /// Current visual state.
+    pub fn state(&self) -> ButtonState {
+        self.core.state()
+    }
+
+    /// Update on-screen rect (scenes recompute layout each frame).
+    pub fn set_rect(&mut self, rect: Rect) {
+        self.core.set_rect(rect);
+    }
+
+    /// Drive the state machine with one mouse event. Returns `true` exactly
+    /// on the call that completes a click (Up while Pressed, inside rect).
+    pub fn handle_mouse(&mut self, ev: &MouseEvent) -> bool {
+        self.core.handle_mouse(ev)
+    }
+
+    /// Paint the state-tinted bordered frame plus centered label onto
+    /// `self.rect` in `buf`.
+    pub fn render(&self, buf: &mut Buffer) {
+        let rect = self.core.rect();
+        let dot_cols = rect.width as usize * 2;
+        let dot_rows = rect.height as usize * 4;
+        if dot_cols == 0 || dot_rows == 0 {
+            return;
+        }
+
+        let frame = crate::dots::sprite_to_dots(&self.frame, dot_cols as u32, dot_rows as u32);
+        let tinted = crate::dots::tint(&frame, self.core.state().tint_color());
+        let grid = crate::dots::dots_to_grid(&tinted);
+        crate::grid::draw_grid(buf, rect, &grid);
+        crate::label(buf, rect, &self.label);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,5 +523,130 @@ mod tests {
         let oversized = Button::new(Rect::new(0, 0, 50, 50), assets::ICON_HOME);
         let mut buf_small = make_buf(5, 5);
         oversized.render(&mut buf_small); // must not panic
+    }
+}
+
+/// b3-t1: `FrameButton` tests. Separate module from `mod tests` above, which
+/// must stay byte-for-byte unmodified per b1-t1's refactor constraint.
+#[cfg(test)]
+mod frame_button_tests {
+    use super::*;
+    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};
+    use ratatui::style::Color;
+
+    fn make_buf(w: u16, h: u16) -> Buffer {
+        Buffer::empty(Rect::new(0, 0, w, h))
+    }
+
+    fn ev(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        }
+    }
+
+    /// Rect large enough for a solid top border clear of the centered label.
+    fn frame_rect() -> Rect {
+        Rect::new(2, 1, 8, 4)
+    }
+
+    /// Renders a fresh `FrameButton` in `state` and returns the painted fg
+    /// color of a top-center BORDER cell (not the transparent interior, not
+    /// the label's center row).
+    fn render_top_border_fg(state: ButtonState) -> Color {
+        let rect = frame_rect();
+        let mut b = FrameButton::new(rect, "Go");
+        let inside = (rect.x + 1, rect.y + 1);
+        match state {
+            ButtonState::Idle => {}
+            ButtonState::Hover => {
+                b.handle_mouse(&ev(MouseEventKind::Moved, inside.0, inside.1));
+            }
+            ButtonState::Pressed => {
+                b.handle_mouse(&ev(MouseEventKind::Moved, inside.0, inside.1));
+                b.handle_mouse(&ev(
+                    MouseEventKind::Down(MouseButton::Left),
+                    inside.0,
+                    inside.1,
+                ));
+            }
+        }
+        assert_eq!(b.state(), state, "test setup must reach the target state");
+
+        let mut buf = make_buf(16, 8);
+        b.render(&mut buf);
+
+        let bx = rect.x + rect.width / 2;
+        let by = rect.y;
+        let cell = buf
+            .cell((bx, by))
+            .unwrap_or_else(|| panic!("top-border cell ({bx},{by}) must exist in the buffer"));
+        assert_ne!(
+            cell.symbol(),
+            " ",
+            "top-border cell must be painted (border ring is opaque there) in state {state:?}"
+        );
+        cell.fg
+    }
+
+    /// `render` must produce a visibly different painted color for each of
+    /// the three `ButtonState`s at the same border cell, proving the
+    /// per-state tint is wired through the frame's dot pipeline.
+    #[test]
+    fn frame_button_render_tints_differ_across_all_three_states() {
+        let idle = render_top_border_fg(ButtonState::Idle);
+        let hover = render_top_border_fg(ButtonState::Hover);
+        let pressed = render_top_border_fg(ButtonState::Pressed);
+
+        assert_ne!(idle, hover, "Idle and Hover must paint different colors");
+        assert_ne!(idle, pressed, "Idle and Pressed must paint different colors");
+        assert_ne!(hover, pressed, "Hover and Pressed must paint different colors");
+    }
+
+    /// `render` draws the exact label text centered on the rect's middle
+    /// row, matching `label`'s own centering formula.
+    #[test]
+    fn frame_button_render_draws_centered_label() {
+        let rect = frame_rect();
+        let b = FrameButton::new(rect, "Go");
+        let mut buf = make_buf(16, 8);
+        b.render(&mut buf);
+
+        let text_len: u16 = 2; // "Go"
+        let expected_y = rect.y + rect.height / 2;
+        let expected_x = rect.x + (rect.width - text_len) / 2;
+
+        let first = buf.cell((expected_x, expected_y)).unwrap();
+        assert_eq!(
+            first.symbol(),
+            "G",
+            "first char of label 'Go' must be at ({expected_x},{expected_y})"
+        );
+        let second = buf.cell((expected_x + 1, expected_y)).unwrap();
+        assert_eq!(
+            second.symbol(),
+            "o",
+            "second char of label 'Go' must be at ({},{expected_y})",
+            expected_x + 1
+        );
+    }
+
+    /// A completed click (Moved-inside, Down-inside, Up-inside) reuses
+    /// `ButtonCore`'s transition table: `Up` returns `true` and state ends
+    /// `Hover`, matching `Button`'s equivalent test.
+    #[test]
+    fn frame_button_handle_mouse_completes_click() {
+        let rect = frame_rect();
+        let inside = (rect.x + 1, rect.y + 1);
+        let mut b = FrameButton::new(rect, "Go");
+
+        b.handle_mouse(&ev(MouseEventKind::Moved, inside.0, inside.1));
+        b.handle_mouse(&ev(MouseEventKind::Down(MouseButton::Left), inside.0, inside.1));
+        let fired = b.handle_mouse(&ev(MouseEventKind::Up(MouseButton::Left), inside.0, inside.1));
+
+        assert!(fired, "Up inside while Pressed must report a completed click");
+        assert_eq!(b.state(), ButtonState::Hover);
     }
 }
