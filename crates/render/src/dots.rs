@@ -52,6 +52,17 @@ impl DotBuffer {
     }
 
     /// Sets the dot at `(col, row)`.  Silent no-op when `col >= self.cols || row >= self.rows`.
+    ///
+    /// Deliberately asymmetric with `Grid::set` (which panics on OOB): this
+    /// silent clip is load-bearing. `composite::composite_dots` positions a
+    /// source `DotBuffer` at an arbitrary offset and only pre-checks the
+    /// lower bound (`dx >= 0 && dy >= 0`); any dot that lands past the far
+    /// edge — the common case of a sprite placed partially off-screen —
+    /// relies on this no-op to clip rather than panic. `Grid::set` never
+    /// needs this because its only writer (`dots_to_grid`) maps dot blocks to
+    /// cells 1:1 with matching dimensions, so an OOB write there is always a
+    /// real bug, not an expected clip. Do not make this panic without also
+    /// auditing every `composite_dots` caller for partial-overflow placements.
     pub fn set(&mut self, col: usize, row: usize, dot: Dot) {
         if col >= self.cols || row >= self.rows {
             return;

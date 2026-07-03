@@ -46,6 +46,13 @@ impl Grid {
     }
 
     /// Sets the cell at (col, row). Panics if out of bounds.
+    ///
+    /// Deliberately asymmetric with `dots::DotBuffer::set` (which silently
+    /// clips OOB writes): `Grid::set`'s only writer, `dots_to_grid`, maps dot
+    /// blocks to cells 1:1 with matching dimensions, so an OOB write here is
+    /// always a real bug, never an expected clip — unlike `DotBuffer`, which
+    /// is written through arbitrary-offset placements (`composite_dots`)
+    /// where partial off-buffer overflow is the common, expected case.
     pub fn set(&mut self, col: usize, row: usize, cell: Cell) {
         assert!(col < self.cols, "col {col} out of bounds (cols={})", self.cols);
         assert!(row < self.rows, "row {row} out of bounds (rows={})", self.rows);

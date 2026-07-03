@@ -6,6 +6,7 @@
 //! `SwitcherState`.
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use scene_core::color::Rgba;
 use scene_core::inspect::{FieldSchema, FieldTag};
@@ -31,7 +32,11 @@ pub struct SwitcherState {
     /// Every catalog entry's schema, keyed by scene id. Populated by `Hello` (b4-t1).
     pub schema_cache: HashMap<SceneId, FieldSchema>,
     /// The active scene's schema — the field-editor panel skeleton (b4-t1).
-    pub panel_schema: Option<FieldSchema>,
+    /// `Rc`-wrapped so `render_field_panel`'s per-frame clone (required to
+    /// avoid holding an immutable borrow into `state` while also passing
+    /// `state` mutably to `render_field`) is an O(1) refcount bump, not a
+    /// deep tree clone repeated every frame under continuous repaint.
+    pub panel_schema: Option<Rc<FieldSchema>>,
     /// The active scene's live values, from `Hello`/`SceneChanged.snapshot` (b4-t2).
     pub panel_snapshot: serde_json::Value,
     /// Buffered local edits not yet submitted, keyed by patch path (b4-t3).
@@ -93,12 +98,12 @@ impl SwitcherState {
                 for entry in &h.scenes {
                     self.schema_cache.insert(entry.id, entry.schema.clone());
                 }
-                self.panel_schema = self.schema_cache.get(&h.active).cloned();
+                self.panel_schema = self.schema_cache.get(&h.active).cloned().map(Rc::new);
             }
             Message::SceneChanged(sc) => {
                 self.active = Some(sc.id);
                 self.selected = Some(sc.id);
-                self.panel_schema = self.schema_cache.get(&sc.id).cloned();
+                self.panel_schema = self.schema_cache.get(&sc.id).cloned().map(Rc::new);
                 self.panel_snapshot = sc.snapshot.clone();
             }
             Message::StateSnapshot(ss) => {
@@ -558,7 +563,9 @@ impl InspectorApp {
             return;
         }
         if let Some(id) = self.state.active {
-            let _ = self.client.send_apply_state(id, patch);
+            if let Err(e) = self.client.send_apply_state(id, patch) {
+                eprintln!("inspector: send_apply_state failed: {e}");
+            }
             self.state.begin_submit();
         }
     }
@@ -574,7 +581,9 @@ impl InspectorApp {
     #[allow(dead_code)]
     pub fn set_live_apply(&mut self, on: bool) {
         if on != self.live_apply {
-            let _ = self.client.send_subscribe(on);
+            if let Err(e) = self.client.send_subscribe(on) {
+                eprintln!("inspector: send_subscribe failed: {e}");
+            }
             self.live_apply = on;
         }
     }
@@ -584,7 +593,9 @@ impl InspectorApp {
     /// once, right after construction — it does not run automatically.
     #[allow(dead_code)]
     pub fn start(&mut self) {
-        let _ = self.client.send_subscribe(self.live_apply);
+        if let Err(e) = self.client.send_subscribe(self.live_apply) {
+            eprintln!("inspector: send_subscribe failed: {e}");
+        }
     }
 
     /// Drain this frame's live-edit signal; while `live_apply` is on, send
@@ -599,7 +610,9 @@ impl InspectorApp {
             for (path, value) in edits {
                 let mut patch = BTreeMap::new();
                 patch.insert(path, value);
-                let _ = self.client.send_apply_state(id, patch);
+                if let Err(e) = self.client.send_apply_state(id, patch) {
+                    eprintln!("inspector: send_apply_state failed: {e}");
+                }
             }
         }
     }
@@ -652,7 +665,9 @@ impl InspectorApp {
                         .clicked()
                     {
                         if let Some(s) = self.state.selected {
-                            let _ = self.client.send_switch(s.wire_name(), None);
+                            if let Err(e) = self.client.send_switch(s.wire_name(), None) {
+                                eprintln!("inspector: send_switch failed: {e}");
+                            }
                         }
                     }
                 });
@@ -965,7 +980,7 @@ mod tests {
     fn dirty_field_row_renders_distinct_highlight() {
         let ctx = egui::Context::default();
         let mut state = SwitcherState::new();
-        state.panel_schema = Some(struct_schema("Root", vec![leaf("flag", FieldTag::Bool)]));
+        state.panel_schema = Some(Rc::new(struct_schema("Root", vec![leaf("flag", FieldTag::Bool)])));
         state.panel_snapshot = serde_json::json!({"flag": false});
 
         let (_, clean_output) = run_pass(&ctx, &mut state, 0.0, vec![]);
@@ -995,7 +1010,7 @@ mod tests {
     fn bool_checkbox_toggle_marks_dirty() {
         let ctx = egui::Context::default();
         let mut state = SwitcherState::new();
-        state.panel_schema = Some(struct_schema("Root", vec![leaf("flag", FieldTag::Bool)]));
+        state.panel_schema = Some(Rc::new(struct_schema("Root", vec![leaf("flag", FieldTag::Bool)])));
         state.panel_snapshot = serde_json::json!({"flag": false});
 
         let (responses, _) = run_pass(&ctx, &mut state, 0.0, vec![]);
@@ -1026,7 +1041,7 @@ mod tests {
         let mut state = SwitcherState::new();
         let mut readonly_field = leaf("locked_count", FieldTag::Int);
         readonly_field.readonly = true;
-        state.panel_schema = Some(struct_schema("Root", vec![readonly_field]));
+        state.panel_schema = Some(Rc::new(struct_schema("Root", vec![readonly_field])));
         state.panel_snapshot = serde_json::json!({"locked_count": 5});
 
         let (responses, _) = run_pass(&ctx, &mut state, 0.0, vec![]);
@@ -1056,7 +1071,7 @@ mod tests {
         let mut labeled = leaf("custom_field", FieldTag::Bool);
         labeled.label = Some("Custom Label".to_string());
         let bare = leaf("raw_name", FieldTag::Bool);
-        state.panel_schema = Some(struct_schema("Root", vec![labeled, bare]));
+        state.panel_schema = Some(Rc::new(struct_schema("Root", vec![labeled, bare])));
         state.panel_snapshot = serde_json::json!({"custom_field": false, "raw_name": false});
 
         let (_, output) = run_pass(&ctx, &mut state, 0.0, vec![]);
@@ -1081,7 +1096,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut state = SwitcherState::new();
         let element = struct_schema("item", vec![leaf("nested", FieldTag::Bool)]);
-        state.panel_schema = Some(struct_schema("Root", vec![list_schema("items", element)]));
+        state.panel_schema = Some(Rc::new(struct_schema("Root", vec![list_schema("items", element)])));
         state.panel_snapshot = serde_json::json!({"items": [{"nested": false}, {"nested": true}]});
 
         let (responses, _) = run_pass(&ctx, &mut state, 0.0, vec![]);
@@ -1127,7 +1142,7 @@ mod tests {
         let mut state = SwitcherState::new();
         let mut power = leaf("power", FieldTag::Float);
         power.range = Some(Range { min: 0.0, max: 10.0 });
-        state.panel_schema = Some(struct_schema("Root", vec![power]));
+        state.panel_schema = Some(Rc::new(struct_schema("Root", vec![power])));
         state.panel_snapshot = serde_json::json!({"power": 5.0});
 
         let (responses, _) = run_pass(&ctx, &mut state, 0.0, vec![]);
@@ -1199,7 +1214,7 @@ mod tests {
         let mut state = SwitcherState::new();
         let team = enum_schema("team", vec!["A", "B"]);
         let power = leaf("power", FieldTag::Float);
-        state.panel_schema = Some(struct_schema("Root", vec![team, power]));
+        state.panel_schema = Some(Rc::new(struct_schema("Root", vec![team, power])));
         state.panel_snapshot = serde_json::json!({"team": "A", "power": 5.0});
 
         let (responses, _) = run_pass(&ctx, &mut state, 0.0, vec![]);
@@ -1299,7 +1314,7 @@ mod tests {
     fn color_leaf_renders_enabled_interactive_widget() {
         let ctx = egui::Context::default();
         let mut state = SwitcherState::new();
-        state.panel_schema = Some(struct_schema("Root", vec![leaf("tint", FieldTag::Color)]));
+        state.panel_schema = Some(Rc::new(struct_schema("Root", vec![leaf("tint", FieldTag::Color)])));
         state.panel_snapshot = serde_json::json!({"tint": "#c81e1e80"});
 
         let (responses, _) = run_pass(&ctx, &mut state, 0.0, vec![]);
@@ -1336,7 +1351,7 @@ mod tests {
 
         let ctx = egui::Context::default();
         let mut state = SwitcherState::new();
-        state.panel_schema = Some(Carrier::schema());
+        state.panel_schema = Some(Rc::new(Carrier::schema()));
         state.panel_snapshot = Carrier {
             payload: Payload::Loaded { hp: 5, mana: 9 },
         }
@@ -1631,8 +1646,8 @@ mod tests {
         let mut s = SwitcherState::new();
         s.apply(&four_scene_hello());
         assert_eq!(
-            s.panel_schema,
-            Some(stub_schema_with_fields("MainHub", 1)),
+            s.panel_schema.as_deref(),
+            Some(&stub_schema_with_fields("MainHub", 1)),
             "panel_schema must equal the active (MainHub) scene's cached schema"
         );
     }
@@ -1660,8 +1675,8 @@ mod tests {
             "Leaderboard's cache entry must be replaced by the second Hello's schema"
         );
         assert_eq!(
-            s.panel_schema,
-            Some(stub_schema_with_fields("Leaderboard2", 6)),
+            s.panel_schema.as_deref(),
+            Some(&stub_schema_with_fields("Leaderboard2", 6)),
             "panel_schema must track the second Hello's active scene (Leaderboard)"
         );
     }
@@ -1693,13 +1708,13 @@ mod tests {
         }));
 
         assert_eq!(
-            s.panel_schema,
-            Some(stub_schema_with_fields("BattleViewer", 2)),
+            s.panel_schema.as_deref(),
+            Some(&stub_schema_with_fields("BattleViewer", 2)),
             "panel_schema must swap to BattleViewer's cached schema on SceneChanged"
         );
         assert_ne!(
-            s.panel_schema,
-            Some(stub_schema_with_fields("MainHub", 1)),
+            s.panel_schema.as_deref(),
+            Some(&stub_schema_with_fields("MainHub", 1)),
             "panel_schema must not remain the previously-active scene's schema"
         );
         assert_eq!(
@@ -1725,8 +1740,8 @@ mod tests {
         }));
 
         assert_eq!(
-            s.panel_schema,
-            Some(stub_schema_with_fields("MainHub", 1)),
+            s.panel_schema.as_deref(),
+            Some(&stub_schema_with_fields("MainHub", 1)),
             "panel_schema must swap back to MainHub's cached schema"
         );
         assert_eq!(
@@ -2153,7 +2168,7 @@ mod tests {
             ],
         );
         let mut state = SwitcherState::new();
-        state.panel_schema = Some(struct_schema("Root", vec![list_schema("pieces", element)]));
+        state.panel_schema = Some(Rc::new(struct_schema("Root", vec![list_schema("pieces", element)])));
 
         let pieces: Vec<serde_json::Value> = (0..12)
             .map(|_| serde_json::json!({"a": 0, "b": 0.0, "c": false}))
@@ -2217,7 +2232,7 @@ mod tests {
                 leaf("c", FieldTag::Bool),
             ],
         );
-        app.state.panel_schema = Some(struct_schema("Root", vec![list_schema("pieces", element)]));
+        app.state.panel_schema = Some(Rc::new(struct_schema("Root", vec![list_schema("pieces", element)])));
         let pieces: Vec<serde_json::Value> = (0..12)
             .map(|_| serde_json::json!({"a": 0, "b": 0.0, "c": false}))
             .collect();
