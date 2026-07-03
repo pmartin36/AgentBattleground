@@ -1,6 +1,10 @@
+> # ✅ DONE! — Completed 2026-07-02
+
 # Screen-Space Positioning
 
-> **Status: draft (not started).** Reusable primitives for placing UI elements (a sprite, a `22-braille-ui-chrome` `Button`, a text label) in screen space — terminal-cell coordinates, the same space `ratatui::layout::Rect` already uses — without every scene hand-deriving its own `Rect` arithmetic. `22-braille-ui-chrome` explicitly scoped generic anchoring/layout helpers out at the time ("each consuming scene computes its own button `Rect`s... via ordinary `ratatui::layout::Layout`"); this spec adds that capability now that more than one scene needs it. Not a scope reopening of `22` (already shipped and unchanged) — new capability.
+> **Status: implemented.** Reusable primitives for placing UI elements (a sprite, a `22-braille-ui-chrome` `Button`, a text label) in screen space — terminal-cell coordinates, the same space `ratatui::layout::Rect` already uses — without every scene hand-deriving its own `Rect` arithmetic. `22-braille-ui-chrome` explicitly scoped generic anchoring/layout helpers out at the time ("each consuming scene computes its own button `Rect`s... via ordinary `ratatui::layout::Layout`"); this spec adds that capability now that more than one scene needs it. Not a scope reopening of `22` (already shipped and unchanged) — new capability.
+>
+> Lands as `render::screen_layout`: `anchor()` (9-position grid, pure function, saturating/clamped), `stack()` (vertical/horizontal, gap-spaced), `RectTween` (animates a `Rect` via 4 independent `Tween` channels, reusing `crate::tween::Tween` unmodified).
 
 ## Purpose
 Give any scene a small, reusable vocabulary for "where does this go on screen" — anchoring to a corner/edge/center, stacking a group of elements with spacing, and (building on top of those) animating an element's position over time — instead of each scene re-deriving `Rect` splits and offset math from scratch.
