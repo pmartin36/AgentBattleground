@@ -69,7 +69,3 @@ High-level design specs for each segment of the game live in `/specs`:
 | 28 | [Anchor Margin Support](specs/completed/28-anchor-margin-support.md) ✅ |
 | 29 | [Tint Shape Invariance](specs/29-tint-shape-invariance.md) |
 | 30 | [Asset Decode Caching](specs/30-asset-decode-caching.md) |
-
-## Status
-
-Early design phase. Specs are being written. No implementation yet.
