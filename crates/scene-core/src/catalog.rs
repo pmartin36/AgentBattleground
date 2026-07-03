@@ -7,7 +7,7 @@ use crate::scene_key::SceneKey;
 /// Literal, non-generic shape (b3-t1 collapse): `Scene` now lives in scene-core
 /// itself, so this returns `Box<dyn Scene>` directly rather than the Phase-A
 /// interim associated-type form (`type Scene: ?Sized`).
-pub trait SceneCatalog: Send {
+pub trait SceneCatalog: Send + Sync {
     /// Build a fresh boxed scene for `key`. Panics for a cataloged-but-unbuilt key
     /// (mirrors today's `registry::construct` `unimplemented!()`); callers guard with
     /// `is_available` first (spec Risks: panic behavior preserved, not turned into Result).

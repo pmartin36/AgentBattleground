@@ -41,7 +41,8 @@ fn connect_retry(path: &std::path::Path) -> UnixStream {
 #[test]
 fn e2e_connect_then_switch_battle_viewer() {
     // ── Spawn the IPC server ──────────────────────────────────────────────────
-    let (handle, cmd_rx) = ipc_server::spawn().expect("ipc_server::spawn must succeed");
+    let (handle, cmd_rx) =
+        ipc_server::spawn(Arc::new(GameCatalog)).expect("ipc_server::spawn must succeed");
 
     // Clone the event sender so the driver loop can push SceneChanged.
     let events = handle.events.clone();

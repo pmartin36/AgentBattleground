@@ -46,7 +46,8 @@ fn connect_retry(path: &std::path::Path) -> UnixStream {
 /// client signals done, so callers can assert on post-loop state (e.g. via
 /// `render()`).
 fn run_e2e(client_fn: impl FnOnce(&mut UnixStream) + Send + 'static) -> SceneManager {
-    let (handle, cmd_rx) = ipc_server::spawn().expect("ipc_server::spawn must succeed");
+    let (handle, cmd_rx) =
+        ipc_server::spawn(Arc::new(GameCatalog)).expect("ipc_server::spawn must succeed");
     let events = handle.events.clone();
     let mut mgr = SceneManager::new(SceneKey::from(SceneId::BattleViewer), Box::new(GameCatalog));
 

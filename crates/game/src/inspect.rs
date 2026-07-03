@@ -2,6 +2,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcCommand};
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
+
+use scene_core::SceneCatalog;
 
 use crate::ipc_server::{self, IpcHandle};
 use crate::manager::Command;
@@ -37,16 +40,19 @@ pub fn spawn_inspector(bin: &Path, socket_path: &Path) -> io::Result<Child> {
 /// Conditionally start the IPC server and inspector.
 ///
 /// - `supported == false` → eprintln warning, return `Ok(None)` (no socket bound).
-/// - `supported == true`  → bind socket via `ipc_server::spawn()`, print the path,
+/// - `supported == true`  → bind socket via `ipc_server::spawn(catalog)`, print the path,
 ///   attempt to spawn the inspector (warn-and-continue on `Err`), return
 ///   `Ok(Some((handle, cmd_rx)))`.
-pub fn start(supported: bool) -> io::Result<Option<(IpcHandle, Receiver<Command>)>> {
+pub fn start(
+    supported: bool,
+    catalog: Arc<dyn SceneCatalog>,
+) -> io::Result<Option<(IpcHandle, Receiver<Command>)>> {
     if !supported {
         eprintln!("[inspect] --inspect is not supported in release builds; ignoring");
         return Ok(None);
     }
 
-    let (handle, cmd_rx) = ipc_server::spawn()?;
+    let (handle, cmd_rx) = ipc_server::spawn(catalog)?;
     println!("[inspect] socket: {}", handle.socket_path.display());
 
     // Attempt to spawn the sibling inspector binary; swallow failures so the
@@ -68,6 +74,7 @@ pub fn start(supported: bool) -> io::Result<Option<(IpcHandle, Receiver<Command>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::registry::GameCatalog;
 
     // ── flag_present_detects_and_rejects ──────────────────────────────────────
 
@@ -94,7 +101,7 @@ mod tests {
     /// not bind any socket.
     #[test]
     fn start_release_build_is_noop() {
-        let result = start(false);
+        let result = start(false, Arc::new(GameCatalog));
         assert!(result.is_ok(), "start(false) must not return Err");
         assert!(
             result.unwrap().is_none(),
@@ -109,7 +116,7 @@ mod tests {
     /// Dropping the handle must unlink the socket file.
     #[test]
     fn start_debug_binds_socket_and_survives_missing_inspector() {
-        let result = start(true);
+        let result = start(true, Arc::new(GameCatalog));
         assert!(result.is_ok(), "start(true) must not return Err");
         let inner = result.unwrap();
         assert!(

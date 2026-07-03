@@ -87,7 +87,7 @@ pub fn run_with_params(
 ) -> io::Result<()> {
     // Inspect setup BEFORE alt-screen so the socket-path println is visible.
     let ipc = if inspect::flag_present(std::env::args()) {
-        inspect::start(inspect::INSPECT_SUPPORTED)?
+        inspect::start(inspect::INSPECT_SUPPORTED, std::sync::Arc::new(GameCatalog))?
     } else {
         None
     };
