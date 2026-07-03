@@ -95,18 +95,25 @@ fn luma(r: u8, g: u8, b: u8) -> u8 {
     (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) as u8
 }
 
-/// Map 8 dots (in `DOTS` order, index k → bit k) to a single braille [`Cell`].
+/// Map an 8-dot `shape` block plus an 8-dot `color` block (both in `DOTS`
+/// order, index k → bit k) to a single braille [`Cell`].
 ///
-/// - If no dot is `Lit` → `Cell::Transparent`.
-/// - Otherwise: `avg = Σluma(visible) / count` (integer); a visible dot with
-///   `luma >= avg` sets its bit; `ch = U+2800 + mask`; `color` = integer mean
-///   RGB over all visible dots.
-fn cell_from_dots(dots: &[Dot; 8]) -> crate::grid::Cell {
+/// - The glyph mask/`ch`/Transparent-ness is decided ENTIRELY from `shape`:
+///   if no `shape` dot is `Lit` → `Cell::Transparent`; otherwise
+///   `avg = Σluma(shape-visible) / count` (integer); a `shape`-visible dot
+///   with `luma >= avg` sets its bit; `ch = U+2800 + mask`.
+/// - `color` never influences the mask. Its only role is supplying the RGB
+///   averaged into the output: `Cell::Glyph.color` = integer mean RGB over
+///   `color[k]` for every `k` where `shape[k]` is `Lit` (reading `color[k]`'s
+///   RGB when `color[k]` is itself `Lit`; a `color[k]` that is `Transparent`
+///   at a shape-lit position — only reachable under a topology mismatch — is
+///   simply excluded from the mean).
+fn cell_from_dots_tinted(shape: &[Dot; 8], color: &[Dot; 8]) -> crate::grid::Cell {
     use crate::grid::Cell;
 
-    // Per-dot luma: None for Transparent, Some(luma) for Lit.
+    // Per-dot luma from shape: None for Transparent, Some(luma) for Lit.
     let lumas: [Option<u8>; 8] =
-        std::array::from_fn(|k| match dots[k] {
+        std::array::from_fn(|k| match shape[k] {
             Dot::Lit(c) => Some(luma(c.r, c.g, c.b)),
             Dot::Transparent => None,
         });
@@ -116,11 +123,11 @@ fn cell_from_dots(dots: &[Dot; 8]) -> crate::grid::Cell {
         return Cell::Transparent;
     }
 
-    // Integer mean luma of visible dots.
+    // Integer mean luma of shape-visible dots.
     let avg = visible_lumas.iter().map(|&l| l as u32).sum::<u32>()
         / visible_lumas.len() as u32;
 
-    // Bit mask: set bit k when dot k is visible AND luma >= avg.
+    // Bit mask: set bit k when shape dot k is visible AND luma >= avg.
     // DOTS[k].2 == k, so mask bit index equals array index.
     let mut mask = 0u32;
     for (k, &maybe_luma) in lumas.iter().enumerate() {
@@ -138,12 +145,18 @@ fn cell_from_dots(dots: &[Dot; 8]) -> crate::grid::Cell {
 
     let ch = char::from_u32(0x2800 + mask).unwrap_or(' ');
 
-    // Foreground = integer mean RGB over all visible (Lit) dots.
-    let visible_colors: Vec<Rgba> = dots
-        .iter()
-        .filter_map(|d| if let Dot::Lit(c) = d { Some(*c) } else { None })
+    // Foreground = integer mean RGB over `color`'s dots at the positions
+    // where `shape` is Lit (the shape-visible set), not shape's own RGB.
+    let visible_colors: Vec<Rgba> = (0..8)
+        .filter(|&k| lumas[k].is_some())
+        .filter_map(|k| if let Dot::Lit(c) = color[k] { Some(c) } else { None })
         .collect();
     let n = visible_colors.len() as u32;
+    if n == 0 {
+        // Defensive: only reachable under a topology/dims mismatch where
+        // `color` has no Lit dot at any shape-lit position.
+        return Cell::Transparent;
+    }
     let (r, g, b) = visible_colors.iter().fold((0u32, 0u32, 0u32), |(ar, ag, ab), c| {
         (ar + c.r as u32, ag + c.g as u32, ab + c.b as u32)
     });
@@ -210,35 +223,44 @@ pub fn tint(buf: &DotBuffer, color: Rgba) -> DotBuffer {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// dots_to_grid  (stub — implementation by code-writer)
+// dots_to_grid / dots_to_grid_tinted
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Convert a `DotBuffer` into a braille [`Grid`].
-///
-/// Grid dims = `(buf.cols()/2, buf.rows()/4)`.  Each 2×4 dot block maps to one
-/// braille cell via the adaptive-luma rule (see `cell_from_dots`).
+/// Gathers the 8 dots of `buf`'s 2×4 block at cell `(tx, ty)`, in `DOTS`
+/// order (`arr[k]` corresponds to `DOTS[k]`, contributing bit k).
 /// Out-of-range dot reads are treated as `Dot::Transparent`.
-pub fn dots_to_grid(buf: &DotBuffer) -> Grid {
-    let cell_cols = buf.cols() / 2;
-    let cell_rows = buf.rows() / 4;
+fn gather_block(buf: &DotBuffer, tx: usize, ty: usize) -> [Dot; 8] {
+    let mut arr = [Dot::Transparent; 8];
+    for k in 0..8 {
+        let (dx, dy, _bit) = DOTS[k];
+        let col = tx * 2 + dx as usize;
+        let row = ty * 4 + dy as usize;
+        arr[k] = if col < buf.cols() && row < buf.rows() {
+            buf.get(col, row)
+        } else {
+            Dot::Transparent
+        };
+    }
+    arr
+}
+
+/// Convert a `shape`/`color` pair into a braille [`Grid`].
+///
+/// Grid dims = `(shape.cols()/2, shape.rows()/4)`. Per 2×4 block, the glyph
+/// mask (`ch`, Transparent-ness) is decided entirely from `shape` (see
+/// `cell_from_dots_tinted`); `color` supplies only the RGB averaged into
+/// `Cell::Glyph.color`, over the dot positions `shape` decided are lit.
+/// Out-of-range dot reads on either buffer are treated as `Dot::Transparent`.
+pub fn dots_to_grid_tinted(shape: &DotBuffer, color: &DotBuffer) -> Grid {
+    let cell_cols = shape.cols() / 2;
+    let cell_rows = shape.rows() / 4;
     let mut grid = Grid::new(cell_cols, cell_rows);
 
     for ty in 0..cell_rows {
         for tx in 0..cell_cols {
-            // Gather the 8 dots for this 2×4 block in DOTS order.
-            // dots[k] corresponds to DOTS[k], contributing bit k.
-            let mut arr = [Dot::Transparent; 8];
-            for k in 0..8 {
-                let (dx, dy, _bit) = DOTS[k];
-                let col = tx * 2 + dx as usize;
-                let row = ty * 4 + dy as usize;
-                arr[k] = if col < buf.cols() && row < buf.rows() {
-                    buf.get(col, row)
-                } else {
-                    Dot::Transparent
-                };
-            }
-            let cell = cell_from_dots(&arr);
+            let shape_arr = gather_block(shape, tx, ty);
+            let color_arr = gather_block(color, tx, ty);
+            let cell = cell_from_dots_tinted(&shape_arr, &color_arr);
             if cell != crate::grid::Cell::Transparent {
                 grid.set(tx, ty, cell);
             }
@@ -246,6 +268,16 @@ pub fn dots_to_grid(buf: &DotBuffer) -> Grid {
     }
 
     grid
+}
+
+/// Convert a `DotBuffer` into a braille [`Grid`].
+///
+/// Grid dims = `(buf.cols()/2, buf.rows()/4)`.  Each 2×4 dot block maps to one
+/// braille cell via the adaptive-luma rule (see `cell_from_dots_tinted`).
+/// Out-of-range dot reads are treated as `Dot::Transparent`.
+/// Identity case of [`dots_to_grid_tinted`]: `dots_to_grid(buf) == dots_to_grid_tinted(buf, buf)`.
+pub fn dots_to_grid(buf: &DotBuffer) -> Grid {
+    dots_to_grid_tinted(buf, buf)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -601,6 +633,105 @@ mod tests {
         assert_ne!(
             out_bright, out_dim,
             "tint must preserve source brightness/shading, not collapse every Lit dot to the same color"
+        );
+    }
+
+    // ── dots_to_grid_tinted tests ─────────────────────────────────────────────
+
+    /// Builds the golden case-(a) `shape` buffer (all 8 dots Lit; luma pattern
+    /// makes bits 3,6,7 the "bright" set → mask 0xC8 → U+28C8), reused by the
+    /// mask-invariance and color-source tests below.
+    fn case_a_shape() -> DotBuffer {
+        let mut buf = DotBuffer::new(2, 4);
+        buf.set(0, 0, Dot::Lit(Rgba::rgb(10, 20, 30)));
+        buf.set(0, 1, Dot::Lit(Rgba::rgb(40, 50, 60)));
+        buf.set(0, 2, Dot::Lit(Rgba::rgb(70, 80, 90)));
+        buf.set(1, 0, Dot::Lit(Rgba::rgb(200, 210, 220)));
+        buf.set(1, 1, Dot::Lit(Rgba::rgb(15, 25, 35)));
+        buf.set(1, 2, Dot::Lit(Rgba::rgb(45, 55, 65)));
+        buf.set(0, 3, Dot::Lit(Rgba::rgb(100, 110, 120)));
+        buf.set(1, 3, Dot::Lit(Rgba::rgb(250, 240, 230)));
+        buf
+    }
+
+    /// A `color` buffer with the SAME Lit topology as `case_a_shape` (every
+    /// dot Lit) but a luma pattern that is the *inverse* of shape's: bright at
+    /// bits 0,1,2 (which shape decided are dark/unlit) and dark at bits
+    /// 3,6,7 (which shape decided are the lit set). If the mask were ever
+    /// derived from `color` instead of `shape`, this would flip which bits are
+    /// lit; since it must not, the resulting `ch` must be identical to
+    /// `case_a_shape` alone's glyph (U+28C8).
+    fn inverted_luma_color() -> DotBuffer {
+        let mut buf = DotBuffer::new(2, 4);
+        buf.set(0, 0, Dot::Lit(Rgba::rgb(250, 250, 250))); // bit 0 — bright
+        buf.set(0, 1, Dot::Lit(Rgba::rgb(240, 240, 240))); // bit 1 — bright
+        buf.set(0, 2, Dot::Lit(Rgba::rgb(230, 230, 230))); // bit 2 — bright
+        buf.set(1, 0, Dot::Lit(Rgba::rgb(10, 10, 10))); // bit 3 — dark
+        buf.set(1, 1, Dot::Lit(Rgba::rgb(5, 5, 5))); // bit 4 — dark
+        buf.set(1, 2, Dot::Lit(Rgba::rgb(5, 5, 5))); // bit 5 — dark
+        buf.set(0, 3, Dot::Lit(Rgba::rgb(10, 10, 10))); // bit 6 — dark
+        buf.set(1, 3, Dot::Lit(Rgba::rgb(10, 10, 10))); // bit 7 — dark
+        buf
+    }
+
+    /// (a) Mask/glyph must be decided purely from `shape`: swapping in a
+    /// `color` buffer whose own luma pattern is the inverse of shape's must
+    /// NOT change `ch` (still U+28C8, same as `dots_to_grid(shape)` alone).
+    #[test]
+    fn dots_to_grid_tinted_mask_invariant_to_color() {
+        let shape = case_a_shape();
+        let color = inverted_luma_color();
+
+        let grid = dots_to_grid_tinted(&shape, &color);
+        assert_eq!(grid.cols(), 1);
+        assert_eq!(grid.rows(), 1);
+        match grid.get(0, 0) {
+            Cell::Glyph { ch, .. } => assert_eq!(
+                ch, '\u{28C8}',
+                "mask must be decided from shape alone (case-a glyph), regardless of color's luma pattern"
+            ),
+            Cell::Transparent => panic!("expected a Glyph cell, got Transparent"),
+        }
+    }
+
+    /// (b) `Cell::Glyph.color` must be the mean RGB of `color`'s dots at the
+    /// positions `shape` lit (all 8, here) — mean of `inverted_luma_color()`'s
+    /// 8 RGB values = (95, 95, 95) — and must NOT equal shape's own mean RGB
+    /// at those positions (91, 98, 106), proving color is sourced from
+    /// `color`, not `shape`.
+    #[test]
+    fn dots_to_grid_tinted_color_is_mean_of_color_buffer_not_shape() {
+        let shape = case_a_shape();
+        let color = inverted_luma_color();
+
+        let grid = dots_to_grid_tinted(&shape, &color);
+        match grid.get(0, 0) {
+            Cell::Glyph { color: out_color, .. } => {
+                assert_eq!(
+                    out_color,
+                    Rgba::rgb(95, 95, 95),
+                    "output color must be the mean RGB of `color`'s dots at shape-lit positions"
+                );
+                assert_ne!(
+                    out_color,
+                    Rgba::rgb(91, 98, 106),
+                    "output color must NOT be shape's own mean RGB"
+                );
+            }
+            Cell::Transparent => panic!("expected a Glyph cell, got Transparent"),
+        }
+    }
+
+    /// (c) `dots_to_grid(buf) == dots_to_grid_tinted(buf, buf)` bit-for-bit,
+    /// for a non-uniform-luma multi-color buffer (the case-(a) buffer) —
+    /// covers the "genuinely multi-color sprite" regression concern.
+    #[test]
+    fn dots_to_grid_tinted_identity_matches_dots_to_grid() {
+        let buf = case_a_shape();
+        assert_eq!(
+            dots_to_grid(&buf),
+            dots_to_grid_tinted(&buf, &buf),
+            "dots_to_grid(buf) must equal dots_to_grid_tinted(buf, buf) bit-for-bit"
         );
     }
 }
