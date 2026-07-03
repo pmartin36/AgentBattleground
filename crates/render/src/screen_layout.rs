@@ -49,14 +49,15 @@ impl Anchor {
 }
 
 /// Compute the offset of `origin` along one axis given `extent` (container
-/// size on that axis) and `size` (element size on that axis), per `align`.
-/// Uses saturating arithmetic — never underflows/panics.
-fn axis_offset(origin: u16, extent: u16, size: u16, align: Align) -> u16 {
+/// size on that axis) and `size` (element size on that axis), per `align`,
+/// inset inward by `margin` on a `Near`/`Far`-aligned axis (`Center` ignores
+/// `margin` entirely). Uses saturating arithmetic — never underflows/panics.
+fn axis_offset(origin: u16, extent: u16, size: u16, align: Align, margin: u16) -> u16 {
     let leftover = extent.saturating_sub(size);
     let delta = match align {
-        Align::Near => 0,
+        Align::Near => margin.min(leftover),
         Align::Center => leftover / 2,
-        Align::Far => leftover,
+        Align::Far => leftover.saturating_sub(margin),
     };
     origin.saturating_add(delta)
 }
@@ -66,11 +67,22 @@ fn axis_offset(origin: u16, extent: u16, size: u16, align: Align) -> u16 {
 /// `container` (oversized `size` on an axis is clamped to the container's
 /// bounds on that axis).
 pub fn anchor(container: Rect, size: (u16, u16), pos: Anchor) -> Rect {
+    anchor_with_margin(container, size, pos, (0, 0))
+}
+
+/// Like `anchor`, but insets a `Near`/`Far`-aligned axis inward from its
+/// anchored edge by the matching `margin` component (`margin.0` for the
+/// horizontal/`size.0` axis, `margin.1` for vertical/`size.1`). A
+/// `Center`-aligned axis has no edge to inset from, so its margin component
+/// is silently ignored (never a panic). `anchor(c, size, pos) ==
+/// anchor_with_margin(c, size, pos, (0, 0))`. Never panics; result is always
+/// contained in `container`.
+pub fn anchor_with_margin(container: Rect, size: (u16, u16), pos: Anchor, margin: (u16, u16)) -> Rect {
     let (w, h) = size;
     let (horiz, vert) = pos.axes();
 
-    let x = axis_offset(container.x, container.width, w, horiz);
-    let y = axis_offset(container.y, container.height, h, vert);
+    let x = axis_offset(container.x, container.width, w, horiz, margin.0);
+    let y = axis_offset(container.y, container.height, h, vert, margin.1);
 
     Rect::new(x, y, w, h).intersection(container)
 }
@@ -264,6 +276,101 @@ mod tests {
         assert_eq!(got.y, c.y, "oversized height must clamp offset to container origin");
         assert!(got.bottom() <= c.bottom(), "result must not escape container bottom edge");
         assert!(got.y >= c.y);
+    }
+
+    // ------------------------------------------------- anchor_with_margin
+
+    /// `Near`-aligned axes (`TopLeft`) are inset inward from the container's
+    /// near edge by the matching margin component on each axis.
+    #[test]
+    fn anchor_with_margin_insets_near_axis_from_near_edge() {
+        let c = container(); // x=10, y=20, width=100, height=40
+        let margin = (3u16, 5u16);
+
+        let got = anchor_with_margin(c, SIZE, Anchor::TopLeft, margin);
+
+        assert_eq!(got.x, c.x + margin.0, "near-axis x must inset by margin.0");
+        assert_eq!(got.y, c.y + margin.1, "near-axis y must inset by margin.1");
+    }
+
+    /// `Far`-aligned axes (`BottomRight`) are inset inward from the
+    /// container's far edge by the matching margin component on each axis.
+    #[test]
+    fn anchor_with_margin_insets_far_axis_from_far_edge() {
+        let c = container(); // x=10, y=20, width=100, height=40
+        let margin = (3u16, 5u16);
+
+        let got = anchor_with_margin(c, SIZE, Anchor::BottomRight, margin);
+
+        assert_eq!(
+            got.right(),
+            c.right() - margin.0,
+            "far-axis right edge must inset by margin.0"
+        );
+        assert_eq!(
+            got.bottom(),
+            c.bottom() - margin.1,
+            "far-axis bottom edge must inset by margin.1"
+        );
+    }
+
+    /// A `Center`-aligned axis has no edge to inset from: a nonzero margin
+    /// component on that axis is a silent no-op, not a panic — the result
+    /// must equal the zero-margin `anchor()` output exactly. Uses
+    /// `Anchor::Center` (both axes `Center`) so the assertion isn't leaked
+    /// into by a sibling `Near`/`Far` axis on the same `Anchor` variant
+    /// (unlike e.g. `TopCenter`, whose vertical axis is `Near` and
+    /// legitimately does inset).
+    #[test]
+    fn anchor_with_margin_center_axis_ignores_margin() {
+        let c = container();
+        let margin = (7u16, 9u16);
+
+        let got = anchor_with_margin(c, SIZE, Anchor::Center, margin);
+        let expected = anchor(c, SIZE, Anchor::Center);
+
+        assert_eq!(got, expected, "Center axis must ignore nonzero margin");
+    }
+
+    /// Zero margin reproduces the existing flush `anchor()` output exactly,
+    /// for every one of the 9 `Anchor` variants — the backward-compatibility
+    /// regression case other code (`main_hub.rs`'s existing call sites)
+    /// depends on.
+    #[test]
+    fn anchor_with_margin_zero_margin_matches_anchor_for_every_variant() {
+        let c = container();
+        let variants = [
+            Anchor::TopLeft,
+            Anchor::TopCenter,
+            Anchor::TopRight,
+            Anchor::CenterLeft,
+            Anchor::Center,
+            Anchor::CenterRight,
+            Anchor::BottomLeft,
+            Anchor::BottomCenter,
+            Anchor::BottomRight,
+        ];
+        for pos in variants {
+            let got = anchor_with_margin(c, SIZE, pos, (0, 0));
+            let expected = anchor(c, SIZE, pos);
+            assert_eq!(got, expected, "zero-margin mismatch for {pos:?}");
+        }
+    }
+
+    /// A margin larger than the axis's leftover space on a `Near` axis is
+    /// clamped so the result stays fully contained in `container` — never a
+    /// panic, never escapes the container's bounds.
+    #[test]
+    fn anchor_with_margin_oversized_margin_stays_contained() {
+        let c = container(); // x=10, y=20, width=100, height=40
+        let margin = (1000u16, 1000u16); // far larger than any leftover
+
+        let got = anchor_with_margin(c, SIZE, Anchor::TopLeft, margin);
+
+        assert!(got.x >= c.x);
+        assert!(got.y >= c.y);
+        assert!(got.right() <= c.right());
+        assert!(got.bottom() <= c.bottom());
     }
 
     // --------------------------------------------------------------- stack

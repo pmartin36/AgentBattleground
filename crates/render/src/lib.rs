@@ -26,7 +26,7 @@ pub use composite::{composite, Placement};
 pub use convert::convert;
 pub use creature::{AnimationKind, Creature};
 pub use grid::{draw_grid, Cell, Grid};
-pub use screen_layout::{anchor, stack, Anchor, RectTween, StackAxis};
+pub use screen_layout::{anchor, anchor_with_margin, stack, Anchor, RectTween, StackAxis};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
