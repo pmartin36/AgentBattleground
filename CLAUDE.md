@@ -26,6 +26,14 @@ The spec files are numbered by dependency order — lower numbers are more found
 
 4. **Braille is universal except text**: every non-text visual element — sprites, board/UI chrome (grid lines, borders, panels), effects — renders through the braille dot pipeline (see `specs/completed/13-rendering.md`), never drawn directly with other Unicode/ASCII characters. Only text (scene labels, menus, HUD copy) stays plain terminal characters. No render pass may bypass the dot pipeline for non-text content, no matter how minor the element.
 
+## Engine / Game Boundary
+
+This is a two-product workspace (see `specs/completed/31-engine-game-crate-split.md`): everything under `crates/engine/` (`engine-core`, `engine-render`, `engine-derive`, `inspector`) is reusable by any future game; everything under `crates/game/` is this game's content only.
+
+- **Rule of thumb**: if a change would still make sense for a hypothetical different game built on this engine, it belongs under `crates/engine/`. If it only makes sense for Agent Battleground specifically (a concrete scene, a specific creature, this game's skin assets, digit-hotkey policy), it belongs in `crates/game/`.
+- **Hard invariants**: no crate under `crates/engine/` contains `include_bytes!`-bundled game art, a closed enum of concrete scenes/creatures/pieces, or a path dependency on `crates/game`.
+- **When it's unclear which crate something belongs in, ask the project owner — do not guess and place it wherever compiles.**
+
 ## Key Design Decisions Made
 
 - **Language**: Rust
