@@ -1,6 +1,9 @@
+extern crate self as scene_core;
+
 pub mod catalog;
 pub mod color;
 pub mod inspect;
+pub mod scene;
 pub mod scene_key;
 pub mod ipc;
 
