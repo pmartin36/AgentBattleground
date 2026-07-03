@@ -6,7 +6,7 @@ use ratatui::layout::Rect;
 use render::camera::{SideView, WorldPos};
 use render::composite::{composite_dots, DotPlacement};
 use render::dots::{dots_to_grid, tint, Dot, DotBuffer};
-use render::transform::{place, rasterize, Transform, Vec2};
+use render::transform::{place, Transform, Vec2};
 use render::tween::Tween;
 use render::{draw_grid, AnimatedSprite};
 use scene_core::color::Rgba;
@@ -268,9 +268,8 @@ pub fn piece_dots(
     elapsed: Duration,
     geom: &BoardGeometry,
 ) -> DotBuffer {
-    let frame = sprite.frame_at(piece_elapsed(elapsed, piece.index));
-    let raw = rasterize(
-        frame,
+    let raw = sprite.rasterize_at(
+        piece_elapsed(elapsed, piece.index),
         &piece.transform,
         sprite_base_dot_rows(&geom.camera),
     );
