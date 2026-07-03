@@ -743,3 +743,51 @@ mod layout_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod render_timing_tests {
+    use super::*;
+    use crate::scenes::test_util::render_to_buffer;
+    use std::time::Instant;
+
+    /// Spec 30 done-criterion: re-measure `MainHub::render()` after the
+    /// decode-caching fix (b1-t1/b2-t1) and confirm it is a small fraction of
+    /// the 33ms (30fps) frame budget. Ignored by default (it is a measurement,
+    /// run explicitly and recorded as evidence; it also keeps the debug gate
+    /// fast).
+    ///
+    /// Measured (2026-07-03, this machine): release avg ~2.5ms (the "small
+    /// fraction" of the budget), debug avg ~161ms. Debug is dominated by
+    /// `render::convert()` re-rasterizing `logo.png` every frame
+    /// (rasterization caching = spec 27, OUT OF SCOPE here; debug perf is
+    /// explicitly deferred by spec 30). So the budget bound is asserted only
+    /// in release, where the fix's target actually holds.
+    #[test]
+    #[ignore = "timing measurement; run explicitly (see spec 30 done-criterion)"]
+    fn main_hub_render_is_a_small_fraction_of_frame_budget() {
+        const N: u32 = 50;
+        /// Flake-resistant ceiling well under 33ms; measured release avg ~2.5ms.
+        const RELEASE_BUDGET_MS: f64 = 10.0;
+
+        let scene = MainHub::default();
+        for _ in 0..3 {
+            let _ = render_to_buffer(&scene, 120, 50);
+        } // warmup
+        let t = Instant::now();
+        for _ in 0..N {
+            let _ = render_to_buffer(&scene, 120, 50);
+        }
+        let avg_ms = t.elapsed().as_secs_f64() * 1000.0 / f64::from(N);
+
+        let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+        println!("MainHub::render() avg = {avg_ms:.3} ms over {N} ({profile})");
+
+        if !cfg!(debug_assertions) {
+            assert!(
+                avg_ms < RELEASE_BUDGET_MS,
+                "release MainHub::render() avg {avg_ms:.3}ms must be a small fraction \
+                 of the 33ms frame budget (ceiling {RELEASE_BUDGET_MS}ms)"
+            );
+        }
+    }
+}
