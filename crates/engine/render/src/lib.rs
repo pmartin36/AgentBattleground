@@ -9,7 +9,6 @@
 //! replace `fill`/`label` in place. Do not extend the solid-fill approach.
 
 pub mod anim;
-pub mod assets;
 pub mod button;
 pub mod camera;
 pub mod composite;
@@ -75,7 +74,7 @@ pub fn label(buf: &mut Buffer, area: Rect, text: &str, color: Rgba) {
     buf.set_stringn(x, y, text, max_width, style);
 }
 
-/// Decode a bundled raster asset (`bytes`, e.g. `assets::DOT_FILLED`) and
+/// Decode a bundled raster asset (`bytes`, e.g. `game::assets::DOT_FILLED`) and
 /// paint it aspect-fit + centered into `area` via `convert` → `draw_grid`.
 /// Zero-area `area` paints nothing. Panics only if `bytes` is not a
 /// decodable image (callers pass first-party bundled assets — invariant, as
@@ -253,20 +252,32 @@ mod tests {
 #[cfg(test)]
 mod draw_asset_tests {
     use super::*;
-    use crate::assets;
 
     fn make_buf(w: u16, h: u16) -> Buffer {
         Buffer::empty(Rect::new(0, 0, w, h))
     }
 
-    /// `draw_asset` of the bundled `DOT_FILLED` icon into a non-zero area
+    /// Synthetic stand-in for a bundled dot/icon asset (b1-t2: `crate::assets`
+    /// no longer exists in `engine-render` — moved to `game::assets`).
+    /// `draw_asset` is content-agnostic, so any decodable opaque-body PNG
+    /// bytes exercise the same contract the real asset did.
+    fn synthetic_dot_png() -> Vec<u8> {
+        let img = image::RgbaImage::from_pixel(8, 8, image::Rgba([255, 255, 255, 255]));
+        let mut buf = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .expect("synthetic test fixture must encode to PNG");
+        buf
+    }
+
+    /// `draw_asset` of an opaque synthetic dot icon into a non-zero area
     /// paints at least one non-space cell (b3-t3: dot row uses this to paint
     /// the 6 position-indicator dots).
     #[test]
     fn draw_asset_paints_non_space_cell() {
         let mut buf = make_buf(4, 2);
         let area = Rect::new(0, 0, 4, 2);
-        draw_asset(&mut buf, area, assets::DOT_FILLED);
+        draw_asset(&mut buf, area, &synthetic_dot_png());
 
         let painted = (0..2u16)
             .any(|y| (0..4u16).any(|x| buf.cell((x, y)).unwrap().symbol() != " "));
@@ -278,7 +289,7 @@ mod draw_asset_tests {
     fn draw_asset_zero_area_paints_nothing() {
         let mut buf = make_buf(4, 2);
         let area = Rect::new(0, 0, 0, 2);
-        draw_asset(&mut buf, area, assets::DOT_FILLED);
+        draw_asset(&mut buf, area, &synthetic_dot_png());
 
         for y in 0..2u16 {
             for x in 0..4u16 {

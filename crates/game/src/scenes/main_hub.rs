@@ -52,17 +52,17 @@ impl Default for MainHub {
     fn default() -> Self {
         Self {
             buttons: [
-                RefCell::new(FrameButton::new(Rect::default(), "Roster")),
-                RefCell::new(FrameButton::new(Rect::default(), "Battle")),
-                RefCell::new(FrameButton::new(Rect::default(), "Exit")),
+                RefCell::new(FrameButton::new(Rect::default(), crate::assets::FRAME_PANEL, "Roster")),
+                RefCell::new(FrameButton::new(Rect::default(), crate::assets::FRAME_PANEL, "Battle")),
+                RefCell::new(FrameButton::new(Rect::default(), crate::assets::FRAME_PANEL, "Exit")),
             ],
             cursor_index: 0,
             quit_requested: false,
-            title_frame: image::load_from_memory(engine_render::assets::FRAME_PANEL)
+            title_frame: image::load_from_memory(crate::assets::FRAME_PANEL)
                 .expect("FRAME_PANEL must decode — bundled first-party asset"),
-            logo: image::load_from_memory(engine_render::assets::LOGO)
+            logo: image::load_from_memory(crate::assets::LOGO)
                 .expect("LOGO must decode — bundled first-party asset"),
-            cursor_icon: image::load_from_memory(engine_render::assets::ICON_ARROW_RIGHT)
+            cursor_icon: image::load_from_memory(crate::assets::ICON_ARROW_RIGHT)
                 .expect("ICON_ARROW_RIGHT must decode — bundled first-party asset"),
         }
     }
@@ -155,7 +155,7 @@ impl MainHub {
         v.try_into().expect("stack of 3 sizes must yield 3 rects")
     }
 
-    /// Paint `assets::FRAME_PANEL` stretched to fill `rect` exactly (same
+    /// Paint `crate::assets::FRAME_PANEL` stretched to fill `rect` exactly (same
     /// stretch-fit routine `FrameButton::render` uses for its panel), static
     /// (no `ButtonState` tint). Early-returns on a zero-dim rect.
     fn draw_title_frame(&self, buf: &mut Buffer, rect: Rect) {

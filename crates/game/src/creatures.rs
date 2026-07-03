@@ -4,7 +4,7 @@
 //! 6 near-identical files (name, GIF path, and function identifier are the
 //! only things that ever differed between them).
 
-use crate::{AnimatedSprite, AnimationKind, Creature};
+use engine_render::{AnimatedSprite, AnimationKind, Creature};
 use std::time::Duration;
 
 /// Per-frame display time for every bundled creature's idle loop. The GIF's
@@ -28,16 +28,29 @@ macro_rules! bundled_creature {
     };
 }
 
-bundled_creature!(ember_wolf, "Ember Wolf", "../assets/creatures/ember_wolf_idle.gif");
-bundled_creature!(frost_lizard, "Frost Lizard", "../assets/creatures/frost_lizard_idle.gif");
-bundled_creature!(stone_golem, "Stone Golem", "../assets/creatures/stone_golem_idle.gif");
-bundled_creature!(storm_hawk, "Storm Hawk", "../assets/creatures/storm_hawk_idle.gif");
-bundled_creature!(verdant_treant, "Verdant Treant", "../assets/creatures/verdant_treant_idle.gif");
-bundled_creature!(shadow_cat, "Shadow Cat", "../assets/creatures/shadow_cat_idle.gif");
+bundled_creature!(ember_wolf, "Ember Wolf", "creatures/ember_wolf_idle.gif");
+bundled_creature!(frost_lizard, "Frost Lizard", "creatures/frost_lizard_idle.gif");
+bundled_creature!(stone_golem, "Stone Golem", "creatures/stone_golem_idle.gif");
+bundled_creature!(storm_hawk, "Storm Hawk", "creatures/storm_hawk_idle.gif");
+bundled_creature!(verdant_treant, "Verdant Treant", "creatures/verdant_treant_idle.gif");
+bundled_creature!(shadow_cat, "Shadow Cat", "creatures/shadow_cat_idle.gif");
+
+/// Every creature bundled into the binary this round, in roster order.
+pub fn all() -> Vec<Creature> {
+    vec![
+        ember_wolf(),
+        frost_lizard(),
+        stone_golem(),
+        storm_hawk(),
+        verdant_treant(),
+        shadow_cat(),
+    ]
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     /// Every bundled creature has its declared name and a real multi-frame
     /// (>= 2 frames) idle animation — one parametrized test in place of the
@@ -64,6 +77,37 @@ mod tests {
                 sprite.frame_count() >= 2,
                 "{expected_name}'s idle animation must be a real animated loop (>= 2 frames), got {}",
                 sprite.frame_count()
+            );
+        }
+    }
+
+    /// `all()` genuinely aggregates all six bundled creatures — the single
+    /// enumeration point a future roster carousel consumes — catching a
+    /// silently dropped or duplicated entry, and confirms every entry has
+    /// its Idle animation registered.
+    #[test]
+    fn all_returns_six_named_idle_creatures() {
+        let creatures = super::all();
+        assert_eq!(creatures.len(), 6, "expected exactly 6 bundled creatures");
+
+        let names: HashSet<&str> = creatures.iter().map(|c| c.name()).collect();
+        let expected: HashSet<&str> = [
+            "Ember Wolf",
+            "Frost Lizard",
+            "Stone Golem",
+            "Storm Hawk",
+            "Verdant Treant",
+            "Shadow Cat",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(names, expected);
+
+        for c in &creatures {
+            assert!(
+                c.animation(AnimationKind::Idle).is_some(),
+                "{} must have an Idle animation registered",
+                c.name()
             );
         }
     }

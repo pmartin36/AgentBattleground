@@ -16,11 +16,11 @@ use crate::scene_id::SceneId;
 pub struct RosterManager {
     current_index: usize,
     #[inspect(hidden)]
-    creatures: Vec<engine_render::creature::Creature>,
+    creatures: Vec<engine_render::Creature>,
     #[inspect(hidden)]
     elapsed: Duration,
     /// Decoded once at construction (b2-t2) — `render_group` reads these
-    /// instead of decoding `engine_render::assets::DOT_FILLED`/`DOT_UNFILLED` from
+    /// instead of decoding `crate::assets::DOT_FILLED`/`DOT_UNFILLED` from
     /// raw bytes on every call.
     #[inspect(hidden)]
     dot_filled: image::DynamicImage,
@@ -116,15 +116,27 @@ impl RosterManager {
     pub fn new() -> Self {
         Self {
             current_index: 0,
-            creatures: engine_render::creature::all(),
+            creatures: crate::creatures::all(),
             elapsed: Duration::ZERO,
-            dot_filled: image::load_from_memory(engine_render::assets::DOT_FILLED)
+            dot_filled: image::load_from_memory(crate::assets::DOT_FILLED)
                 .expect("DOT_FILLED must decode — bundled first-party asset"),
-            dot_unfilled: image::load_from_memory(engine_render::assets::DOT_UNFILLED)
+            dot_unfilled: image::load_from_memory(crate::assets::DOT_UNFILLED)
                 .expect("DOT_UNFILLED must decode — bundled first-party asset"),
-            left_button: RefCell::new(engine_render::Button::new(Rect::default(), engine_render::assets::ICON_ARROW_LEFT)),
-            right_button: RefCell::new(engine_render::Button::new(Rect::default(), engine_render::assets::ICON_ARROW_RIGHT)),
-            home_button: RefCell::new(engine_render::Button::new(Rect::default(), engine_render::assets::ICON_HOME)),
+            left_button: RefCell::new(engine_render::Button::new(
+                Rect::default(),
+                crate::assets::BUTTON_PANEL,
+                crate::assets::ICON_ARROW_LEFT,
+            )),
+            right_button: RefCell::new(engine_render::Button::new(
+                Rect::default(),
+                crate::assets::BUTTON_PANEL,
+                crate::assets::ICON_ARROW_RIGHT,
+            )),
+            home_button: RefCell::new(engine_render::Button::new(
+                Rect::default(),
+                crate::assets::BUTTON_PANEL,
+                crate::assets::ICON_HOME,
+            )),
             slide: None,
         }
     }
@@ -386,7 +398,7 @@ mod tests {
         assert_eq!(
             rm.creatures.len(),
             6,
-            "RosterManager::new() must seed all 6 creatures from engine_render::creature::all()"
+            "RosterManager::new() must seed all 6 creatures from crate::creatures::all()"
         );
         assert_eq!(rm.creatures[0].name(), "Ember Wolf");
         assert_eq!(rm.current_index, 0);
@@ -464,7 +476,7 @@ mod sprite_and_name_render_tests {
     #[test]
     fn name_label_tracks_current_index() {
         let (w, h) = (40u16, 20u16);
-        let all = engine_render::creature::all();
+        let all = crate::creatures::all();
 
         for (i, creature) in all.iter().enumerate() {
             let mut scene = RosterManager::new();

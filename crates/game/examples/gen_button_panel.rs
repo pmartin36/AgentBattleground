@@ -1,9 +1,9 @@
-//! Generates `crates/render/src/assets/button_panel.png` — a 64×32 RGBA8
+//! Generates `crates/game/src/assets/button_panel.png` — a 64×32 RGBA8
 //! rounded-rect panel background used as the braille UI chrome button base
 //! (spec `22-braille-ui-chrome.md`). First-party art; this generator IS the
 //! provenance/license.
 //!
-//! Geometry (must match `crates/render/src/assets.rs` tests):
+//! Geometry (must match `crates/game/src/assets.rs` tests):
 //!   - 64×32, opaque white fill, corner radius 8, hard alpha edge.
 //!   - membership: clamp (x,y) to inner rect [8,55]×[8,23]; inside iff the
 //!     squared distance from (x,y) to the clamped point is <= 8^2.
@@ -36,9 +36,9 @@ fn main() {
         }
     }
 
-    img.save("crates/render/src/assets/button_panel.png")
+    img.save("crates/game/src/assets/button_panel.png")
         .unwrap();
     println!(
-        "Generated crates/render/src/assets/button_panel.png (64x32 RGBA, rounded-rect, radius 8)"
+        "Generated crates/game/src/assets/button_panel.png (64x32 RGBA, rounded-rect, radius 8)"
     );
 }

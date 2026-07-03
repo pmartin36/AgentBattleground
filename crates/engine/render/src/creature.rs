@@ -3,9 +3,6 @@
 use crate::AnimatedSprite;
 use std::collections::HashMap;
 
-mod bundled;
-pub use bundled::{ember_wolf, frost_lizard, shadow_cat, stone_golem, storm_hawk, verdant_treant};
-
 /// The kind of animation a creature can play.
 ///
 /// Extension policy: add variants here, don't restructure. New kinds
@@ -49,24 +46,11 @@ impl Creature {
     }
 }
 
-/// Every creature bundled into the binary this round, in roster order.
-pub fn all() -> Vec<Creature> {
-    vec![
-        ember_wolf(),
-        frost_lizard(),
-        stone_golem(),
-        storm_hawk(),
-        verdant_treant(),
-        shadow_cat(),
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use super::{AnimationKind, Creature};
     use crate::AnimatedSprite;
     use image::{DynamicImage, Rgba as PixelRgba, RgbaImage};
-    use std::collections::HashSet;
     use std::time::Duration;
 
     fn px(r: u8, g: u8, b: u8) -> DynamicImage {
@@ -113,36 +97,5 @@ mod tests {
         assert!(empty.animation(AnimationKind::Idle).is_none());
         // Sanity: the non-empty one does resolve.
         assert!(c.animation(AnimationKind::Idle).is_some());
-    }
-
-    /// `all()` genuinely aggregates all six bundled creatures — the single
-    /// enumeration point a future roster carousel consumes — catching a
-    /// silently dropped or duplicated entry, and confirms every entry has
-    /// its Idle animation registered.
-    #[test]
-    fn all_returns_six_named_idle_creatures() {
-        let creatures = super::all();
-        assert_eq!(creatures.len(), 6, "expected exactly 6 bundled creatures");
-
-        let names: HashSet<&str> = creatures.iter().map(|c| c.name()).collect();
-        let expected: HashSet<&str> = [
-            "Ember Wolf",
-            "Frost Lizard",
-            "Stone Golem",
-            "Storm Hawk",
-            "Verdant Treant",
-            "Shadow Cat",
-        ]
-        .into_iter()
-        .collect();
-        assert_eq!(names, expected);
-
-        for c in &creatures {
-            assert!(
-                c.animation(AnimationKind::Idle).is_some(),
-                "{} must have an Idle animation registered",
-                c.name()
-            );
-        }
     }
 }

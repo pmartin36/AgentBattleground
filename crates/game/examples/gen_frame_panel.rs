@@ -1,9 +1,9 @@
-//! Generates `crates/render/src/assets/frame_panel.png` — a 64×32 RGBA8
+//! Generates `crates/game/src/assets/frame_panel.png` — a 64×32 RGBA8
 //! hollow bordered-frame used as the braille UI chrome title box / frame
 //! button background (spec `25-main-hub-navigation.md`). First-party art;
 //! this generator IS the provenance/license.
 //!
-//! Geometry (must match `crates/render/src/assets.rs` tests):
+//! Geometry (must match `crates/game/src/assets.rs` tests):
 //!   - 64×32, transparent ground, opaque white border ring, corner radius 8.
 //!   - outer membership: clamp (x,y) to inner rect [8,55]×[8,23]; inside iff
 //!     the squared distance from (x,y) to the clamped point is <= 8^2.
@@ -45,9 +45,9 @@ fn main() {
         }
     }
 
-    img.save("crates/render/src/assets/frame_panel.png")
+    img.save("crates/game/src/assets/frame_panel.png")
         .unwrap();
     println!(
-        "Generated crates/render/src/assets/frame_panel.png (64x32 RGBA, hollow ring, radius {r}, border {border})"
+        "Generated crates/game/src/assets/frame_panel.png (64x32 RGBA, hollow ring, radius {r}, border {border})"
     );
 }
