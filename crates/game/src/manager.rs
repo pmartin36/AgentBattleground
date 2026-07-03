@@ -174,6 +174,10 @@ impl SceneManager {
     ///   connected inspector's panel has real values immediately (b5-t3).
     /// - `SwitchScene { target, params }` → `set_debug_transition`; no event pushed here
     ///   (SceneChanged is pushed by `process_pending_notify` after the swap).
+    ///   A `target` that is a valid `SceneId` but not yet implemented in the
+    ///   registry (`registry::is_implemented(target) == false`) is rejected
+    ///   with `Error{UnknownScene}` instead of being queued — `construct`
+    ///   would otherwise panic the whole process via `unimplemented!()`.
     pub fn apply_command(&mut self, cmd: Command, events: &Sender<Event>) {
         match cmd {
             Command::ClientConnected => {
@@ -184,6 +188,16 @@ impl SceneManager {
                 self.push_state_snapshot(events);
             }
             Command::SwitchScene { target, params } => {
+                if !registry::is_implemented(target) {
+                    let _ = events.send(Event {
+                        body: Message::Error(ErrorPayload {
+                            code: ErrorCode::UnknownScene,
+                            message: format!("scene {target:?} is not implemented"),
+                        }),
+                        reply_to: None,
+                    });
+                    return;
+                }
                 self.set_debug_transition(Transition { target, params });
             }
             Command::ApplyState { id, patch } => {
@@ -956,6 +970,49 @@ mod tests {
             Some(SceneId::BattleViewer),
             "SwitchScene command must queue a debug transition resolved by process_pending"
         );
+    }
+
+    /// `apply_command(SwitchScene{target: <valid-but-unimplemented>, ..})` must
+    /// NOT queue a transition (which would later panic `process_pending` via
+    /// `registry::construct`'s `unimplemented!()`) — it must instead push
+    /// `Error{UnknownScene}` and leave `pending` untouched.
+    #[test]
+    fn apply_command_switchscene_unimplemented_target_rejects_without_panicking() {
+        let mut manager = SceneManager::new(SceneId::MainHub);
+        let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
+
+        assert!(
+            !crate::registry::is_implemented(SceneId::Settings),
+            "test assumes Settings is not yet implemented"
+        );
+
+        manager.apply_command(
+            Command::SwitchScene { target: SceneId::Settings, params: None },
+            &event_tx,
+        );
+
+        // No transition queued: process_pending must be a no-op.
+        let result = manager.process_pending();
+        assert_eq!(
+            result, None,
+            "an unimplemented target must not queue a transition"
+        );
+        assert_eq!(
+            manager.active_id(),
+            SceneId::MainHub,
+            "active scene must be unchanged"
+        );
+
+        let ev = event_rx
+            .try_recv()
+            .expect("an Error event must be pushed for an unimplemented target");
+        assert!(ev.reply_to.is_none());
+        match ev.body {
+            Message::Error(ep) => {
+                assert_eq!(ep.code, ErrorCode::UnknownScene);
+            }
+            other => panic!("expected Error body, got {:?}", other),
+        }
     }
 
     /// `process_pending_notify` after a queued transition returns `Some(id)` and

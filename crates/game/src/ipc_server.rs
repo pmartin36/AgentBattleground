@@ -74,6 +74,7 @@ pub fn spawn() -> std::io::Result<(IpcHandle, Receiver<Command>)> {
     // connected are dropped silently (spec 14:131).
     {
         let slot_writer = Arc::clone(&slot);
+        let connected_writer = Arc::clone(&connected);
         std::thread::spawn(move || {
             for (next_seq, event) in (0_u64..).zip(event_rx) {
                 let env = Envelope::new(next_seq, event.reply_to, event.body);
@@ -91,6 +92,12 @@ pub fn spawn() -> std::io::Result<(IpcHandle, Receiver<Command>)> {
                         if let Some(ref mut writer) = *guard {
                             if write_frame(writer, &env).is_err() {
                                 *guard = None;
+                                // Mirror the reader loop's IO-failure handling
+                                // (below): clearing only the slot leaves
+                                // `connected` stuck true forever if the read
+                                // half doesn't independently error, permanently
+                                // refusing new clients in the accept-supervisor.
+                                connected_writer.store(false, Ordering::SeqCst);
                             }
                             break;
                         }
@@ -522,6 +529,55 @@ mod tests {
             }
             Command::ApplyState { .. } | Command::Subscribe { .. } => {
                 panic!("expected SwitchScene, got ApplyState/Subscribe")
+            }
+        }
+    }
+
+    // ── writer_failure_resets_connected_for_reconnect ─────────────────────────
+
+    /// A write failure to a dead client (its socket closed without the read
+    /// half independently erroring first) must reset `connected` so a new
+    /// client can connect afterward — not permanently refuse everyone.
+    #[test]
+    fn writer_failure_resets_connected_for_reconnect() {
+        let (handle, cmd_rx) = spawn().expect("spawn must succeed");
+
+        // Client A connects, then is dropped (closing its socket) without its
+        // corresponding reader thread necessarily having errored yet.
+        let client_a = connect_retry(&handle.socket_path);
+        let _ = cmd_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("ClientConnected must arrive after client A connects");
+        drop(client_a);
+
+        // Force the writer thread to attempt a write to the now-dead client,
+        // and retry client B's connection attempt — short per-attempt waits
+        // so a bad early attempt doesn't burn the whole deadline in one shot.
+        // The OS needs a moment to tear down the closed socket before the
+        // write half observes the failure, hence the retry loop at all.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            handle
+                .events
+                .send(Event { body: Message::Ack, reply_to: None })
+                .expect("event channel must accept the send");
+            std::thread::sleep(Duration::from_millis(30));
+
+            // Client B: if `connected` has been reset by the writer's failure
+            // path, the accept-supervisor keeps this connection and sends
+            // ClientConnected; if not (the bug), it accepts-then-immediately-
+            // drops it (no Command sent) and we retry.
+            if let Ok(_client_b) = UnixStream::connect(&handle.socket_path) {
+                if let Ok(Command::ClientConnected) = cmd_rx.recv_timeout(Duration::from_millis(150)) {
+                    return; // reconnect succeeded — test passes
+                }
+            }
+
+            if std::time::Instant::now() >= deadline {
+                panic!(
+                    "client B was never able to reconnect within the deadline — \
+                     `connected` was likely never reset after the writer failure"
+                );
             }
         }
     }
