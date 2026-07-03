@@ -56,6 +56,10 @@ impl RosterManager {
     const HOME_W: u16 = 6;
     const HOME_H: u16 = 3;
 
+    /// Inset (in whole terminal cells) of the home/arrow buttons from the
+    /// edges of `area` they anchor to (spec `Decisions (v1)`).
+    const EDGE_MARGIN: u16 = 1;
+
     /// Duration of the slide transition between roster positions.
     const SLIDE_DUR: Duration = Duration::from_millis(300);
 
@@ -112,14 +116,29 @@ impl RosterManager {
     /// vertically centered on the sprite band established by `layout()`.
     fn arrow_rects(area: Rect) -> (Rect, Rect) {
         let (sprite_rect, _, _) = Self::layout(area);
-        let h = Self::ARROW_H.min(sprite_rect.height);
-        let y = sprite_rect.y + sprite_rect.height.saturating_sub(Self::ARROW_H) / 2;
-        let left_rect = Rect::new(area.x, y, Self::ARROW_W, h);
-        let right_rect = Rect::new(
-            area.right().saturating_sub(Self::ARROW_W),
-            y,
-            Self::ARROW_W,
-            h,
+        let band = Rect::new(area.x, sprite_rect.y, area.width, sprite_rect.height);
+        // `layout()` reserves exactly `ARROW_W` columns beside the sprite on
+        // each side, flush against it. Insetting a full-`ARROW_W`-wide button
+        // from `area`'s edge by `EDGE_MARGIN` would push its far edge past
+        // that reservation and into the sprite band, so the button width is
+        // shrunk by `EDGE_MARGIN`: its far edge (against the sprite) stays
+        // exactly where the reserved space ends, while its near edge (against
+        // `area`'s edge) moves inward by the margin.
+        let size = (
+            Self::ARROW_W.saturating_sub(Self::EDGE_MARGIN),
+            Self::ARROW_H,
+        );
+        let left_rect = render::anchor_with_margin(
+            band,
+            size,
+            render::Anchor::CenterLeft,
+            (Self::EDGE_MARGIN, 0),
+        );
+        let right_rect = render::anchor_with_margin(
+            band,
+            size,
+            render::Anchor::CenterRight,
+            (Self::EDGE_MARGIN, 0),
         );
         (left_rect, right_rect)
     }
@@ -127,11 +146,11 @@ impl RosterManager {
     /// Top-right rect for the home button — sole place its position is
     /// computed; `render()` and tests both call this.
     fn home_rect(area: Rect) -> Rect {
-        Rect::new(
-            area.right().saturating_sub(Self::HOME_W),
-            area.top(),
-            Self::HOME_W.min(area.width),
-            Self::HOME_H.min(area.height),
+        render::anchor_with_margin(
+            area,
+            (Self::HOME_W, Self::HOME_H),
+            render::Anchor::TopRight,
+            (Self::EDGE_MARGIN, Self::EDGE_MARGIN),
         )
     }
 
@@ -664,6 +683,11 @@ mod arrow_button_tests {
             button_right < sprite_left,
             "left arrow button's rightmost painted column ({button_right}) must be strictly left of the sprite's leftmost painted column ({sprite_left})"
         );
+        assert_eq!(
+            left_rect.x,
+            area.x + RosterManager::EDGE_MARGIN,
+            "left arrow button rect must be inset from area's left edge by EDGE_MARGIN"
+        );
     }
 
     /// `render()` paints the right arrow button strictly to the right of the
@@ -689,6 +713,11 @@ mod arrow_button_tests {
         assert!(
             button_left > sprite_right,
             "right arrow button's leftmost painted column ({button_left}) must be strictly right of the sprite's rightmost painted column ({sprite_right})"
+        );
+        assert_eq!(
+            right_rect.right(),
+            area.right() - RosterManager::EDGE_MARGIN,
+            "right arrow button rect must be inset from area's right edge by EDGE_MARGIN"
         );
     }
 
@@ -797,7 +826,8 @@ mod home_button_tests {
     }
 
     /// `render()` paints the home button, and its rect sits top-right of
-    /// `area` — flush with the top edge and the right edge — distinct from
+    /// `area` — inset from the top edge and the right edge by
+    /// `RosterManager::EDGE_MARGIN` cells (no longer flush) — distinct from
     /// the arrow buttons' beside-center position and the dot row's bottom
     /// position.
     #[test]
@@ -813,8 +843,16 @@ mod home_button_tests {
             has_non_space(&buf, rect),
             "home button must paint at least one non-space cell within its rect"
         );
-        assert_eq!(rect.right(), area.right(), "home button rect must be flush with the right edge of area");
-        assert_eq!(rect.top(), area.top(), "home button rect must be flush with the top edge of area");
+        assert_eq!(
+            rect.right(),
+            area.right() - RosterManager::EDGE_MARGIN,
+            "home button rect must be inset from the right edge of area by EDGE_MARGIN"
+        );
+        assert_eq!(
+            rect.top(),
+            area.top() + RosterManager::EDGE_MARGIN,
+            "home button rect must be inset from the top edge of area by EDGE_MARGIN"
+        );
     }
 
     /// A completed click (Moved+Down+Up, all inside the home button's rect)
