@@ -3,6 +3,8 @@
 //! See `specs/22-braille-ui-chrome.md` lines 15-19 for the mouse transition
 //! table and lines 6-14 for the render/tint contract.
 
+use std::ops::{Deref, DerefMut};
+
 use image::DynamicImage;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
@@ -106,9 +108,67 @@ impl ButtonCore {
     }
 }
 
+/// Shared render sequence for a [`ButtonCore`]-backed widget: stretch-fit
+/// `background` to `rect`, optionally composite an aspect-fit-centered
+/// `icon` on top (depth 1 over the background's depth 0), tint the result by
+/// `tint_color`, and blit it into `buf`. Cells outside `rect` are left
+/// untouched; a zero-area or oversized `rect` must not panic. This is the
+/// sequence [`Button`] and `FrameButton` both used to duplicate — they now
+/// differ only in whether they pass an icon and whether they draw a label
+/// afterward.
+fn render_tinted(
+    buf: &mut Buffer,
+    rect: Rect,
+    background: &DynamicImage,
+    icon: Option<&DynamicImage>,
+    tint_color: Rgba,
+) {
+    let dot_cols = rect.width as usize * 2;
+    let dot_rows = rect.height as usize * 4;
+    if dot_cols == 0 || dot_rows == 0 {
+        return;
+    }
+
+    let bg_dots = crate::dots::sprite_to_dots(background, dot_cols as u32, dot_rows as u32);
+
+    let composed = match icon {
+        Some(icon_img) => {
+            // Icon is aspect-fit + centered (not stretched) — reuse
+            // `convert`'s fit formula to get the icon's fitted dot dims
+            // without re-deriving it.
+            let fitted = crate::convert::convert(icon_img, rect);
+            let icon_cols = fitted.cols() * 2;
+            let icon_rows = fitted.rows() * 4;
+            let icon_dots = crate::dots::sprite_to_dots(icon_img, icon_cols as u32, icon_rows as u32);
+
+            let placements = [
+                crate::composite::DotPlacement {
+                    dots: &bg_dots,
+                    dot_x: 0,
+                    dot_y: 0,
+                    depth: 0,
+                },
+                crate::composite::DotPlacement {
+                    dots: &icon_dots,
+                    dot_x: ((dot_cols.saturating_sub(icon_cols)) / 2) as i32,
+                    dot_y: ((dot_rows.saturating_sub(icon_rows)) / 2) as i32,
+                    depth: 1,
+                },
+            ];
+            crate::composite::composite_dots(dot_cols, dot_rows, &placements)
+        }
+        None => bg_dots,
+    };
+
+    let tinted = crate::dots::tint(&composed, tint_color);
+    let grid = crate::dots::dots_to_grid(&tinted);
+    crate::grid::draw_grid(buf, rect, &grid);
+}
+
 /// A clickable, hoverable on-screen button. Owns its interaction [`ButtonCore`]
-/// and its decoded panel/icon images for rendering; mutated by feeding it
-/// mouse events.
+/// (accessed via `Deref`/`DerefMut` — `state()`/`set_rect()`/`handle_mouse()`
+/// all resolve there) and its decoded panel/icon images for rendering;
+/// mutated by feeding it mouse events.
 pub struct Button {
     core: ButtonCore,
     panel: DynamicImage,
@@ -129,69 +189,38 @@ impl Button {
         }
     }
 
-    /// Current visual state (b3 reads this to pick the tint).
-    pub fn state(&self) -> ButtonState {
-        self.core.state()
-    }
-
-    /// Update on-screen rect (scenes recompute layout each frame).
-    pub fn set_rect(&mut self, rect: Rect) {
-        self.core.set_rect(rect);
-    }
-
-    /// Drive the state machine with one mouse event. Returns `true` exactly
-    /// on the call that completes a click (Up while Pressed, inside rect).
-    pub fn handle_mouse(&mut self, ev: &MouseEvent) -> bool {
-        self.core.handle_mouse(ev)
-    }
-
     /// Paint the composed, state-tinted panel+icon onto `self.rect` in
     /// `buf`, via the existing dot pipeline (`sprite_to_dots` →
     /// `composite_dots` → `tint` → `dots_to_grid` → `draw_grid`; see
     /// research.md's blueprint for b3-t2). Cells outside `self.rect` are
     /// left untouched; a zero-area or oversized `self.rect` must not panic.
     pub fn render(&self, buf: &mut Buffer) {
-        let rect = self.core.rect();
-        let dot_cols = rect.width as usize * 2;
-        let dot_rows = rect.height as usize * 4;
-        if dot_cols == 0 || dot_rows == 0 {
-            return;
-        }
+        render_tinted(
+            buf,
+            self.core.rect(),
+            &self.panel,
+            Some(&self.icon),
+            self.core.state().tint_color(),
+        );
+    }
+}
 
-        // Panel stretches to fill the whole button rect.
-        let panel = crate::dots::sprite_to_dots(&self.panel, dot_cols as u32, dot_rows as u32);
+impl Deref for Button {
+    type Target = ButtonCore;
+    fn deref(&self) -> &ButtonCore {
+        &self.core
+    }
+}
 
-        // Icon is aspect-fit + centered (not stretched) — reuse `convert`'s
-        // fit formula to get the icon's fitted dot dims without re-deriving it.
-        let fitted = crate::convert::convert(&self.icon, rect);
-        let icon_cols = fitted.cols() * 2;
-        let icon_rows = fitted.rows() * 4;
-        let icon = crate::dots::sprite_to_dots(&self.icon, icon_cols as u32, icon_rows as u32);
-
-        let placements = [
-            crate::composite::DotPlacement {
-                dots: &panel,
-                dot_x: 0,
-                dot_y: 0,
-                depth: 0,
-            },
-            crate::composite::DotPlacement {
-                dots: &icon,
-                dot_x: ((dot_cols.saturating_sub(icon_cols)) / 2) as i32,
-                dot_y: ((dot_rows.saturating_sub(icon_rows)) / 2) as i32,
-                depth: 1,
-            },
-        ];
-        let composed = crate::composite::composite_dots(dot_cols, dot_rows, &placements);
-        let tinted = crate::dots::tint(&composed, self.core.state().tint_color());
-        let grid = crate::dots::dots_to_grid(&tinted);
-        crate::grid::draw_grid(buf, rect, &grid);
+impl DerefMut for Button {
+    fn deref_mut(&mut self) -> &mut ButtonCore {
+        &mut self.core
     }
 }
 
 /// Bordered hollow frame + centered text label — the second consumer of
-/// [`ButtonCore`] (spec 25 line 28). See `research.md` for b3-t1's blueprint;
-/// `render`/`handle_mouse` bodies below are stubs pending the code-writer.
+/// [`ButtonCore`] (spec 25 line 28), accessed via `Deref`/`DerefMut` the same
+/// way [`Button`] is.
 pub struct FrameButton {
     core: ButtonCore,
     frame: DynamicImage,
@@ -209,37 +238,25 @@ impl FrameButton {
         }
     }
 
-    /// Current visual state.
-    pub fn state(&self) -> ButtonState {
-        self.core.state()
-    }
-
-    /// Update on-screen rect (scenes recompute layout each frame).
-    pub fn set_rect(&mut self, rect: Rect) {
-        self.core.set_rect(rect);
-    }
-
-    /// Drive the state machine with one mouse event. Returns `true` exactly
-    /// on the call that completes a click (Up while Pressed, inside rect).
-    pub fn handle_mouse(&mut self, ev: &MouseEvent) -> bool {
-        self.core.handle_mouse(ev)
-    }
-
     /// Paint the state-tinted bordered frame plus centered label onto
     /// `self.rect` in `buf`.
     pub fn render(&self, buf: &mut Buffer) {
         let rect = self.core.rect();
-        let dot_cols = rect.width as usize * 2;
-        let dot_rows = rect.height as usize * 4;
-        if dot_cols == 0 || dot_rows == 0 {
-            return;
-        }
-
-        let frame = crate::dots::sprite_to_dots(&self.frame, dot_cols as u32, dot_rows as u32);
-        let tinted = crate::dots::tint(&frame, self.core.state().tint_color());
-        let grid = crate::dots::dots_to_grid(&tinted);
-        crate::grid::draw_grid(buf, rect, &grid);
+        render_tinted(buf, rect, &self.frame, None, self.core.state().tint_color());
         crate::label(buf, rect, &self.label);
+    }
+}
+
+impl Deref for FrameButton {
+    type Target = ButtonCore;
+    fn deref(&self) -> &ButtonCore {
+        &self.core
+    }
+}
+
+impl DerefMut for FrameButton {
+    fn deref_mut(&mut self) -> &mut ButtonCore {
+        &mut self.core
     }
 }
 
