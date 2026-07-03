@@ -52,21 +52,21 @@ High-level design specs for each segment of the game live in `/specs`:
 | 10 | [Battle Simulation Engine](specs/10-battle-simulation-engine.md) |
 | 11 | [Server / Backend](specs/11-server-backend.md) |
 | 12 | [Data Model & Sync Protocol](specs/12-data-model-sync.md) |
-| 13 | [Rendering](specs/13-rendering.md) ✅ |
-| 14 | [Scene Architecture & Debug Scene Switcher](specs/14-scene-architecture.md) ✅ |
-| 15 | [Debug Inspector — Field Editing](specs/15-debug-inspector.md) ✅ |
-| 16 | [World Space & Camera](specs/16-world-space-and-camera.md) ✅ |
+| 13 | [Rendering](specs/completed/13-rendering.md) ✅ |
+| 14 | [Scene Architecture & Debug Scene Switcher](specs/completed/14-scene-architecture.md) ✅ |
+| 15 | [Debug Inspector — Field Editing](specs/completed/15-debug-inspector.md) ✅ |
+| 16 | [World Space & Camera](specs/completed/16-world-space-and-camera.md) ✅ |
 | 17 | [Creature Art & Asset Pipeline](specs/17-creature-art-asset-pipeline.md) |
-| 18 | [Battle Viewer — Baseline](specs/18-battle-viewer-baseline.md) ✅ |
+| 18 | [Battle Viewer — Baseline](specs/completed/18-battle-viewer-baseline.md) ✅ |
 | 19 | [Debug Inspector — Advanced Editing](specs/19-debug-inspector-advanced-editing.md) |
-| 20 | [Battle Viewer — Event Playback](specs/20-battle-viewer-event-playback.md) ✅ |
-| 21 | [Mouse & Hover Input](specs/21-mouse-hover-input.md) ✅ |
-| 22 | [Braille UI Chrome — Buttons & Panels](specs/22-braille-ui-chrome.md) ✅ |
-| 23 | [Piece Identity Data Model](specs/23-piece-identity-data-model.md) ✅ |
-| 24 | [Roster — Carousel](specs/24-roster-carousel.md) ✅ |
-| 25 | [Main Hub Navigation](specs/25-main-hub-navigation.md) ✅ |
-| 26 | [Screen-Space Positioning](specs/26-screen-space-positioning.md) ✅ |
-| 28 | [Anchor Margin Support](specs/28-anchor-margin-support.md) ✅ |
+| 20 | [Battle Viewer — Event Playback](specs/completed/20-battle-viewer-event-playback.md) ✅ |
+| 21 | [Mouse & Hover Input](specs/completed/21-mouse-hover-input.md) ✅ |
+| 22 | [Braille UI Chrome — Buttons & Panels](specs/completed/22-braille-ui-chrome.md) ✅ |
+| 23 | [Piece Identity Data Model](specs/completed/23-piece-identity-data-model.md) ✅ |
+| 24 | [Roster — Carousel](specs/completed/24-roster-carousel.md) ✅ |
+| 25 | [Main Hub Navigation](specs/completed/25-main-hub-navigation.md) ✅ |
+| 26 | [Screen-Space Positioning](specs/completed/26-screen-space-positioning.md) ✅ |
+| 28 | [Anchor Margin Support](specs/completed/28-anchor-margin-support.md) ✅ |
 
 ## Status
 

@@ -24,12 +24,12 @@ The spec files are numbered by dependency order — lower numbers are more found
 
 3. **Server simplicity**: The server runs on Fly.io (managed hosting, no local network exposure). Replay files are stored on Cloudflare R2. Keep it minimal — no heavy processing, no complex infrastructure.
 
-4. **Braille is universal except text**: every non-text visual element — sprites, board/UI chrome (grid lines, borders, panels), effects — renders through the braille dot pipeline (see `specs/13-rendering.md`), never drawn directly with other Unicode/ASCII characters. Only text (scene labels, menus, HUD copy) stays plain terminal characters. No render pass may bypass the dot pipeline for non-text content, no matter how minor the element.
+4. **Braille is universal except text**: every non-text visual element — sprites, board/UI chrome (grid lines, borders, panels), effects — renders through the braille dot pipeline (see `specs/completed/13-rendering.md`), never drawn directly with other Unicode/ASCII characters. Only text (scene labels, menus, HUD copy) stays plain terminal characters. No render pass may bypass the dot pipeline for non-text content, no matter how minor the element.
 
 ## Key Design Decisions Made
 
 - **Language**: Rust
-- **Rendering**: ratatui + crossterm — Terminal UI. Sprites and battlefield render as colored Unicode braille (2×4 dots per cell) with native alpha transparency. Crowds composite in depth layers (parallax via size/brightness/speed). See `specs/13-rendering.md`. Reference prototype: `experiments/ascii_test/` (+ `experiments/creature_lab/` for asset generation).
+- **Rendering**: ratatui + crossterm — Terminal UI. Sprites and battlefield render as colored Unicode braille (2×4 dots per cell) with native alpha transparency. Crowds composite in depth layers (parallax via size/brightness/speed). See `specs/completed/13-rendering.md`. Reference prototype: `experiments/ascii_test/` (+ `experiments/creature_lab/` for asset generation).
 - **AI model**: Local model (FLUX4 recommended and auto-setup during onboarding); online models (Claude, OpenAI, etc.) also supported
 - **Team size**: 6 pieces per player
 - **Pacing**: One initiated battle per day

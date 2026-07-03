@@ -1,7 +1,7 @@
 # ascii_test
 
 Scratch prototypes validating the game's rendering style: colored Unicode braille
-(2×4 dots per cell) as the sprite/battlefield medium. See `specs/13-rendering.md`
+(2×4 dots per cell) as the sprite/battlefield medium. See `specs/completed/13-rendering.md`
 for how this feeds the real `render` crate.
 
 ## Demo
