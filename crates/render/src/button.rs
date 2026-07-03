@@ -238,11 +238,15 @@ impl FrameButton {
         }
     }
 
-    /// Near-black — reads clearly against `ButtonState`'s entire tint range
-    /// (Idle 0xc8, Hover 0xff, Pressed 0x8c gray-to-white), so the label
-    /// stays legible across every state without fighting the panel's own
-    /// tint for attention.
-    const LABEL_COLOR: Rgba = Rgba::rgb(0x10, 0x10, 0x10);
+    /// Near-white. `FRAME_PANEL` is a HOLLOW frame — only its border ring is
+    /// opaque/tinted by `ButtonState`; the interior (where the label sits)
+    /// is alpha-transparent, showing whatever's actually behind the button
+    /// in the scene (a dark background for every current caller), not the
+    /// panel's own tint. A light label color is what reads there — a dark
+    /// one (this constant's original, wrong, value) was invisible against
+    /// that dark backdrop, confirmed by rendering a real buffer and looking
+    /// at it.
+    const LABEL_COLOR: Rgba = Rgba::rgb(0xf0, 0xf0, 0xf0);
 
     /// Paint the state-tinted bordered frame plus centered label onto
     /// `self.rect` in `buf`.
