@@ -6,27 +6,32 @@ use ratatui::Frame;
 use scene_core::ipc::{
     CatalogEntry, ErrorCode, ErrorPayload, Hello, Message, SceneChanged, StateSnapshot,
 };
-use scene_core::scene_id::SceneId;
+use scene_core::{SceneCatalog, SceneKey};
 use serde_json::Value as JsonValue;
 
 use crate::ipc_server::Event;
-use crate::registry;
 use crate::scene::{EngineCtx, InputEvent, Scene, Transition};
 
+/// Concrete, nameable box type for the catalog `SceneManager` stores — b1-t2's
+/// interim associated-type shape, bound to `game`'s own `dyn Scene` at this
+/// use site (Phase B collapses this back to the spec's literal `Box<dyn Scene>`
+/// once `Scene` moves into scene-core).
+pub type SceneCatalogBox = Box<dyn SceneCatalog<Scene = dyn Scene>>;
+
 /// Inbound command drained at top-of-frame.
-/// `target` is already resolved to a `SceneId` — the wire-string
-/// → SceneId resolution (and Error{UnknownScene}) happens at the IPC boundary in b4,
+/// `target` is already resolved to a `SceneKey` — the wire-string
+/// → SceneKey resolution (and Error{UnknownScene}) happens at the IPC boundary in b4,
 /// NOT in the manager.
 pub enum Command {
     /// A new inspector client has connected; the loop must push a Hello.
     ClientConnected,
     SwitchScene {
-        target: SceneId,
+        target: SceneKey,
         params: Option<JsonValue>,
     },
     /// Apply a batch of field patches to scene `id` (must be the active scene).
     ApplyState {
-        id: SceneId,
+        id: SceneKey,
         patch: BTreeMap<String, JsonValue>,
     },
     /// Toggle "apply on change" live mode (b5-t4: decode + route only; the
@@ -51,18 +56,22 @@ pub struct SceneManager {
     /// Wall-clock time of the last automatic live-mode `StateSnapshot` push;
     /// `None` means "not yet pushed since subscribing" (next pump is due).
     last_live_push: Option<Instant>,
+    /// Game-supplied scene registry (b1-t5) — replaces the direct
+    /// `registry::*` free-function calls this struct used to make.
+    catalog: SceneCatalogBox,
 }
 
 impl SceneManager {
-    /// Construct `boot` via the registry and call `enter(None)`.
-    pub fn new(boot: SceneId) -> Self {
-        Self::with_scene_and_params(registry::construct(boot), None)
+    /// Construct `boot` via `catalog` and call `enter(None)`.
+    pub fn new(boot: SceneKey, catalog: SceneCatalogBox) -> Self {
+        let scene = catalog.construct(&boot);
+        Self::with_scene_and_params(scene, None, catalog)
     }
 
     /// Boot an already-constructed scene (off-catalog or example-supplied)
     /// with `enter(&mut ctx, None)`. Delegates to `with_scene_and_params`.
-    pub fn with_scene(boot: Box<dyn Scene>) -> Self {
-        Self::with_scene_and_params(boot, None)
+    pub fn with_scene(boot: Box<dyn Scene>, catalog: SceneCatalogBox) -> Self {
+        Self::with_scene_and_params(boot, None, catalog)
     }
 
     /// Boot `boot` and call `enter(&mut ctx, params)` once with the exact
@@ -70,6 +79,7 @@ impl SceneManager {
     pub fn with_scene_and_params(
         mut boot: Box<dyn Scene>,
         params: Option<serde_json::Value>,
+        catalog: SceneCatalogBox,
     ) -> Self {
         let mut ctx = EngineCtx;
         boot.enter(&mut ctx, params);
@@ -80,11 +90,12 @@ impl SceneManager {
             ctx,
             live_subscribed: false,
             last_live_push: None,
+            catalog,
         }
     }
 
     /// Return the id of the currently active scene.
-    pub fn active_id(&self) -> SceneId {
+    pub fn active_id(&self) -> SceneKey {
         self.active.id()
     }
 
@@ -130,11 +141,11 @@ impl SceneManager {
     /// Clears `pending` and resets `pending_is_debug`.
     /// Returns the new active id if a switch occurred; `None` otherwise.
     /// (b4-t2 emits `SceneChanged` off this return value.)
-    pub fn process_pending(&mut self) -> Option<SceneId> {
+    pub fn process_pending(&mut self) -> Option<SceneKey> {
         let transition = self.pending.take()?;
         self.pending_is_debug = false;
         self.active.exit(&mut self.ctx);
-        let mut new_scene = registry::construct(transition.target);
+        let mut new_scene = self.catalog.construct(&transition.target);
         new_scene.enter(&mut self.ctx, transition.params);
         let new_id = new_scene.id();
         self.active = new_scene;
@@ -151,13 +162,14 @@ impl SceneManager {
     /// names from `display_name()`, active = current scene id).
     /// b4-t2 implements this by iterating `scenes::scene_for_digit('1'..='4')`.
     pub fn hello(&self) -> Hello {
-        let scenes = ['1', '2', '3', '4']
-            .iter()
-            .filter_map(|&c| crate::scenes::scene_for_digit(c))
-            .map(|id| CatalogEntry {
-                id,
-                name: id.display_name().to_string(),
-                schema: registry::schema_for(id),
+        let scenes = self
+            .catalog
+            .catalog_keys()
+            .into_iter()
+            .map(|key| {
+                let name = self.catalog.display_name(&key).to_string();
+                let schema = self.catalog.schema_for(&key);
+                CatalogEntry { id: key, name, schema }
             })
             .collect();
         Hello {
@@ -188,7 +200,7 @@ impl SceneManager {
                 self.push_state_snapshot(events);
             }
             Command::SwitchScene { target, params } => {
-                if !registry::is_implemented(target) {
+                if !self.catalog.is_available(&target) {
                     let _ = events.send(Event {
                         body: Message::Error(ErrorPayload {
                             code: ErrorCode::UnknownScene,
@@ -280,11 +292,11 @@ impl SceneManager {
     /// applies it (via `process_pending`) and pushes
     /// `Event { body: Message::SceneChanged { id }, reply_to: None }` on `events`.
     /// Returns `Some(id)` when a switch occurred, `None` otherwise.
-    pub fn process_pending_notify(&mut self, events: &Sender<Event>) -> Option<SceneId> {
+    pub fn process_pending_notify(&mut self, events: &Sender<Event>) -> Option<SceneKey> {
         let id = self.process_pending()?;
         let snapshot = self.active.inspect().snapshot();
         let _ = events.send(Event {
-            body: Message::SceneChanged(SceneChanged { id, snapshot }),
+            body: Message::SceneChanged(SceneChanged { id: id.clone(), snapshot }),
             reply_to: None,
         });
         Some(id)
@@ -307,7 +319,7 @@ impl SceneManager {
         // Digit keys 1–4: global scene switch via the gameplay path.
         if let KeyCode::Char(c) = key.code {
             if let Some(target) = crate::scenes::scene_for_digit(c) {
-                self.set_gameplay_transition(Transition { target, params: None });
+                self.set_gameplay_transition(Transition { target: target.into(), params: None });
                 return false;
             }
         }
@@ -328,9 +340,11 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
     use scene_core::ipc::Message;
-    use scene_core::scene_id::SceneId;
+    use scene_core::SceneKey;
 
     use crate::ipc_server::Event;
+    use crate::registry::GameCatalog;
+    use crate::scene_id::SceneId;
     use crate::scenes::MainHub;
 
     fn key(c: char, mods: KeyModifiers) -> KeyEvent {
@@ -357,8 +371,8 @@ mod tests {
         }
 
         impl Scene for TestScene {
-            fn id(&self) -> SceneId {
-                SceneId::Leaderboard
+            fn id(&self) -> SceneKey {
+                SceneId::Leaderboard.into()
             }
             fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {
                 *self.entered.lock().unwrap() = true;
@@ -385,11 +399,11 @@ mod tests {
             entered: Arc::clone(&entered),
             no_inspect: crate::scene::NoInspect,
         };
-        let mgr = SceneManager::with_scene(Box::new(scene));
+        let mgr = SceneManager::with_scene(Box::new(scene), Box::new(GameCatalog));
 
         assert_eq!(
             mgr.active_id(),
-            SceneId::Leaderboard,
+            SceneKey::from(SceneId::Leaderboard),
             "with_scene must set active_id to the provided scene's id"
         );
         assert!(
@@ -415,8 +429,8 @@ mod tests {
         }
 
         impl Scene for ParamsCapturingScene {
-            fn id(&self) -> SceneId {
-                SceneId::Leaderboard
+            fn id(&self) -> SceneKey {
+                SceneId::Leaderboard.into()
             }
             fn enter(&mut self, _ctx: &mut EngineCtx, params: Option<JsonValue>) {
                 *self.params.lock().unwrap() = params;
@@ -444,11 +458,15 @@ mod tests {
             no_inspect: crate::scene::NoInspect,
         };
         let expected = json!({"k": 1});
-        let mgr = SceneManager::with_scene_and_params(Box::new(scene), Some(expected.clone()));
+        let mgr = SceneManager::with_scene_and_params(
+            Box::new(scene),
+            Some(expected.clone()),
+            Box::new(GameCatalog),
+        );
 
         assert_eq!(
             mgr.active_id(),
-            SceneId::Leaderboard,
+            SceneKey::from(SceneId::Leaderboard),
             "with_scene_and_params must set active_id to the provided scene's id"
         );
         assert_eq!(
@@ -472,8 +490,8 @@ mod tests {
         }
 
         impl Scene for ParamsCapturingScene {
-            fn id(&self) -> SceneId {
-                SceneId::Leaderboard
+            fn id(&self) -> SceneKey {
+                SceneId::Leaderboard.into()
             }
             fn enter(&mut self, _ctx: &mut EngineCtx, params: Option<JsonValue>) {
                 *self.params.lock().unwrap() = params;
@@ -500,7 +518,7 @@ mod tests {
             params: Arc::clone(&captured),
             no_inspect: crate::scene::NoInspect,
         };
-        let _mgr = SceneManager::with_scene_and_params(Box::new(scene), None);
+        let _mgr = SceneManager::with_scene_and_params(Box::new(scene), None, Box::new(GameCatalog));
 
         assert_eq!(
             *captured.lock().unwrap(),
@@ -527,8 +545,8 @@ mod tests {
         }
 
         impl Scene for MouseCapturingScene {
-            fn id(&self) -> SceneId {
-                SceneId::Leaderboard
+            fn id(&self) -> SceneKey {
+                SceneId::Leaderboard.into()
             }
             fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {}
             fn update(
@@ -556,7 +574,7 @@ mod tests {
             captured: Arc::clone(&captured),
             no_inspect: crate::scene::NoInspect,
         };
-        let mut mgr = SceneManager::with_scene(Box::new(scene));
+        let mut mgr = SceneManager::with_scene(Box::new(scene), Box::new(GameCatalog));
 
         let me = MouseEvent {
             kind: MouseEventKind::Moved,
@@ -582,10 +600,10 @@ mod tests {
     /// This doubles as the BEHAVIORAL render evidence (TestBackend, no real TTY).
     #[test]
     fn boot_is_main_hub_and_renders_title_box() {
-        let mut manager = SceneManager::new(SceneId::MainHub);
+        let mut manager = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
         assert_eq!(
             manager.active_id(),
-            SceneId::MainHub,
+            SceneKey::from(SceneId::MainHub),
             "boot scene must be MainHub"
         );
 
@@ -611,19 +629,19 @@ mod tests {
     /// Debug transition always overrides a gameplay transition set first in the same tick.
     #[test]
     fn debug_transition_overrides_gameplay_gameplay_first() {
-        let mut manager = SceneManager::new(SceneId::MainHub);
+        let mut manager = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
         manager.set_gameplay_transition(Transition {
-            target: SceneId::BattleViewer,
+            target: SceneId::BattleViewer.into(),
             params: None,
         });
         manager.set_debug_transition(Transition {
-            target: SceneId::RosterManager,
+            target: SceneId::RosterManager.into(),
             params: None,
         });
         manager.process_pending();
         assert_eq!(
             manager.active_id(),
-            SceneId::RosterManager,
+            SceneKey::from(SceneId::RosterManager),
             "debug must override gameplay when gameplay transition was set first"
         );
     }
@@ -631,19 +649,19 @@ mod tests {
     /// Debug transition always overrides a gameplay transition set second in the same tick.
     #[test]
     fn debug_transition_overrides_gameplay_debug_first() {
-        let mut manager = SceneManager::new(SceneId::MainHub);
+        let mut manager = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
         manager.set_debug_transition(Transition {
-            target: SceneId::RosterManager,
+            target: SceneId::RosterManager.into(),
             params: None,
         });
         manager.set_gameplay_transition(Transition {
-            target: SceneId::BattleViewer,
+            target: SceneId::BattleViewer.into(),
             params: None,
         });
         manager.process_pending();
         assert_eq!(
             manager.active_id(),
-            SceneId::RosterManager,
+            SceneKey::from(SceneId::RosterManager),
             "debug must override gameplay when debug transition was set first"
         );
     }
@@ -654,20 +672,20 @@ mod tests {
     /// changes and the return value reports the new scene id.
     #[test]
     fn queued_gameplay_transition_swaps_active() {
-        let mut manager = SceneManager::new(SceneId::MainHub);
+        let mut manager = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
         manager.set_gameplay_transition(Transition {
-            target: SceneId::Leaderboard,
+            target: SceneId::Leaderboard.into(),
             params: None,
         });
         let result = manager.process_pending();
         assert_eq!(
             result,
-            Some(SceneId::Leaderboard),
+            Some(SceneKey::from(SceneId::Leaderboard)),
             "process_pending must return Some(Leaderboard) after a gameplay transition"
         );
         assert_eq!(
             manager.active_id(),
-            SceneId::Leaderboard,
+            SceneKey::from(SceneId::Leaderboard),
             "active must be Leaderboard after the transition"
         );
     }
@@ -675,7 +693,7 @@ mod tests {
     /// `process_pending` with nothing queued returns `None` and leaves `active_id` unchanged.
     #[test]
     fn process_pending_noop_when_empty() {
-        let mut manager = SceneManager::new(SceneId::MainHub);
+        let mut manager = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
         let result = manager.process_pending();
         assert_eq!(
             result,
@@ -684,7 +702,7 @@ mod tests {
         );
         assert_eq!(
             manager.active_id(),
-            SceneId::MainHub,
+            SceneKey::from(SceneId::MainHub),
             "active must remain MainHub when nothing is pending"
         );
     }
@@ -695,13 +713,13 @@ mod tests {
     /// the active scene is BattleViewer. route_key must return false (not quit).
     #[test]
     fn route_key_digit_2_switches_to_battle_viewer() {
-        let mut manager = SceneManager::new(SceneId::MainHub);
+        let mut manager = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
         let quit = manager.route_key(key('2', KeyModifiers::NONE));
         assert!(!quit, "route_key('2') must return false (not a quit key)");
         manager.process_pending();
         assert_eq!(
             manager.active_id(),
-            SceneId::BattleViewer,
+            SceneKey::from(SceneId::BattleViewer),
             "after key '2' + process_pending, active must be BattleViewer"
         );
     }
@@ -711,12 +729,12 @@ mod tests {
     /// Pressing 'q' returns true (quit) and leaves active unchanged.
     #[test]
     fn route_key_q_returns_quit_active_unchanged() {
-        let mut manager = SceneManager::new(SceneId::MainHub);
+        let mut manager = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
         let quit = manager.route_key(key('q', KeyModifiers::NONE));
         assert!(quit, "route_key('q') must return true (quit signal)");
         assert_eq!(
             manager.active_id(),
-            SceneId::MainHub,
+            SceneKey::from(SceneId::MainHub),
             "active must remain MainHub after 'q'"
         );
     }
@@ -724,7 +742,7 @@ mod tests {
     /// Ctrl-C returns true (quit).
     #[test]
     fn route_key_ctrl_c_returns_quit() {
-        let mut manager = SceneManager::new(SceneId::MainHub);
+        let mut manager = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
         let quit = manager.route_key(key('c', KeyModifiers::CONTROL));
         assert!(quit, "route_key(Ctrl-C) must return true (quit signal)");
     }
@@ -735,14 +753,14 @@ mod tests {
     /// Proves the binding is global, not delegated to the active scene.
     #[test]
     fn route_key_digit_1_is_global_from_battle_viewer() {
-        let mut manager = SceneManager::new(SceneId::MainHub);
+        let mut manager = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
         // Switch to BattleViewer first.
         manager.set_gameplay_transition(Transition {
-            target: SceneId::BattleViewer,
+            target: SceneId::BattleViewer.into(),
             params: None,
         });
         manager.process_pending();
-        assert_eq!(manager.active_id(), SceneId::BattleViewer);
+        assert_eq!(manager.active_id(), SceneKey::from(SceneId::BattleViewer));
 
         // Now press '1' — must switch back to MainHub from BattleViewer.
         let quit = manager.route_key(key('1', KeyModifiers::NONE));
@@ -750,7 +768,7 @@ mod tests {
         manager.process_pending();
         assert_eq!(
             manager.active_id(),
-            SceneId::MainHub,
+            SceneKey::from(SceneId::MainHub),
             "key '1' from BattleViewer must switch to MainHub (global keybind)"
         );
     }
@@ -760,10 +778,10 @@ mod tests {
     /// A debug transition wins over a same-tick digit key (gameplay path).
     #[test]
     fn route_key_debug_transition_overrides_digit_gameplay() {
-        let mut manager = SceneManager::new(SceneId::MainHub);
+        let mut manager = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
         // Debug claims pending first.
         manager.set_debug_transition(Transition {
-            target: SceneId::RosterManager,
+            target: SceneId::RosterManager.into(),
             params: None,
         });
         // Digit '2' tries the gameplay path; must be blocked by pending_is_debug.
@@ -771,7 +789,7 @@ mod tests {
         manager.process_pending();
         assert_eq!(
             manager.active_id(),
-            SceneId::RosterManager,
+            SceneKey::from(SceneId::RosterManager),
             "debug transition must override the digit gameplay transition"
         );
     }
@@ -795,8 +813,8 @@ mod tests {
         }
 
         impl Scene for QuitScene {
-            fn id(&self) -> SceneId {
-                SceneId::Leaderboard
+            fn id(&self) -> SceneKey {
+                SceneId::Leaderboard.into()
             }
             fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {}
             fn update(
@@ -824,7 +842,7 @@ mod tests {
             quit: false,
             no_inspect: crate::scene::NoInspect,
         };
-        let mut mgr = SceneManager::with_scene(Box::new(scene));
+        let mut mgr = SceneManager::with_scene(Box::new(scene), Box::new(GameCatalog));
 
         assert!(
             !mgr.active_quit_requested(),
@@ -847,16 +865,20 @@ mod tests {
     /// `display_name()`, with `active` == current active id (MainHub at boot).
     #[test]
     fn hello_lists_four_scenes_active_main_hub() {
-        let manager = SceneManager::new(SceneId::MainHub);
+        let manager = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
         let hello = manager.hello();
         assert_eq!(hello.scenes.len(), 4, "hello must list exactly four M1 scenes");
-        assert_eq!(hello.active, SceneId::MainHub, "hello.active must be MainHub at boot");
-        let ids: Vec<SceneId> = hello.scenes.iter().map(|e| e.id).collect();
+        assert_eq!(
+            hello.active,
+            SceneKey::from(SceneId::MainHub),
+            "hello.active must be MainHub at boot"
+        );
+        let ids: Vec<SceneKey> = hello.scenes.iter().map(|e| e.id.clone()).collect();
         for expected in [
-            SceneId::MainHub,
-            SceneId::BattleViewer,
-            SceneId::RosterManager,
-            SceneId::Leaderboard,
+            SceneKey::from(SceneId::MainHub),
+            SceneKey::from(SceneId::BattleViewer),
+            SceneKey::from(SceneId::RosterManager),
+            SceneKey::from(SceneId::Leaderboard),
         ] {
             assert!(
                 ids.contains(&expected),
@@ -866,9 +888,10 @@ mod tests {
             );
         }
         for entry in &hello.scenes {
+            let id = SceneId::from_key(&entry.id).expect("catalog key must map to a SceneId");
             assert_eq!(
                 entry.name,
-                entry.id.display_name(),
+                id.display_name(),
                 "CatalogEntry.name must equal display_name() for {:?}",
                 entry.id
             );
@@ -884,7 +907,7 @@ mod tests {
         use scene_core::ipc::StateSnapshot;
         use serde_json::json;
 
-        let mut manager = SceneManager::new(SceneId::MainHub);
+        let mut manager = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
         let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
         manager.apply_command(Command::ClientConnected, &event_tx);
 
@@ -897,7 +920,7 @@ mod tests {
         );
         match first.body {
             Message::Hello(h) => {
-                assert_eq!(h.active, SceneId::MainHub, "Hello.active must be MainHub");
+                assert_eq!(h.active, SceneKey::from(SceneId::MainHub), "Hello.active must be MainHub");
                 assert_eq!(h.scenes.len(), 4, "Hello.scenes must list four M1 scenes");
             }
             other => panic!("expected Hello body first, got {:?}", other),
@@ -913,7 +936,7 @@ mod tests {
         );
         match second.body {
             Message::StateSnapshot(StateSnapshot { id, snapshot }) => {
-                assert_eq!(id, SceneId::MainHub, "StateSnapshot.id must be the active scene");
+                assert_eq!(id, SceneKey::from(SceneId::MainHub), "StateSnapshot.id must be the active scene");
                 assert_eq!(
                     snapshot,
                     json!({"cursor_index": 0}),
@@ -936,13 +959,14 @@ mod tests {
     /// stub (b5-t3, round-2 HIGH-2 fix).
     #[test]
     fn hello_entries_carry_real_schema_matching_schema_for() {
-        let manager = SceneManager::new(SceneId::MainHub);
+        let manager = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
         let hello = manager.hello();
         assert!(!hello.scenes.is_empty(), "hello() must list scenes to check");
         for entry in &hello.scenes {
+            let id = SceneId::from_key(&entry.id).expect("catalog key must map to a SceneId");
             assert_eq!(
                 entry.schema,
-                crate::registry::schema_for(entry.id),
+                crate::registry::schema_for(id),
                 "CatalogEntry.schema for {:?} must equal registry::schema_for(id)",
                 entry.id
             );
@@ -953,10 +977,10 @@ mod tests {
     /// and pushes no immediate event (SceneChanged is deferred to process_pending_notify).
     #[test]
     fn apply_command_switchscene_queues_debug_transition_pushes_no_event() {
-        let mut manager = SceneManager::new(SceneId::MainHub);
+        let mut manager = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
         let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
         manager.apply_command(
-            Command::SwitchScene { target: SceneId::BattleViewer, params: None },
+            Command::SwitchScene { target: SceneId::BattleViewer.into(), params: None },
             &event_tx,
         );
         assert!(
@@ -967,7 +991,7 @@ mod tests {
         let result = manager.process_pending();
         assert_eq!(
             result,
-            Some(SceneId::BattleViewer),
+            Some(SceneKey::from(SceneId::BattleViewer)),
             "SwitchScene command must queue a debug transition resolved by process_pending"
         );
     }
@@ -978,7 +1002,7 @@ mod tests {
     /// `Error{UnknownScene}` and leave `pending` untouched.
     #[test]
     fn apply_command_switchscene_unimplemented_target_rejects_without_panicking() {
-        let mut manager = SceneManager::new(SceneId::MainHub);
+        let mut manager = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
         let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
 
         assert!(
@@ -987,7 +1011,7 @@ mod tests {
         );
 
         manager.apply_command(
-            Command::SwitchScene { target: SceneId::Settings, params: None },
+            Command::SwitchScene { target: SceneId::Settings.into(), params: None },
             &event_tx,
         );
 
@@ -999,7 +1023,7 @@ mod tests {
         );
         assert_eq!(
             manager.active_id(),
-            SceneId::MainHub,
+            SceneKey::from(SceneId::MainHub),
             "active scene must be unchanged"
         );
 
@@ -1019,16 +1043,16 @@ mod tests {
     /// pushes `Event { body: Message::SceneChanged { id }, reply_to: None }`.
     #[test]
     fn process_pending_notify_pushes_scene_changed_and_returns_id_on_switch() {
-        let mut manager = SceneManager::new(SceneId::MainHub);
+        let mut manager = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
         let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
         manager.set_debug_transition(Transition {
-            target: SceneId::BattleViewer,
+            target: SceneId::BattleViewer.into(),
             params: None,
         });
         let result = manager.process_pending_notify(&event_tx);
         assert_eq!(
             result,
-            Some(SceneId::BattleViewer),
+            Some(SceneKey::from(SceneId::BattleViewer)),
             "process_pending_notify must return Some(BattleViewer) after a debug transition"
         );
         let ev = event_rx
@@ -1040,7 +1064,7 @@ mod tests {
         );
         match ev.body {
             Message::SceneChanged(sc) => {
-                assert_eq!(sc.id, SceneId::BattleViewer, "SceneChanged.id must be BattleViewer");
+                assert_eq!(sc.id, SceneKey::from(SceneId::BattleViewer), "SceneChanged.id must be BattleViewer");
             }
             other => panic!("expected SceneChanged body, got {:?}", other),
         }
@@ -1050,7 +1074,7 @@ mod tests {
     /// no event.
     #[test]
     fn process_pending_notify_returns_none_and_pushes_nothing_when_empty() {
-        let mut manager = SceneManager::new(SceneId::MainHub);
+        let mut manager = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
         let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
         let result = manager.process_pending_notify(&event_tx);
         assert_eq!(
@@ -1069,10 +1093,10 @@ mod tests {
     /// pre-b5-t3 `JsonValue::Null` placeholder (task brief point 13).
     #[test]
     fn process_pending_notify_scene_changed_snapshot_matches_new_scene() {
-        let mut manager = SceneManager::new(SceneId::MainHub);
+        let mut manager = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
         let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
         manager.set_debug_transition(Transition {
-            target: SceneId::BattleViewer,
+            target: SceneId::BattleViewer.into(),
             params: None,
         });
         manager.process_pending_notify(&event_tx);
@@ -1081,7 +1105,7 @@ mod tests {
             .expect("process_pending_notify must push a SceneChanged event after a switch");
         match ev.body {
             Message::SceneChanged(sc) => {
-                assert_eq!(sc.id, SceneId::BattleViewer);
+                assert_eq!(sc.id, SceneKey::from(SceneId::BattleViewer));
                 assert_ne!(
                     sc.snapshot,
                     JsonValue::Null,
@@ -1103,17 +1127,17 @@ mod tests {
     /// not only for debug ones — confirming the "any switch" contract.
     #[test]
     fn process_pending_notify_pushes_scene_changed_for_gameplay_transition() {
-        let mut manager = SceneManager::new(SceneId::MainHub);
+        let mut manager = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
         let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
         // Use the gameplay path (not debug).
         manager.set_gameplay_transition(Transition {
-            target: SceneId::RosterManager,
+            target: SceneId::RosterManager.into(),
             params: None,
         });
         let result = manager.process_pending_notify(&event_tx);
         assert_eq!(
             result,
-            Some(SceneId::RosterManager),
+            Some(SceneKey::from(SceneId::RosterManager)),
             "process_pending_notify must return Some(RosterManager) for a gameplay transition"
         );
         let ev = event_rx
@@ -1122,7 +1146,7 @@ mod tests {
         assert!(ev.reply_to.is_none());
         match ev.body {
             Message::SceneChanged(sc) => {
-                assert_eq!(sc.id, SceneId::RosterManager);
+                assert_eq!(sc.id, SceneKey::from(SceneId::RosterManager));
             }
             other => panic!("expected SceneChanged body, got {:?}", other),
         }
@@ -1137,7 +1161,7 @@ mod tests {
     fn inspect_hooks_battle_viewer_live() {
         use serde_json::json;
 
-        let mut mgr = SceneManager::new(SceneId::BattleViewer);
+        let mut mgr = SceneManager::new(SceneKey::from(SceneId::BattleViewer), Box::new(GameCatalog));
         mgr.active_inspect()
             .apply_patch("elapsed", json!(9.0))
             .expect("elapsed is a plain, editable f32 field (b5-t1)");
@@ -1177,7 +1201,7 @@ mod tests {
     fn pump_live_snapshots_gated_to_one_per_100ms_window() {
         use std::time::Instant;
 
-        let mut mgr = SceneManager::new(SceneId::BattleViewer);
+        let mut mgr = SceneManager::new(SceneKey::from(SceneId::BattleViewer), Box::new(GameCatalog));
         let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
         mgr.apply_command(Command::Subscribe { live: true }, &event_tx);
 
@@ -1188,7 +1212,7 @@ mod tests {
         );
         match first.body {
             Message::StateSnapshot(StateSnapshot { id, .. }) => {
-                assert_eq!(id, SceneId::BattleViewer, "pumped StateSnapshot.id must be active scene");
+                assert_eq!(id, SceneKey::from(SceneId::BattleViewer), "pumped StateSnapshot.id must be active scene");
             }
             other => panic!("expected StateSnapshot, got {:?}", other),
         }
@@ -1212,7 +1236,7 @@ mod tests {
     fn pump_live_snapshots_noop_when_not_subscribed() {
         use std::time::Instant;
 
-        let mut mgr = SceneManager::new(SceneId::BattleViewer);
+        let mut mgr = SceneManager::new(SceneKey::from(SceneId::BattleViewer), Box::new(GameCatalog));
         let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
 
         mgr.pump_live_snapshots(&event_tx, Instant::now());
@@ -1243,7 +1267,7 @@ mod tests {
         use serde_json::json;
 
         // Not subscribed: immediate StateSnapshot reply is retained.
-        let mut mgr = SceneManager::new(SceneId::BattleViewer);
+        let mut mgr = SceneManager::new(SceneKey::from(SceneId::BattleViewer), Box::new(GameCatalog));
         let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
         let mut patch = BTreeMap::new();
         patch.insert("elapsed".to_string(), json!(2.0));
@@ -1260,7 +1284,7 @@ mod tests {
         );
 
         // Subscribed live: immediate StateSnapshot reply must be suppressed.
-        let mut mgr = SceneManager::new(SceneId::BattleViewer);
+        let mut mgr = SceneManager::new(SceneKey::from(SceneId::BattleViewer), Box::new(GameCatalog));
         let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
         mgr.apply_command(Command::Subscribe { live: true }, &event_tx);
         let mut patch = BTreeMap::new();

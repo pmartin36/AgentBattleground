@@ -17,10 +17,12 @@ use std::time::{Duration, Instant};
 
 use game::ipc_server;
 use game::manager::SceneManager;
+use game::registry::GameCatalog;
+use game::scene_id::SceneId;
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use scene_core::ipc::{ApplyState, Envelope, Message, StateSnapshot, read_frame, write_frame};
-use scene_core::scene_id::SceneId;
+use scene_core::SceneKey;
 use serde_json::{json, Value as JsonValue};
 
 /// Retry-connect to the Unix socket until the accept thread is ready (up to 2 s).
@@ -46,7 +48,7 @@ fn connect_retry(path: &std::path::Path) -> UnixStream {
 fn run_e2e(client_fn: impl FnOnce(&mut UnixStream) + Send + 'static) -> SceneManager {
     let (handle, cmd_rx) = ipc_server::spawn().expect("ipc_server::spawn must succeed");
     let events = handle.events.clone();
-    let mut mgr = SceneManager::new(SceneId::BattleViewer);
+    let mut mgr = SceneManager::new(SceneKey::from(SceneId::BattleViewer), Box::new(GameCatalog));
 
     let done = Arc::new(AtomicBool::new(false));
     let done_client = Arc::clone(&done);
@@ -70,7 +72,7 @@ fn run_e2e(client_fn: impl FnOnce(&mut UnixStream) + Send + 'static) -> SceneMan
             Message::StateSnapshot(ref payload) => {
                 assert_eq!(
                     payload.id,
-                    SceneId::BattleViewer,
+                    SceneKey::from(SceneId::BattleViewer),
                     "initial StateSnapshot.id must be the active scene (BattleViewer)"
                 );
             }
@@ -106,7 +108,7 @@ fn run_e2e(client_fn: impl FnOnce(&mut UnixStream) + Send + 'static) -> SceneMan
 fn send_apply_state_and_split_replies(
     client: &mut UnixStream,
     seq: u64,
-    id: SceneId,
+    id: SceneKey,
     patch: BTreeMap<String, JsonValue>,
 ) -> Message {
     let req = Envelope::new(seq, None, Message::ApplyState(ApplyState { id, patch }));
@@ -143,10 +145,10 @@ fn apply_state_elapsed_changes_state_and_next_render_reflects_it() {
     let mgr = run_e2e(|client| {
         let mut patch = BTreeMap::new();
         patch.insert("elapsed".to_string(), json!(5.0));
-        let reply = send_apply_state_and_split_replies(client, 1, SceneId::BattleViewer, patch);
+        let reply = send_apply_state_and_split_replies(client, 1, SceneKey::from(SceneId::BattleViewer), patch);
         match reply {
             Message::StateSnapshot(StateSnapshot { id, snapshot }) => {
-                assert_eq!(id, SceneId::BattleViewer);
+                assert_eq!(id, SceneKey::from(SceneId::BattleViewer));
                 assert_eq!(
                     snapshot["elapsed"],
                     json!(5.0),
@@ -161,7 +163,7 @@ fn apply_state_elapsed_changes_state_and_next_render_reflects_it() {
     after_terminal.draw(|f| mgr.render(f)).unwrap();
     let after = after_terminal.backend().buffer().clone();
 
-    let baseline_mgr = SceneManager::new(SceneId::BattleViewer);
+    let baseline_mgr = SceneManager::new(SceneKey::from(SceneId::BattleViewer), Box::new(GameCatalog));
     let mut baseline_terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
     baseline_terminal.draw(|f| baseline_mgr.render(f)).unwrap();
     let baseline = baseline_terminal.backend().buffer().clone();
@@ -180,10 +182,10 @@ fn apply_state_nested_piece_color_and_transform_paths_apply() {
         let mut patch = BTreeMap::new();
         patch.insert("pieces[0].color".to_string(), json!("#ff0000ff"));
         patch.insert("pieces[0].transform.translate.x".to_string(), json!(3.0));
-        let reply = send_apply_state_and_split_replies(client, 1, SceneId::BattleViewer, patch);
+        let reply = send_apply_state_and_split_replies(client, 1, SceneKey::from(SceneId::BattleViewer), patch);
         match reply {
             Message::StateSnapshot(StateSnapshot { id, snapshot }) => {
-                assert_eq!(id, SceneId::BattleViewer);
+                assert_eq!(id, SceneKey::from(SceneId::BattleViewer));
                 assert_eq!(
                     snapshot["pieces"][0]["color"],
                     json!("#ff0000ff"),
@@ -217,10 +219,10 @@ fn apply_state_team_only_patch_isolates_color_and_transform() {
     let mgr = run_e2e(move |client| {
         let mut patch = BTreeMap::new();
         patch.insert("pieces[0].team".to_string(), json!("B"));
-        let reply = send_apply_state_and_split_replies(client, 1, SceneId::BattleViewer, patch);
+        let reply = send_apply_state_and_split_replies(client, 1, SceneKey::from(SceneId::BattleViewer), patch);
         match reply {
             Message::StateSnapshot(StateSnapshot { id, snapshot }) => {
-                assert_eq!(id, SceneId::BattleViewer);
+                assert_eq!(id, SceneKey::from(SceneId::BattleViewer));
                 assert_eq!(
                     snapshot["pieces"][0]["team"],
                     json!("B"),
@@ -250,7 +252,7 @@ struct BattleViewerSnapshot {
 
 impl BattleViewerSnapshot {
     fn baseline() -> Self {
-        let mut mgr = SceneManager::new(SceneId::BattleViewer);
+        let mut mgr = SceneManager::new(SceneKey::from(SceneId::BattleViewer), Box::new(GameCatalog));
         let snap = mgr.active_inspect().snapshot();
         Self {
             piece0_color: snap["pieces"][0]["color"].clone(),
@@ -277,7 +279,7 @@ fn apply_state_rejects_readonly_field_but_applies_valid_sibling_in_same_patch() 
             1,
             None,
             Message::ApplyState(ApplyState {
-                id: SceneId::BattleViewer,
+                id: SceneKey::from(SceneId::BattleViewer),
                 patch,
             }),
         );
@@ -301,7 +303,7 @@ fn apply_state_rejects_readonly_field_but_applies_valid_sibling_in_same_patch() 
                     error_msg = Some(payload.message);
                 }
                 Message::StateSnapshot(StateSnapshot { id, snapshot: s }) => {
-                    assert_eq!(id, SceneId::BattleViewer);
+                    assert_eq!(id, SceneKey::from(SceneId::BattleViewer));
                     snapshot = Some(s);
                 }
                 other => panic!("unexpected message after mixed ApplyState: {other:?}"),
@@ -331,7 +333,7 @@ fn apply_state_rejects_readonly_field_but_applies_valid_sibling_in_same_patch() 
 
 impl BattleViewerSnapshot {
     fn baseline_col0() -> JsonValue {
-        let mut mgr = SceneManager::new(SceneId::BattleViewer);
+        let mut mgr = SceneManager::new(SceneKey::from(SceneId::BattleViewer), Box::new(GameCatalog));
         mgr.active_inspect().snapshot()["pieces"][0]["col"].clone()
     }
 }

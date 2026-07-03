@@ -4,13 +4,14 @@ use std::time::Duration;
 use ratatui::buffer::Buffer;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use scene_core::scene_id::SceneId;
 use scene_core::Inspectable;
+use scene_core::SceneKey;
 use serde_json::Value as JsonValue;
 
 use render::{anchor, anchor_with_margin, stack, Anchor, ButtonState, FrameButton, StackAxis};
 
 use crate::scene::{EngineCtx, InputEvent, Scene, Transition};
+use crate::scene_id::SceneId;
 
 #[derive(Inspectable)]
 pub struct MainHub {
@@ -200,8 +201,8 @@ impl MainHub {
     /// other values are inert.
     fn activate(&mut self, index: usize) -> Option<Transition> {
         match index {
-            0 => Some(Transition { target: SceneId::RosterManager, params: None }),
-            1 => Some(Transition { target: SceneId::BattleViewer, params: None }),
+            0 => Some(Transition { target: SceneId::RosterManager.into(), params: None }),
+            1 => Some(Transition { target: SceneId::BattleViewer.into(), params: None }),
             2 => {
                 self.quit_requested = true;
                 None
@@ -212,8 +213,8 @@ impl MainHub {
 }
 
 impl Scene for MainHub {
-    fn id(&self) -> SceneId {
-        SceneId::MainHub
+    fn id(&self) -> SceneKey {
+        SceneId::MainHub.into()
     }
 
     fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {}
@@ -447,7 +448,7 @@ mod keyboard_input_tests {
         let transition = scene
             .handle_input(key_event(KeyCode::Enter))
             .expect("Enter on Roster must return a Transition");
-        assert_eq!(transition.target, SceneId::RosterManager);
+        assert_eq!(transition.target, SceneKey::from(SceneId::RosterManager));
         assert!(!scene.quit_requested(), "Roster activation must not request quit");
     }
 
@@ -458,7 +459,7 @@ mod keyboard_input_tests {
         let transition = scene
             .handle_input(key_event(KeyCode::Enter))
             .expect("Enter on Battle must return a Transition");
-        assert_eq!(transition.target, SceneId::BattleViewer);
+        assert_eq!(transition.target, SceneKey::from(SceneId::BattleViewer));
         assert!(!scene.quit_requested(), "Battle activation must not request quit");
     }
 
@@ -577,7 +578,7 @@ mod mouse_input_tests {
             .handle_input(mouse_event(MouseEventKind::Up(MouseButton::Left), cx, cy))
             .expect("a completed click on Roster must return a Transition");
 
-        assert_eq!(transition.target, SceneId::RosterManager);
+        assert_eq!(transition.target, SceneKey::from(SceneId::RosterManager));
         assert!(!scene.quit_requested(), "Roster activation must not request quit");
     }
 
@@ -600,7 +601,7 @@ mod mouse_input_tests {
             .handle_input(mouse_event(MouseEventKind::Up(MouseButton::Left), cx, cy))
             .expect("a completed click on Battle must return a Transition");
 
-        assert_eq!(transition.target, SceneId::BattleViewer);
+        assert_eq!(transition.target, SceneKey::from(SceneId::BattleViewer));
         assert!(!scene.quit_requested(), "Battle activation must not request quit");
     }
 

@@ -5,11 +5,12 @@ use ratatui::buffer::Buffer;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use render::tween::Tween;
-use scene_core::scene_id::SceneId;
 use scene_core::Inspectable;
+use scene_core::SceneKey;
 use serde_json::Value as JsonValue;
 
 use crate::scene::{EngineCtx, InputEvent, Scene, Transition};
+use crate::scene_id::SceneId;
 
 #[derive(Inspectable)]
 pub struct RosterManager {
@@ -293,8 +294,8 @@ impl Default for RosterManager {
 }
 
 impl Scene for RosterManager {
-    fn id(&self) -> SceneId {
-        SceneId::RosterManager
+    fn id(&self) -> SceneKey {
+        SceneId::RosterManager.into()
     }
 
     fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {}
@@ -353,7 +354,7 @@ impl Scene for RosterManager {
                 let hit_home = self.home_button.get_mut().handle_mouse(&me);
                 if hit_home {
                     return Some(Transition {
-                        target: SceneId::MainHub,
+                        target: SceneId::MainHub.into(),
                         params: None,
                     });
                 }
@@ -806,7 +807,7 @@ mod home_button_tests {
         let t = scene.handle_input(mouse_event(MouseEventKind::Up(MouseButton::Left), cx, cy));
 
         let t = t.expect("a completed click on the home button must return a Transition");
-        assert_eq!(t.target, SceneId::MainHub, "home button must transition to MainHub");
+        assert_eq!(t.target, SceneKey::from(SceneId::MainHub), "home button must transition to MainHub");
         assert!(t.params.is_none(), "home button transition must carry no params");
     }
 

@@ -10,11 +10,12 @@ use render::transform::{place, Transform, Vec2};
 use render::tween::Tween;
 use render::{draw_grid, AnimatedSprite};
 use scene_core::color::Rgba;
-use scene_core::scene_id::SceneId;
 use scene_core::Inspectable;
+use scene_core::SceneKey;
 use serde_json::Value as JsonValue;
 
 use crate::scene::{EngineCtx, InputEvent, Scene, Transition};
+use crate::scene_id::SceneId;
 
 /// Single source of truth for the board's column count. Every downstream
 /// consumer must reference this constant, never a bare literal `8`.
@@ -496,8 +497,8 @@ impl BattleViewer {
 }
 
 impl Scene for BattleViewer {
-    fn id(&self) -> SceneId {
-        SceneId::BattleViewer
+    fn id(&self) -> SceneKey {
+        SceneId::BattleViewer.into()
     }
 
     fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {}
@@ -1922,7 +1923,7 @@ mod battle_viewer_scene_wiring_tests {
     #[test]
     fn default_battle_viewer_reports_correct_scene_id() {
         let scene = BattleViewer::default();
-        assert_eq!(scene.id(), SceneId::BattleViewer);
+        assert_eq!(scene.id(), SceneKey::from(SceneId::BattleViewer));
     }
 
     /// b3-t2 DELIVERABLE (the point of the whole feature): mutating a stored

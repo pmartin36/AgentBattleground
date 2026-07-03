@@ -1,8 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use scene_core::scene_id::SceneId;
-
 use crate::registry;
+use crate::scene_id::SceneId;
 
 // ── Public surface ─────────────────────────────────────────────────────────────
 
@@ -382,8 +381,8 @@ mod tests {
         }
 
         impl Scene for ParamsCapturingScene {
-            fn id(&self) -> SceneId {
-                SceneId::BattleViewer
+            fn id(&self) -> scene_core::SceneKey {
+                SceneId::BattleViewer.into()
             }
             fn enter(&mut self, _ctx: &mut EngineCtx, params: Option<JsonValue>) {
                 *self.params.lock().unwrap() = params;
@@ -421,7 +420,11 @@ mod tests {
             params: Arc::clone(&captured),
             no_inspect: crate::scene::NoInspect,
         };
-        let _mgr = SceneManager::with_scene_and_params(Box::new(scene), params);
+        let _mgr = SceneManager::with_scene_and_params(
+            Box::new(scene),
+            params,
+            Box::new(crate::registry::GameCatalog),
+        );
 
         assert_eq!(
             *captured.lock().unwrap(),

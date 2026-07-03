@@ -12,6 +12,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use crate::{
     inspect, ipc_server, manager,
     manager::SceneManager,
+    registry::GameCatalog,
     scene::{InputEvent, Scene},
 };
 
@@ -93,7 +94,8 @@ pub fn run_with_params(
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let mut mgr = SceneManager::with_scene_and_params(initial, params);
+    let mut mgr =
+        SceneManager::with_scene_and_params(initial, params, Box::new(GameCatalog));
 
     let frame_budget = Duration::from_nanos(1_000_000_000 / 30);
     let mut clock = FrameClock::new();

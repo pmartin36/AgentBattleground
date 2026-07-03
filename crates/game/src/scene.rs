@@ -3,12 +3,12 @@ use std::time::Duration;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use scene_core::Inspectable;
-use scene_core::scene_id::SceneId;
+use scene_core::SceneKey;
 use serde_json::Value as JsonValue;
 
 /// A full-screen game mode. Exactly one is active at a time (spec 14).
 pub trait Scene {
-    fn id(&self) -> SceneId;
+    fn id(&self) -> SceneKey;
     fn enter(&mut self, ctx: &mut EngineCtx, params: Option<JsonValue>);
     fn update(&mut self, ctx: &mut EngineCtx, dt: Duration) -> Option<Transition>;
     fn render(&self, frame: &mut Frame, area: Rect);
@@ -30,7 +30,7 @@ pub trait Scene {
 
 /// A request to switch the active scene (spec 14 line 87).
 pub struct Transition {
-    pub target: SceneId,
+    pub target: SceneKey,
     pub params: Option<JsonValue>,
 }
 

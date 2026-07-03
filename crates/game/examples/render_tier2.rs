@@ -19,10 +19,11 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::Frame;
 use ratatui::Terminal;
-use scene_core::scene_id::SceneId;
+use scene_core::SceneKey;
 use serde_json::Value as JsonValue;
 
 use game::scene::{EngineCtx, InputEvent, Scene, Transition};
+use game::scene_id::SceneId;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -58,8 +59,8 @@ impl Tier2Scene {
 }
 
 impl Scene for Tier2Scene {
-    fn id(&self) -> SceneId {
-        SceneId::BattleViewer
+    fn id(&self) -> SceneKey {
+        SceneId::BattleViewer.into()
     }
 
     fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {}

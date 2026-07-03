@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use scene_core::ipc::{
     read_frame, write_frame, ApplyState, Envelope, IpcError, Message, Subscribe, SwitchScene,
 };
-use scene_core::scene_id::SceneId;
+use scene_core::SceneKey;
 
 /// Live connection to the game's inspect socket. Owns the write half and the
 /// receiver of decoded inbound messages. Dropping it closes the write half;
@@ -80,7 +80,7 @@ impl InspectorClient {
     /// Frame + write an `ApplyState{id, patch}`, stamping the next seq (b4-t9).
     pub fn send_apply_state(
         &mut self,
-        id: SceneId,
+        id: SceneKey,
         patch: BTreeMap<String, serde_json::Value>,
     ) -> Result<(), IpcError> {
         let body = Message::ApplyState(ApplyState { id, patch });
@@ -109,7 +109,6 @@ pub(crate) mod tests {
     use scene_core::ipc::{
         write_frame, read_frame, CatalogEntry, Envelope, Hello, Message,
     };
-    use scene_core::scene_id::SceneId;
     use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
     use std::time::Duration;
@@ -148,17 +147,17 @@ pub(crate) mod tests {
         Message::Hello(Hello {
             scenes: vec![
                 CatalogEntry {
-                    id: SceneId::MainHub,
+                    id: SceneKey::new("MainHub"),
                     name: "Main Hub".to_string(),
                     schema: stub_schema("MainHub"),
                 },
                 CatalogEntry {
-                    id: SceneId::BattleViewer,
+                    id: SceneKey::new("BattleViewer"),
                     name: "Battle Viewer".to_string(),
                     schema: stub_schema("BattleViewer"),
                 },
             ],
-            active: SceneId::MainHub,
+            active: SceneKey::new("MainHub"),
         })
     }
 
@@ -189,9 +188,9 @@ pub(crate) mod tests {
         match msg {
             Message::Hello(h) => {
                 assert_eq!(h.scenes.len(), 2, "catalog must have 2 scenes");
-                assert_eq!(h.scenes[0].id, SceneId::MainHub);
-                assert_eq!(h.scenes[1].id, SceneId::BattleViewer);
-                assert_eq!(h.active, SceneId::MainHub);
+                assert_eq!(h.scenes[0].id, SceneKey::new("MainHub"));
+                assert_eq!(h.scenes[1].id, SceneKey::new("BattleViewer"));
+                assert_eq!(h.active, SceneKey::new("MainHub"));
             }
             other => panic!("expected Hello, got {:?}", other),
         }
@@ -324,7 +323,7 @@ pub(crate) mod tests {
         let mut patch = std::collections::BTreeMap::new();
         patch.insert("power".to_string(), serde_json::json!(5.0));
         client
-            .send_apply_state(SceneId::BattleViewer, patch.clone())
+            .send_apply_state(SceneKey::new("BattleViewer"), patch.clone())
             .expect("send_apply_state must succeed");
 
         let env = rx
@@ -333,7 +332,7 @@ pub(crate) mod tests {
 
         match env.body {
             Message::ApplyState(a) => {
-                assert_eq!(a.id, SceneId::BattleViewer);
+                assert_eq!(a.id, SceneKey::new("BattleViewer"));
                 assert_eq!(a.patch, patch);
             }
             other => panic!("expected ApplyState, got {:?}", other),
@@ -392,7 +391,7 @@ pub(crate) mod tests {
 
         let mut client = connect(&path).expect("connect");
         client
-            .send_apply_state(SceneId::BattleViewer, std::collections::BTreeMap::new())
+            .send_apply_state(SceneKey::new("BattleViewer"), std::collections::BTreeMap::new())
             .expect("send 0");
         client.send_subscribe(true).expect("send 1");
 

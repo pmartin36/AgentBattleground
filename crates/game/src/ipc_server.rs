@@ -8,9 +8,9 @@ use std::sync::{Arc, Mutex};
 use scene_core::ipc::{
     Envelope, ErrorCode, ErrorPayload, IpcError, Message, read_frame, write_frame,
 };
-use scene_core::scene_id::SceneId;
 
 use crate::manager::Command;
+use crate::scene_id::SceneId;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -244,7 +244,7 @@ fn reader_loop(
                                 &cmd_tx,
                                 &event_tx,
                                 Command::SwitchScene {
-                                    target,
+                                    target: target.into(),
                                     params: ss.params,
                                 },
                                 env.seq,
@@ -320,10 +320,11 @@ mod tests {
     use scene_core::ipc::{
         read_frame, write_frame, Envelope, ErrorCode, Message, SwitchScene,
     };
-    use scene_core::scene_id::SceneId;
+    use scene_core::SceneKey;
 
     use super::*;
     use crate::manager::Command;
+    use crate::scene_id::SceneId;
 
     /// Retry-connect until the server's accept loop is listening (up to 2 s).
     fn connect_retry(path: &std::path::Path) -> UnixStream {
@@ -375,7 +376,7 @@ mod tests {
             Command::SwitchScene { target, .. } => {
                 assert_eq!(
                     target,
-                    SceneId::BattleViewer,
+                    SceneKey::from(SceneId::BattleViewer),
                     "forwarded Command target must be BattleViewer"
                 );
             }
@@ -537,7 +538,7 @@ mod tests {
             Command::SwitchScene { target, .. } => {
                 assert_eq!(
                     target,
-                    SceneId::BattleViewer,
+                    SceneKey::from(SceneId::BattleViewer),
                     "A's Command target must be BattleViewer"
                 );
             }
@@ -633,7 +634,7 @@ mod tests {
     ) {
         use scene_core::inspect::{FieldSchema, FieldTag};
         use scene_core::ipc::{CatalogEntry, Hello, SceneChanged};
-        use scene_core::scene_id::SceneId;
+        use crate::scene_id::SceneId;
 
         fn stub_schema(id: SceneId) -> FieldSchema {
             FieldSchema {
@@ -658,13 +659,13 @@ mod tests {
                             .iter()
                             .filter_map(|&c| crate::scenes::scene_for_digit(c))
                             .map(|id| CatalogEntry {
-                                id,
+                                id: id.into(),
                                 name: id.display_name().to_string(),
                                 schema: stub_schema(id),
                             })
                             .collect();
                         let _ = event_tx.send(Event {
-                            body: Message::Hello(Hello { scenes, active }),
+                            body: Message::Hello(Hello { scenes, active: active.into() }),
                             reply_to: None,
                         });
                     }
@@ -709,7 +710,7 @@ mod tests {
         );
         match env.body {
             Message::Hello(h) => {
-                assert_eq!(h.active, SceneId::MainHub, "Hello.active must be MainHub");
+                assert_eq!(h.active, SceneKey::from(SceneId::MainHub), "Hello.active must be MainHub");
                 assert_eq!(h.scenes.len(), 4, "Hello.scenes must list four M1 scenes");
             }
             other => panic!("expected Hello, got {:?}", other),
@@ -766,7 +767,7 @@ mod tests {
         );
         match sc_env.body {
             Message::SceneChanged(sc) => {
-                assert_eq!(sc.id, SceneId::BattleViewer, "SceneChanged.id must be BattleViewer");
+                assert_eq!(sc.id, SceneKey::from(SceneId::BattleViewer), "SceneChanged.id must be BattleViewer");
             }
             other => panic!("expected SceneChanged, got {:?}", other),
         }

@@ -11,7 +11,7 @@ use std::rc::Rc;
 use scene_core::color::Rgba;
 use scene_core::inspect::{FieldSchema, FieldTag};
 use scene_core::ipc::{CatalogEntry, Message};
-use scene_core::scene_id::SceneId;
+use scene_core::SceneKey;
 use scene_core::{parse_path_segment, Segment};
 use crate::client::InspectorClient;
 
@@ -25,12 +25,12 @@ const ACTION_ROW_PADDING: f32 = 6.0;
 /// Pure UI state — the testable controller layer (no egui, no client).
 pub struct SwitcherState {
     pub catalog: Vec<CatalogEntry>, // from Hello; empty until connected
-    pub active: Option<SceneId>,    // game's current scene
-    pub selected: Option<SceneId>,  // dropdown selection
+    pub active: Option<SceneKey>,   // game's current scene
+    pub selected: Option<SceneKey>, // dropdown selection
     pub connected: bool,            // true once Hello seen; false on disconnect
     pub should_exit: bool,          // true once set_disconnected() is called
     /// Every catalog entry's schema, keyed by scene id. Populated by `Hello` (b4-t1).
-    pub schema_cache: HashMap<SceneId, FieldSchema>,
+    pub schema_cache: HashMap<SceneKey, FieldSchema>,
     /// The active scene's schema — the field-editor panel skeleton (b4-t1).
     /// `Rc`-wrapped so `render_field_panel`'s per-frame clone (required to
     /// avoid holding an immutable borrow into `state` while also passing
@@ -88,24 +88,24 @@ impl SwitcherState {
         match msg {
             Message::Hello(h) => {
                 self.catalog = h.scenes.clone();
-                self.active = Some(h.active);
-                self.selected = Some(h.active);
+                self.active = Some(h.active.clone());
+                self.selected = Some(h.active.clone());
                 self.connected = true;
 
                 self.schema_cache.clear();
                 for entry in &h.scenes {
-                    self.schema_cache.insert(entry.id, entry.schema.clone());
+                    self.schema_cache.insert(entry.id.clone(), entry.schema.clone());
                 }
                 self.panel_schema = self.schema_cache.get(&h.active).cloned().map(Rc::new);
             }
             Message::SceneChanged(sc) => {
-                self.active = Some(sc.id);
-                self.selected = Some(sc.id);
+                self.active = Some(sc.id.clone());
+                self.selected = Some(sc.id.clone());
                 self.panel_schema = self.schema_cache.get(&sc.id).cloned().map(Rc::new);
                 self.panel_snapshot = sc.snapshot.clone();
             }
             Message::StateSnapshot(ss) => {
-                if self.active == Some(ss.id) {
+                if self.active.as_ref() == Some(&ss.id) {
                     self.panel_snapshot = ss.snapshot.clone();
                     if self.awaiting_submit {
                         self.dirty.clear();
@@ -142,9 +142,9 @@ impl SwitcherState {
 
     /// Returns the catalog display name for the current selection, or "-".
     pub fn selected_name(&self) -> &str {
-        if let Some(id) = self.selected {
+        if let Some(id) = &self.selected {
             for entry in &self.catalog {
-                if entry.id == id {
+                if entry.id == *id {
                     return &entry.name;
                 }
             }
@@ -556,7 +556,7 @@ impl InspectorApp {
         if patch.is_empty() {
             return;
         }
-        if let Some(id) = self.state.active {
+        if let Some(id) = self.state.active.clone() {
             if let Err(e) = self.client.send_apply_state(id, patch) {
                 eprintln!("inspector: send_apply_state failed: {e}");
             }
@@ -596,11 +596,11 @@ impl InspectorApp {
         if !self.live_apply {
             return;
         }
-        if let Some(id) = self.state.active {
+        if let Some(id) = self.state.active.clone() {
             for (path, value) in edits {
                 let mut patch = BTreeMap::new();
                 patch.insert(path, value);
-                if let Err(e) = self.client.send_apply_state(id, patch) {
+                if let Err(e) = self.client.send_apply_state(id.clone(), patch) {
                     eprintln!("inspector: send_apply_state failed: {e}");
                 }
             }
@@ -642,7 +642,7 @@ impl InspectorApp {
                                 .selected_text(selected_display.as_str())
                                 .show_ui(ui, |ui| {
                                     for e in cat {
-                                        ui.selectable_value(sel, Some(e.id), &e.name);
+                                        ui.selectable_value(sel, Some(e.id.clone()), &e.name);
                                     }
                                 });
                         });
@@ -654,8 +654,8 @@ impl InspectorApp {
                         .add_enabled(go_enabled, egui::Button::new("Go"))
                         .clicked()
                     {
-                        if let Some(s) = self.state.selected {
-                            if let Err(e) = self.client.send_switch(s.wire_name(), None) {
+                        if let Some(s) = &self.state.selected {
+                            if let Err(e) = self.client.send_switch(s.as_str(), None) {
                                 eprintln!("inspector: send_switch failed: {e}");
                             }
                         }
@@ -760,7 +760,6 @@ mod tests {
     use crate::client::tests::stub_schema;
     use scene_core::inspect::{FieldSchema, FieldTag};
     use scene_core::ipc::{CatalogEntry, Hello, Message, SceneChanged};
-    use scene_core::scene_id::SceneId;
 
     // ── b4-t4: field-editor widget matrix (headless egui harness) ──────────
 
@@ -1401,27 +1400,27 @@ mod tests {
         Message::Hello(Hello {
             scenes: vec![
                 CatalogEntry {
-                    id: SceneId::MainHub,
+                    id: SceneKey::new("MainHub"),
                     name: "Main Hub".to_string(),
                     schema: stub_schema_with_fields("MainHub", 1),
                 },
                 CatalogEntry {
-                    id: SceneId::BattleViewer,
+                    id: SceneKey::new("BattleViewer"),
                     name: "Battle Viewer".to_string(),
                     schema: stub_schema_with_fields("BattleViewer", 2),
                 },
                 CatalogEntry {
-                    id: SceneId::RosterManager,
+                    id: SceneKey::new("RosterManager"),
                     name: "Roster".to_string(),
                     schema: stub_schema_with_fields("RosterManager", 3),
                 },
                 CatalogEntry {
-                    id: SceneId::Leaderboard,
+                    id: SceneKey::new("Leaderboard"),
                     name: "Leaderboard".to_string(),
                     schema: stub_schema_with_fields("Leaderboard", 4),
                 },
             ],
-            active: SceneId::MainHub,
+            active: SceneKey::new("MainHub"),
         })
     }
 
@@ -1431,17 +1430,17 @@ mod tests {
         Message::Hello(Hello {
             scenes: vec![
                 CatalogEntry {
-                    id: SceneId::RosterManager,
+                    id: SceneKey::new("RosterManager"),
                     name: "Roster".to_string(),
                     schema: stub_schema_with_fields("RosterManager2", 5),
                 },
                 CatalogEntry {
-                    id: SceneId::Leaderboard,
+                    id: SceneKey::new("Leaderboard"),
                     name: "Leaderboard".to_string(),
                     schema: stub_schema_with_fields("Leaderboard2", 6),
                 },
             ],
-            active: SceneId::Leaderboard,
+            active: SceneKey::new("Leaderboard"),
         })
     }
 
@@ -1461,8 +1460,8 @@ mod tests {
         let mut s = SwitcherState::new();
         s.apply(&four_scene_hello());
         assert_eq!(s.catalog.len(), 4, "catalog must have 4 scenes after Hello");
-        assert_eq!(s.active, Some(SceneId::MainHub), "active must be MainHub");
-        assert_eq!(s.selected, Some(SceneId::MainHub), "selected must be pre-set to active");
+        assert_eq!(s.active, Some(SceneKey::new("MainHub")), "active must be MainHub");
+        assert_eq!(s.selected, Some(SceneKey::new("MainHub")), "selected must be pre-set to active");
         assert!(s.connected, "connected must be true after Hello");
     }
 
@@ -1472,11 +1471,11 @@ mod tests {
         let mut s = SwitcherState::new();
         s.apply(&four_scene_hello());
         s.apply(&Message::SceneChanged(SceneChanged {
-            id: SceneId::BattleViewer,
+            id: SceneKey::new("BattleViewer"),
             snapshot: serde_json::Value::Null,
         }));
-        assert_eq!(s.active, Some(SceneId::BattleViewer), "active must track SceneChanged");
-        assert_eq!(s.selected, Some(SceneId::BattleViewer), "selected must mirror active on SceneChanged");
+        assert_eq!(s.active, Some(SceneKey::new("BattleViewer")), "active must track SceneChanged");
+        assert_eq!(s.selected, Some(SceneKey::new("BattleViewer")), "selected must mirror active on SceneChanged");
     }
 
     /// selected_name returns the catalog entry's name for the selected scene.
@@ -1595,22 +1594,22 @@ mod tests {
 
         assert_eq!(s.schema_cache.len(), 4, "schema_cache must have one entry per catalog scene");
         assert_eq!(
-            s.schema_cache.get(&SceneId::MainHub),
+            s.schema_cache.get(&SceneKey::new("MainHub")),
             Some(&stub_schema_with_fields("MainHub", 1)),
             "cached schema for MainHub must equal its source entry's schema"
         );
         assert_eq!(
-            s.schema_cache.get(&SceneId::BattleViewer),
+            s.schema_cache.get(&SceneKey::new("BattleViewer")),
             Some(&stub_schema_with_fields("BattleViewer", 2)),
             "cached schema for BattleViewer must equal its source entry's schema"
         );
         assert_eq!(
-            s.schema_cache.get(&SceneId::RosterManager),
+            s.schema_cache.get(&SceneKey::new("RosterManager")),
             Some(&stub_schema_with_fields("RosterManager", 3)),
             "cached schema for RosterManager must equal its source entry's schema"
         );
         assert_eq!(
-            s.schema_cache.get(&SceneId::Leaderboard),
+            s.schema_cache.get(&SceneKey::new("Leaderboard")),
             Some(&stub_schema_with_fields("Leaderboard", 4)),
             "cached schema for Leaderboard must equal its source entry's schema"
         );
@@ -1644,11 +1643,11 @@ mod tests {
             "schema_cache must be rebuilt from scratch, not merged (stale entries must be gone)"
         );
         assert!(
-            !s.schema_cache.contains_key(&SceneId::MainHub),
+            !s.schema_cache.contains_key(&SceneKey::new("MainHub")),
             "MainHub's stale cache entry from the first Hello must be gone"
         );
         assert_eq!(
-            s.schema_cache.get(&SceneId::Leaderboard),
+            s.schema_cache.get(&SceneKey::new("Leaderboard")),
             Some(&stub_schema_with_fields("Leaderboard2", 6)),
             "Leaderboard's cache entry must be replaced by the second Hello's schema"
         );
@@ -1681,7 +1680,7 @@ mod tests {
         s.apply(&four_scene_hello());
         let snap = serde_json::json!({"k": 1});
         s.apply(&Message::SceneChanged(SceneChanged {
-            id: SceneId::BattleViewer,
+            id: SceneKey::new("BattleViewer"),
             snapshot: snap.clone(),
         }));
 
@@ -1709,11 +1708,11 @@ mod tests {
         let mut s = SwitcherState::new();
         s.apply(&four_scene_hello());
         s.apply(&Message::SceneChanged(SceneChanged {
-            id: SceneId::BattleViewer,
+            id: SceneKey::new("BattleViewer"),
             snapshot: serde_json::json!({"k": 1}),
         }));
         s.apply(&Message::SceneChanged(SceneChanged {
-            id: SceneId::MainHub,
+            id: SceneKey::new("MainHub"),
             snapshot: serde_json::json!({"k": 2}),
         }));
 
@@ -1729,7 +1728,7 @@ mod tests {
         );
     }
 
-    /// SceneChanged for a SceneId absent from schema_cache leaves panel_schema
+    /// SceneChanged for a SceneKey absent from schema_cache leaves panel_schema
     /// as None (defensive no-panic path) rather than panicking or keeping a
     /// stale Some value.
     #[test]
@@ -1738,12 +1737,12 @@ mod tests {
         s.apply(&four_scene_hello());
         // Settings is never sent in four_scene_hello()'s catalog.
         assert!(
-            !s.schema_cache.contains_key(&SceneId::Settings),
+            !s.schema_cache.contains_key(&SceneKey::new("Settings")),
             "test precondition: Settings must be absent from schema_cache"
         );
 
         s.apply(&Message::SceneChanged(SceneChanged {
-            id: SceneId::Settings,
+            id: SceneKey::new("Settings"),
             snapshot: serde_json::json!({"k": 3}),
         }));
 
@@ -1771,7 +1770,7 @@ mod tests {
         let mut s = SwitcherState::new();
         s.apply(&four_scene_hello());
         s.apply(&Message::SceneChanged(SceneChanged {
-            id: SceneId::MainHub,
+            id: SceneKey::new("MainHub"),
             snapshot: serde_json::json!({"a": 1}),
         }));
 
@@ -1792,7 +1791,7 @@ mod tests {
         let mut s = SwitcherState::new();
         s.apply(&four_scene_hello());
         s.apply(&Message::SceneChanged(SceneChanged {
-            id: SceneId::MainHub,
+            id: SceneKey::new("MainHub"),
             snapshot: serde_json::json!({
                 "a": {"b": 5},
                 "list": [{"x": 1}, {"x": 2}],
@@ -1823,13 +1822,13 @@ mod tests {
         let mut s = SwitcherState::new();
         s.apply(&four_scene_hello());
         s.apply(&Message::SceneChanged(SceneChanged {
-            id: SceneId::MainHub,
+            id: SceneKey::new("MainHub"),
             snapshot: serde_json::json!({"dirty_field": 1, "clean_field": 2}),
         }));
         s.mark_dirty("dirty_field", serde_json::json!(99));
 
         s.apply(&Message::StateSnapshot(StateSnapshot {
-            id: SceneId::MainHub,
+            id: SceneKey::new("MainHub"),
             snapshot: serde_json::json!({"dirty_field": 5, "clean_field": 20}),
         }));
 
@@ -1852,13 +1851,13 @@ mod tests {
         let mut s = SwitcherState::new();
         s.apply(&four_scene_hello());
         s.apply(&Message::SceneChanged(SceneChanged {
-            id: SceneId::MainHub,
+            id: SceneKey::new("MainHub"),
             snapshot: serde_json::json!({"dirty_field": 1, "clean_field": 2}),
         }));
         s.mark_dirty("dirty_field", serde_json::json!(99));
 
         s.apply(&Message::StateSnapshot(StateSnapshot {
-            id: SceneId::BattleViewer,
+            id: SceneKey::new("BattleViewer"),
             snapshot: serde_json::json!({"dirty_field": 500, "clean_field": 999}),
         }));
 
@@ -1881,7 +1880,7 @@ mod tests {
         let mut s = SwitcherState::new();
         s.apply(&four_scene_hello());
         s.apply(&Message::SceneChanged(SceneChanged {
-            id: SceneId::MainHub,
+            id: SceneKey::new("MainHub"),
             snapshot: serde_json::json!({"a": 1}),
         }));
         s.mark_dirty("a", serde_json::json!(42));
@@ -1903,7 +1902,7 @@ mod tests {
         let mut s = SwitcherState::new();
         s.apply(&four_scene_hello());
         s.apply(&Message::SceneChanged(SceneChanged {
-            id: SceneId::MainHub,
+            id: SceneKey::new("MainHub"),
             snapshot: serde_json::json!({"a": 1, "b": 2, "c": 3}),
         }));
         s.mark_dirty("a", serde_json::json!(10));
@@ -2304,7 +2303,7 @@ mod tests {
             Message::ApplyState(a) => {
                 assert_eq!(
                     a.id,
-                    SceneId::MainHub,
+                    SceneKey::new("MainHub"),
                     "submit's ApplyState must target the active scene"
                 );
                 let mut expected = BTreeMap::new();
@@ -2376,7 +2375,7 @@ mod tests {
                 2,
                 None,
                 Message::StateSnapshot(StateSnapshot {
-                    id: SceneId::MainHub,
+                    id: SceneKey::new("MainHub"),
                     snapshot: serde_json::json!({"f0": true}),
                 }),
             ),
@@ -2541,7 +2540,7 @@ mod tests {
             .expect("a live edit must send its own ApplyState");
         match env.body {
             Message::ApplyState(a) => {
-                assert_eq!(a.id, SceneId::MainHub);
+                assert_eq!(a.id, SceneKey::new("MainHub"));
                 let mut expected = BTreeMap::new();
                 expected.insert("f0".to_string(), serde_json::json!(true));
                 assert_eq!(

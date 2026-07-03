@@ -18,7 +18,7 @@ pub use leaderboard::Leaderboard;
 pub use main_hub::MainHub;
 pub use roster_manager::RosterManager;
 
-use scene_core::scene_id::SceneId;
+use crate::scene_id::SceneId;
 
 /// Global dev keybind map: number keys 1–4 → the four implemented scenes.
 /// Single source of truth so the mapping is never copy-pasted into each scene.
@@ -60,7 +60,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::style::Color;
     use ratatui::Terminal;
-    use scene_core::scene_id::SceneId;
+    use scene_core::SceneKey;
 
     /// Render a scene into a fresh TestBackend and return the resulting buffer.
     fn render_scene_to_buffer(scene: &dyn Scene, w: u16, h: u16) -> ratatui::buffer::Buffer {
@@ -86,7 +86,7 @@ mod tests {
 
                 assert_eq!(
                     scene.id(),
-                    $expected_id,
+                    SceneKey::from($expected_id),
                     "{} id() must return {:?}",
                     stringify!($scene_ty),
                     $expected_id

@@ -18,11 +18,12 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::Frame;
 use ratatui::Terminal;
-use scene_core::scene_id::SceneId;
+use scene_core::SceneKey;
 use serde_json::Value as JsonValue;
 
 use game::manager::SceneManager;
 use game::scene::{EngineCtx, InputEvent, Scene, Transition};
+use game::scene_id::SceneId;
 
 // ─── Tier1Scene ───────────────────────────────────────────────────────────────
 
@@ -42,8 +43,8 @@ impl Tier1Scene {
 }
 
 impl Scene for Tier1Scene {
-    fn id(&self) -> SceneId {
-        SceneId::BattleViewer
+    fn id(&self) -> SceneKey {
+        SceneId::BattleViewer.into()
     }
 
     fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {}
@@ -120,7 +121,10 @@ fn main() -> io::Result<()> {
 
         let backend = TestBackend::new(W, H);
         let mut terminal = Terminal::new(backend)?;
-        let mgr = SceneManager::with_scene(Box::new(Tier1Scene::new()));
+        let mgr = SceneManager::with_scene(
+            Box::new(Tier1Scene::new()),
+            Box::new(game::registry::GameCatalog),
+        );
         terminal.draw(|f| mgr.render(f))?;
         let buf = terminal.backend().buffer().clone();
         let output = dump_buffer_ansi(&buf);

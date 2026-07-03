@@ -14,8 +14,10 @@ use std::time::{Duration, Instant};
 
 use game::ipc_server;
 use game::manager::SceneManager;
+use game::registry::GameCatalog;
+use game::scene_id::SceneId;
 use scene_core::ipc::{Envelope, Message, SwitchScene, read_frame, write_frame};
-use scene_core::scene_id::SceneId;
+use scene_core::SceneKey;
 
 /// Retry-connect to the Unix socket until the accept thread is ready (up to 2 s).
 /// Mirrors the pattern used in ipc_server.rs tests.
@@ -45,7 +47,7 @@ fn e2e_connect_then_switch_battle_viewer() {
     let events = handle.events.clone();
 
     // ── Boot the SceneManager (stays on this thread; Scene is !Send) ──────────
-    let mut mgr = SceneManager::new(SceneId::MainHub);
+    let mut mgr = SceneManager::new(SceneKey::from(SceneId::MainHub), Box::new(GameCatalog));
 
     // ── Shared done flag ──────────────────────────────────────────────────────
     let done = Arc::new(AtomicBool::new(false));
@@ -76,7 +78,7 @@ fn e2e_connect_then_switch_battle_viewer() {
         // Step 2: verify Hello contents.
         assert_eq!(
             hello.active,
-            SceneId::MainHub,
+            SceneKey::from(SceneId::MainHub),
             "Hello.active must be MainHub at boot"
         );
         assert_eq!(
@@ -86,12 +88,12 @@ fn e2e_connect_then_switch_battle_viewer() {
             hello.scenes.len()
         );
         let expected_ids = [
-            SceneId::MainHub,
-            SceneId::BattleViewer,
-            SceneId::RosterManager,
-            SceneId::Leaderboard,
+            SceneKey::from(SceneId::MainHub),
+            SceneKey::from(SceneId::BattleViewer),
+            SceneKey::from(SceneId::RosterManager),
+            SceneKey::from(SceneId::Leaderboard),
         ];
-        let got_ids: Vec<SceneId> = hello.scenes.iter().map(|e| e.id).collect();
+        let got_ids: Vec<SceneKey> = hello.scenes.iter().map(|e| e.id.clone()).collect();
         for expected in expected_ids {
             assert!(
                 got_ids.contains(&expected),
@@ -101,9 +103,10 @@ fn e2e_connect_then_switch_battle_viewer() {
             );
         }
         for entry in &hello.scenes {
+            let id = SceneId::from_key(&entry.id).expect("catalog key must map to a SceneId");
             assert_eq!(
                 entry.name,
-                entry.id.display_name(),
+                id.display_name(),
                 "CatalogEntry.name must equal display_name() for {:?}",
                 entry.id
             );
@@ -123,7 +126,7 @@ fn e2e_connect_then_switch_battle_viewer() {
             Message::StateSnapshot(ref payload) => {
                 assert_eq!(
                     payload.id,
-                    SceneId::MainHub,
+                    SceneKey::from(SceneId::MainHub),
                     "initial StateSnapshot.id must be the active scene (MainHub)"
                 );
             }
@@ -174,7 +177,7 @@ fn e2e_connect_then_switch_battle_viewer() {
             Message::SceneChanged(ref payload) => {
                 assert_eq!(
                     payload.id,
-                    SceneId::BattleViewer,
+                    SceneKey::from(SceneId::BattleViewer),
                     "SceneChanged.id must be BattleViewer"
                 );
             }
@@ -211,7 +214,7 @@ fn e2e_connect_then_switch_battle_viewer() {
     // Verify the manager itself switched to BattleViewer.
     assert_eq!(
         mgr.active_id(),
-        SceneId::BattleViewer,
+        SceneKey::from(SceneId::BattleViewer),
         "SceneManager.active_id must be BattleViewer after the switch"
     );
 }

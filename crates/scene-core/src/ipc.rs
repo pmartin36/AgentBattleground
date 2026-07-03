@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 
 use crate::inspect::FieldSchema;
-use crate::scene_id::SceneId;
+use crate::scene_key::SceneKey;
 
 /// Maximum JSON body length (bytes) the 4-byte length prefix may declare.
 /// Frames claiming more than this are rejected as `BadFrame`.
@@ -21,7 +21,7 @@ pub const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
 /// build a panel for a not-yet-active scene the moment it connects.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CatalogEntry {
-    pub id: SceneId,
+    pub id: SceneKey,
     pub name: String,
     pub schema: FieldSchema,
 }
@@ -31,7 +31,7 @@ pub struct CatalogEntry {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Hello {
     pub scenes: Vec<CatalogEntry>,
-    pub active: SceneId,
+    pub active: SceneKey,
 }
 
 /// Server → inspector (unsolicited) after any scene switch.
@@ -39,7 +39,7 @@ pub struct Hello {
 /// rebuilds the panel from its own `Hello`-populated schema cache).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SceneChanged {
-    pub id: SceneId,
+    pub id: SceneKey,
     pub snapshot: serde_json::Value,
 }
 
@@ -77,7 +77,7 @@ pub enum ErrorCode {
 /// Inspector → game: apply a batch of field patches to the named scene.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApplyState {
-    pub id: SceneId,
+    pub id: SceneKey,
     pub patch: BTreeMap<String, serde_json::Value>,
 }
 
@@ -85,7 +85,7 @@ pub struct ApplyState {
 /// `ApplyState`, or an unprompted post-connect / live-mode push).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StateSnapshot {
-    pub id: SceneId,
+    pub id: SceneKey,
     pub snapshot: serde_json::Value,
 }
 
@@ -281,9 +281,10 @@ pub fn write_frame<W: Write>(w: &mut W, env: &Envelope) -> Result<(), IpcError> 
 /// Deserialize a payload from a `serde_json::Value`.
 ///
 /// `serde_json::from_value` cannot satisfy deserializers that borrow `&'de str`
-/// from input (e.g. `SceneId` uses `<&str as Deserialize>`). Going through
-/// JSON bytes (`to_vec` → `from_slice`) keeps the normal string-borrow path
-/// alive and avoids a separate `Owned`/`Borrowed` split in `SceneId`.
+/// from input (e.g. `SceneKey` deserializes via an owned `String`, but other
+/// payload fields may borrow). Going through JSON bytes (`to_vec` →
+/// `from_slice`) keeps the normal string-borrow path alive and avoids a
+/// separate `Owned`/`Borrowed` split.
 fn from_payload<T: serde::de::DeserializeOwned>(v: serde_json::Value) -> Result<T, IpcError> {
     let bytes = serde_json::to_vec(&v).map_err(|e| IpcError::BadFrame(e.to_string()))?;
     serde_json::from_slice(&bytes).map_err(|e| IpcError::BadFrame(e.to_string()))
@@ -407,17 +408,17 @@ mod tests {
         Message::Hello(Hello {
             scenes: vec![
                 CatalogEntry {
-                    id: SceneId::MainHub,
+                    id: SceneKey::new("MainHub"),
                     name: "Main Hub".to_string(),
                     schema: stub_schema("MainHub"),
                 },
                 CatalogEntry {
-                    id: SceneId::BattleViewer,
+                    id: SceneKey::new("BattleViewer"),
                     name: "Battle Viewer".to_string(),
                     schema: stub_schema("BattleViewer"),
                 },
             ],
-            active: SceneId::MainHub,
+            active: SceneKey::new("MainHub"),
         })
     }
 
@@ -437,7 +438,7 @@ mod tests {
 
     fn scene_changed_msg() -> Message {
         Message::SceneChanged(SceneChanged {
-            id: SceneId::BattleViewer,
+            id: SceneKey::new("BattleViewer"),
             snapshot: serde_json::Value::Null,
         })
     }
@@ -447,14 +448,14 @@ mod tests {
         patch.insert("elapsed".to_string(), serde_json::json!(5.0));
         patch.insert("pieces[0].team".to_string(), serde_json::json!("B"));
         Message::ApplyState(ApplyState {
-            id: SceneId::BattleViewer,
+            id: SceneKey::new("BattleViewer"),
             patch,
         })
     }
 
     fn state_snapshot_msg() -> Message {
         Message::StateSnapshot(StateSnapshot {
-            id: SceneId::BattleViewer,
+            id: SceneKey::new("BattleViewer"),
             snapshot: serde_json::json!({"elapsed": 1.0}),
         })
     }
@@ -593,7 +594,7 @@ mod tests {
     fn scene_id_fields_serialize_as_wire_name_strings() {
         // Hello.active and SceneChanged.id must survive as "BattleViewer", not a numeric id.
         let env = Envelope::new(30, None, Message::SceneChanged(SceneChanged {
-            id: SceneId::BattleViewer,
+            id: SceneKey::new("BattleViewer"),
             snapshot: serde_json::Value::Null,
         }));
         let bytes = env.encode_frame().expect("encode");
@@ -822,17 +823,17 @@ mod tests {
             Message::Hello(Hello {
                 scenes: vec![
                     CatalogEntry {
-                        id: SceneId::MainHub,
+                        id: SceneKey::new("MainHub"),
                         name: "Main Hub".to_string(),
                         schema: schema_a.clone(),
                     },
                     CatalogEntry {
-                        id: SceneId::BattleViewer,
+                        id: SceneKey::new("BattleViewer"),
                         name: "Battle Viewer".to_string(),
                         schema: schema_b.clone(),
                     },
                 ],
-                active: SceneId::MainHub,
+                active: SceneKey::new("MainHub"),
             }),
         );
         let bytes = env.encode_frame().expect("encode Hello");
@@ -856,7 +857,7 @@ mod tests {
             51,
             None,
             Message::SceneChanged(SceneChanged {
-                id: SceneId::BattleViewer,
+                id: SceneKey::new("BattleViewer"),
                 snapshot: serde_json::json!({"elapsed": 2.5}),
             }),
         );

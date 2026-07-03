@@ -1,6 +1,8 @@
 /// Closed enum of every scene in the catalog (spec 14, M1).
 /// Wire-encoded as its exact Rust variant name string (e.g. `"BattleViewer"`).
 
+use scene_core::SceneKey;
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum SceneId {
     Onboarding,
@@ -65,6 +67,18 @@ impl SceneId {
     /// Implemented by scanning `all()` + `wire_name()` — single source of truth.
     pub fn from_wire(s: &str) -> Option<SceneId> {
         SceneId::all().iter().copied().find(|v| v.wire_name() == s)
+    }
+
+    /// Decode an opaque wire key back to a variant. `None` for unknown keys.
+    /// Delegates to `from_wire` — single source of truth for the mapping.
+    pub fn from_key(k: &SceneKey) -> Option<SceneId> {
+        SceneId::from_wire(k.as_str())
+    }
+}
+
+impl From<SceneId> for SceneKey {
+    fn from(id: SceneId) -> SceneKey {
+        SceneKey::new(id.wire_name())
     }
 }
 
@@ -231,5 +245,37 @@ mod tests {
     fn serde_rejects_unknown_variant() {
         let result = serde_json::from_str::<SceneId>("\"Nope\"");
         assert!(result.is_err(), "deserializing an unknown wire name must fail");
+    }
+
+    // --- SceneKey conversions (b1-t3) ---
+
+    #[test]
+    fn from_scene_id_to_scene_key_roundtrips_for_every_variant() {
+        for &id in SceneId::all() {
+            let key: SceneKey = id.into();
+            assert_eq!(
+                SceneId::from_key(&key),
+                Some(id),
+                "round-trip failed for {:?} (key: {:?})",
+                id,
+                key.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn from_scene_id_to_scene_key_matches_wire_name_battle_viewer() {
+        let key: SceneKey = SceneId::BattleViewer.into();
+        assert_eq!(key.as_str(), "BattleViewer");
+    }
+
+    #[test]
+    fn from_key_unknown_string_returns_none() {
+        assert_eq!(SceneId::from_key(&SceneKey::new("Nope")), None);
+    }
+
+    #[test]
+    fn from_key_empty_string_returns_none() {
+        assert_eq!(SceneId::from_key(&SceneKey::new("")), None);
     }
 }

@@ -1,5 +1,6 @@
 pub mod app;
 pub mod scene;
+pub mod scene_id;
 pub mod scenes;
 pub mod registry;
 pub mod manager;
