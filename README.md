@@ -66,7 +66,7 @@ High-level design specs for each segment of the game live in `/specs`:
 | 24 | [Roster — Carousel](specs/24-roster-carousel.md) ✅ |
 | 25 | [Main Hub Navigation](specs/25-main-hub-navigation.md) ✅ |
 | 26 | [Screen-Space Positioning](specs/26-screen-space-positioning.md) ✅ |
-| 28 | [Anchor Margin Support](specs/28-anchor-margin-support.md) |
+| 28 | [Anchor Margin Support](specs/28-anchor-margin-support.md) ✅ |
 
 ## Status
 

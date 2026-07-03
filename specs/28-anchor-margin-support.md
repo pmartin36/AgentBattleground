@@ -1,6 +1,10 @@
+> # ✅ DONE! — Completed 2026-07-03
+
 # Anchor Margin Support
 
-> **Status: draft (not started).** `render::screen_layout::anchor()` (`26-screen-space-positioning`) only places elements flush against a container's edges or exactly centered — there's no way to inset an element by a margin. This bit `24-roster-carousel`'s home/arrow buttons, which are flush against the screen edges with zero breathing room (a real, already-shipped visual issue flagged by the project owner while reviewing spec 25). This spec adds margin support and fixes Roster's buttons to use it. Not a reopening of `24`/`26`'s done status — new capability plus a bug fix, same pattern as `19`/`20`'s relationship to `15`/`18`.
+> **Status: implemented.** `render::screen_layout::anchor()` (`26-screen-space-positioning`) only places elements flush against a container's edges or exactly centered — there's no way to inset an element by a margin. This bit `24-roster-carousel`'s home/arrow buttons, which are flush against the screen edges with zero breathing room (a real, already-shipped visual issue flagged by the project owner while reviewing spec 25). This spec adds margin support and fixes Roster's buttons to use it. Not a reopening of `24`/`26`'s done status — new capability plus a bug fix, same pattern as `19`/`20`'s relationship to `15`/`18`.
+>
+> Landed as additive `anchor_with_margin(container, size, pos, margin)`; the original `anchor()` delegates to it with `margin = (0, 0)`, so `25-main-hub-navigation`'s existing call sites are untouched. Roster's buttons now inset 1 cell (`RosterManager::EDGE_MARGIN`).
 
 ## Purpose
 Let a screen-space element be inset from its anchored edge by a margin (in terminal cells), instead of only flush-to-edge or exactly-centered, and use that to fix Roster's edge-flush buttons.
