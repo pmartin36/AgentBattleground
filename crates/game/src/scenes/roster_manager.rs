@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::time::Duration;
 
 use ratatui::Frame;
@@ -15,18 +16,45 @@ pub struct RosterManager {
     creatures: Vec<render::creature::Creature>,
     #[inspect(hidden)]
     elapsed: Duration,
+    /// Mouse-driven navigation buttons beside the sprite (b4-t2). `RefCell`
+    /// because `render(&self, ..)` must mutate their rect/state from an
+    /// immutable receiver (see research.md b4-t2 blueprint point 1).
+    #[inspect(hidden)]
+    left_button: RefCell<render::Button>,
+    #[inspect(hidden)]
+    right_button: RefCell<render::Button>,
+    /// Top-right button that transitions back to `MainHub` (b4-t3). `RefCell`
+    /// for the same immutable-render-mutates-button-state reason as the
+    /// arrows.
+    #[inspect(hidden)]
+    home_button: RefCell<render::Button>,
 }
 
 impl RosterManager {
+    /// Width/height of the left/right arrow buttons flanking the sprite.
+    const ARROW_W: u16 = 6;
+    const ARROW_H: u16 = 3;
+
+    /// Width/height of the top-right home button.
+    const HOME_W: u16 = 6;
+    const HOME_H: u16 = 3;
+
     /// Splits `area` into `(sprite_rect, name_rect, dots_rect)`: the bottom
     /// two rows are reserved for the name label and the 6-dot position
-    /// indicator row, with the sprite occupying the remaining region above.
-    /// Sprite centering is delegated to `draw_grid`; name centering to
-    /// `label`; dot-row slotting to `dot_slots`.
+    /// indicator row, with the sprite occupying the remaining region above,
+    /// inset horizontally by `ARROW_W` on each side to make room for the
+    /// left/right arrow buttons (b4-t2). Sprite centering is delegated to
+    /// `draw_grid`; name centering to `label`; dot-row slotting to
+    /// `dot_slots`.
     fn layout(area: Rect) -> (Rect, Rect, Rect) {
         let reserved = 2.min(area.height);
         let sprite_h = area.height - reserved;
-        let sprite_rect = Rect::new(area.x, area.y, area.width, sprite_h);
+        let sprite_rect = Rect::new(
+            area.x + Self::ARROW_W,
+            area.y,
+            area.width.saturating_sub(2 * Self::ARROW_W),
+            sprite_h,
+        );
         let name_rect = Rect::new(area.x, area.y + sprite_h, area.width, reserved.min(1));
         let dots_rect = Rect::new(
             area.x,
@@ -51,8 +79,59 @@ impl RosterManager {
             current_index: 0,
             creatures: render::creature::all(),
             elapsed: Duration::ZERO,
+            left_button: RefCell::new(render::Button::new(Rect::default(), render::assets::ICON_ARROW_LEFT)),
+            right_button: RefCell::new(render::Button::new(Rect::default(), render::assets::ICON_ARROW_RIGHT)),
+            home_button: RefCell::new(render::Button::new(Rect::default(), render::assets::ICON_HOME)),
         }
     }
+
+    /// Left/right arrow button rects beside the sprite for the current
+    /// `area` — the sole place button positioning is computed; `render()`
+    /// and tests both call this rather than re-deriving it. Both rects are
+    /// vertically centered on the sprite band established by `layout()`.
+    fn arrow_rects(area: Rect) -> (Rect, Rect) {
+        let (sprite_rect, _, _) = Self::layout(area);
+        let h = Self::ARROW_H.min(sprite_rect.height);
+        let y = sprite_rect.y + sprite_rect.height.saturating_sub(Self::ARROW_H) / 2;
+        let left_rect = Rect::new(area.x, y, Self::ARROW_W, h);
+        let right_rect = Rect::new(
+            area.right().saturating_sub(Self::ARROW_W),
+            y,
+            Self::ARROW_W,
+            h,
+        );
+        (left_rect, right_rect)
+    }
+
+    /// Top-right rect for the home button — sole place its position is
+    /// computed; `render()` and tests both call this.
+    fn home_rect(area: Rect) -> Rect {
+        Rect::new(
+            area.right().saturating_sub(Self::HOME_W),
+            area.top(),
+            Self::HOME_W.min(area.width),
+            Self::HOME_H.min(area.height),
+        )
+    }
+
+    /// Advances/retreats `current_index` with wraparound. The sole place
+    /// carousel index arithmetic lives — mouse (b4-t2) and slide-direction
+    /// (b5-t1) paths must call this, never re-derive `(idx±1)%n`.
+    fn navigate(&mut self, dir: Direction) {
+        let n = self.creatures.len();
+        self.current_index = match dir {
+            Direction::Right => (self.current_index + 1) % n,
+            Direction::Left => (self.current_index + n - 1) % n,
+        };
+    }
+}
+
+/// Shared carousel direction — the sole type b4-t2 (mouse) and b5-t1 (slide)
+/// must also consume, never re-derive.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Direction {
+    Left,
+    Right,
 }
 
 impl Default for RosterManager {
@@ -90,9 +169,54 @@ impl Scene for RosterManager {
             };
             render::draw_asset(frame.buffer_mut(), *slot, bytes);
         }
+
+        let (left_rect, right_rect) = Self::arrow_rects(area);
+        {
+            let mut left = self.left_button.borrow_mut();
+            left.set_rect(left_rect);
+            left.render(frame.buffer_mut());
+        }
+        {
+            let mut right = self.right_button.borrow_mut();
+            right.set_rect(right_rect);
+            right.render(frame.buffer_mut());
+        }
+
+        let home_rect = Self::home_rect(area);
+        {
+            let mut home = self.home_button.borrow_mut();
+            home.set_rect(home_rect);
+            home.render(frame.buffer_mut());
+        }
     }
 
-    fn handle_input(&mut self, _ev: InputEvent) -> Option<Transition> {
+    fn handle_input(&mut self, ev: InputEvent) -> Option<Transition> {
+        use crossterm::event::KeyCode;
+
+        match ev {
+            InputEvent::Key(key) => match key.code {
+                KeyCode::Left => self.navigate(Direction::Left),
+                KeyCode::Right => self.navigate(Direction::Right),
+                _ => {}
+            },
+            InputEvent::Mouse(me) => {
+                let hit_left = self.left_button.get_mut().handle_mouse(&me);
+                let hit_right = self.right_button.get_mut().handle_mouse(&me);
+                let hit_home = self.home_button.get_mut().handle_mouse(&me);
+                if hit_home {
+                    return Some(Transition {
+                        target: SceneId::MainHub,
+                        params: None,
+                    });
+                }
+                if hit_right {
+                    self.navigate(Direction::Right);
+                }
+                if hit_left {
+                    self.navigate(Direction::Left);
+                }
+            }
+        }
         None
     }
 
@@ -311,6 +435,335 @@ mod dot_row_render_tests {
         assert_ne!(
             fg0, fg3,
             "slot 0 (now unfilled) and slot 3 (now filled) fg must differ"
+        );
+    }
+}
+
+#[cfg(test)]
+mod arrow_key_navigation_tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn key_event(code: KeyCode) -> InputEvent {
+        InputEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    /// Right arrow from the last index (5) wraps to 0.
+    #[test]
+    fn right_arrow_wraps_from_last_to_zero() {
+        let mut scene = RosterManager::new();
+        scene.current_index = 5;
+        let transition = scene.handle_input(key_event(KeyCode::Right));
+        assert_eq!(scene.current_index, 0, "right arrow at index 5 must wrap to 0");
+        assert!(transition.is_none(), "arrow keys must not produce a Transition");
+    }
+
+    /// Left arrow from index 0 wraps to the last index (5).
+    #[test]
+    fn left_arrow_wraps_from_zero_to_last() {
+        let mut scene = RosterManager::new();
+        scene.current_index = 0;
+        let transition = scene.handle_input(key_event(KeyCode::Left));
+        assert_eq!(scene.current_index, 5, "left arrow at index 0 must wrap to 5");
+        assert!(transition.is_none(), "arrow keys must not produce a Transition");
+    }
+
+    /// Right arrow from a middle index advances by 1 (non-wrap case).
+    #[test]
+    fn right_arrow_advances_without_wrap() {
+        let mut scene = RosterManager::new();
+        scene.current_index = 2;
+        let transition = scene.handle_input(key_event(KeyCode::Right));
+        assert_eq!(scene.current_index, 3, "right arrow at index 2 must advance to 3");
+        assert!(transition.is_none(), "arrow keys must not produce a Transition");
+    }
+
+    /// A key unrelated to navigation leaves `current_index` unchanged.
+    #[test]
+    fn unrelated_key_leaves_index_unchanged() {
+        let mut scene = RosterManager::new();
+        scene.current_index = 2;
+        let transition = scene.handle_input(key_event(KeyCode::Char('q')));
+        assert_eq!(scene.current_index, 2, "unrelated key must not change current_index");
+        assert!(transition.is_none(), "unrelated key must not produce a Transition");
+    }
+}
+
+#[cfg(test)]
+mod arrow_button_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::Terminal;
+
+    fn render_to_buffer(scene: &RosterManager, w: u16, h: u16) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                scene.render(f, area);
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    fn mouse_event(kind: MouseEventKind, column: u16, row: u16) -> InputEvent {
+        InputEvent::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        })
+    }
+
+    /// True if any cell inside `rect` is non-space.
+    fn has_non_space(buf: &ratatui::buffer::Buffer, rect: Rect) -> bool {
+        (rect.top()..rect.bottom())
+            .flat_map(|y| (rect.left()..rect.right()).map(move |x| (x, y)))
+            .any(|(x, y)| buf.cell((x, y)).unwrap().symbol() != " ")
+    }
+
+    /// Leftmost column (if any) within `rect` painted non-space.
+    fn leftmost_non_space(buf: &ratatui::buffer::Buffer, rect: Rect) -> Option<u16> {
+        (rect.left()..rect.right()).find(|&x| {
+            (rect.top()..rect.bottom()).any(|y| buf.cell((x, y)).unwrap().symbol() != " ")
+        })
+    }
+
+    /// Rightmost column (if any) within `rect` painted non-space.
+    fn rightmost_non_space(buf: &ratatui::buffer::Buffer, rect: Rect) -> Option<u16> {
+        (rect.left()..rect.right()).rev().find(|&x| {
+            (rect.top()..rect.bottom()).any(|y| buf.cell((x, y)).unwrap().symbol() != " ")
+        })
+    }
+
+    /// `render()` paints the left arrow button strictly to the left of the
+    /// sprite's leftmost occupied column.
+    #[test]
+    fn left_button_renders_beside_sprite() {
+        let scene = RosterManager::new();
+        let (w, h) = (40u16, 20u16);
+        let buf = render_to_buffer(&scene, w, h);
+
+        let area = Rect::new(0, 0, w, h);
+        let (left_rect, _) = RosterManager::arrow_rects(area);
+        let (sprite_rect, _, _) = RosterManager::layout(area);
+
+        assert!(
+            has_non_space(&buf, left_rect),
+            "left arrow button must paint at least one non-space cell within its rect"
+        );
+        let sprite_left = leftmost_non_space(&buf, sprite_rect)
+            .expect("sprite must paint at least one non-space cell");
+        let button_right = rightmost_non_space(&buf, left_rect)
+            .expect("left button must paint at least one non-space cell");
+        assert!(
+            button_right < sprite_left,
+            "left arrow button's rightmost painted column ({button_right}) must be strictly left of the sprite's leftmost painted column ({sprite_left})"
+        );
+    }
+
+    /// `render()` paints the right arrow button strictly to the right of the
+    /// sprite's rightmost occupied column.
+    #[test]
+    fn right_button_renders_beside_sprite() {
+        let scene = RosterManager::new();
+        let (w, h) = (40u16, 20u16);
+        let buf = render_to_buffer(&scene, w, h);
+
+        let area = Rect::new(0, 0, w, h);
+        let (_, right_rect) = RosterManager::arrow_rects(area);
+        let (sprite_rect, _, _) = RosterManager::layout(area);
+
+        assert!(
+            has_non_space(&buf, right_rect),
+            "right arrow button must paint at least one non-space cell within its rect"
+        );
+        let sprite_right = rightmost_non_space(&buf, sprite_rect)
+            .expect("sprite must paint at least one non-space cell");
+        let button_left = leftmost_non_space(&buf, right_rect)
+            .expect("right button must paint at least one non-space cell");
+        assert!(
+            button_left > sprite_right,
+            "right arrow button's leftmost painted column ({button_left}) must be strictly right of the sprite's rightmost painted column ({sprite_right})"
+        );
+    }
+
+    /// A completed click on the right button drives the SAME `navigate()`
+    /// as the right-arrow key (b4-t1): wraps 5 -> 0.
+    #[test]
+    fn mouse_click_right_button_wraps_like_right_key() {
+        let mut scene = RosterManager::new();
+        scene.current_index = 5;
+        let (w, h) = (40u16, 20u16);
+        // Render once so the buttons' rects are set to this frame's `area`
+        // (handle_input hit-tests against the PREVIOUS frame's render).
+        let _ = render_to_buffer(&scene, w, h);
+
+        let area = Rect::new(0, 0, w, h);
+        let (_, right_rect) = RosterManager::arrow_rects(area);
+        let (cx, cy) = (right_rect.x, right_rect.y);
+
+        let t1 = scene.handle_input(mouse_event(MouseEventKind::Moved, cx, cy));
+        let t2 = scene.handle_input(mouse_event(MouseEventKind::Down(MouseButton::Left), cx, cy));
+        let t3 = scene.handle_input(mouse_event(MouseEventKind::Up(MouseButton::Left), cx, cy));
+
+        assert_eq!(scene.current_index, 0, "a completed click on the right button at index 5 must wrap current_index to 0");
+        assert!(t1.is_none() && t2.is_none() && t3.is_none(), "arrow buttons must never produce a Transition");
+    }
+
+    /// A completed click on the left button drives the SAME `navigate()` as
+    /// the left-arrow key (b4-t1): wraps 0 -> 5.
+    #[test]
+    fn mouse_click_left_button_wraps_like_left_key() {
+        let mut scene = RosterManager::new();
+        scene.current_index = 0;
+        let (w, h) = (40u16, 20u16);
+        let _ = render_to_buffer(&scene, w, h);
+
+        let area = Rect::new(0, 0, w, h);
+        let (left_rect, _) = RosterManager::arrow_rects(area);
+        let (cx, cy) = (left_rect.x, left_rect.y);
+
+        scene.handle_input(mouse_event(MouseEventKind::Moved, cx, cy));
+        scene.handle_input(mouse_event(MouseEventKind::Down(MouseButton::Left), cx, cy));
+        let t = scene.handle_input(mouse_event(MouseEventKind::Up(MouseButton::Left), cx, cy));
+
+        assert_eq!(scene.current_index, 5, "a completed click on the left button at index 0 must wrap current_index to 5");
+        assert!(t.is_none(), "arrow buttons must never produce a Transition");
+    }
+
+    /// A click sequence that completes outside both button rects leaves
+    /// `current_index` unchanged.
+    #[test]
+    fn click_outside_buttons_is_noop() {
+        let mut scene = RosterManager::new();
+        scene.current_index = 2;
+        let (w, h) = (40u16, 20u16);
+        let _ = render_to_buffer(&scene, w, h);
+
+        let area = Rect::new(0, 0, w, h);
+        let (left_rect, right_rect) = RosterManager::arrow_rects(area);
+        // Horizontal midpoint of `area`, at the buttons' own row: between
+        // the two edge-hugging buttons, outside both rects.
+        let (ox, oy) = (area.width / 2, left_rect.y);
+        assert!(!left_rect.contains(ratatui::layout::Position { x: ox, y: oy }));
+        assert!(!right_rect.contains(ratatui::layout::Position { x: ox, y: oy }));
+
+        scene.handle_input(mouse_event(MouseEventKind::Moved, ox, oy));
+        scene.handle_input(mouse_event(MouseEventKind::Down(MouseButton::Left), ox, oy));
+        let t = scene.handle_input(mouse_event(MouseEventKind::Up(MouseButton::Left), ox, oy));
+
+        assert_eq!(scene.current_index, 2, "a click completed outside both button rects must not change current_index");
+        assert!(t.is_none());
+    }
+}
+
+#[cfg(test)]
+mod home_button_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::Terminal;
+
+    fn render_to_buffer(scene: &RosterManager, w: u16, h: u16) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                scene.render(f, area);
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    fn mouse_event(kind: MouseEventKind, column: u16, row: u16) -> InputEvent {
+        InputEvent::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        })
+    }
+
+    /// True if any cell inside `rect` is non-space.
+    fn has_non_space(buf: &ratatui::buffer::Buffer, rect: Rect) -> bool {
+        (rect.top()..rect.bottom())
+            .flat_map(|y| (rect.left()..rect.right()).map(move |x| (x, y)))
+            .any(|(x, y)| buf.cell((x, y)).unwrap().symbol() != " ")
+    }
+
+    /// `render()` paints the home button, and its rect sits top-right of
+    /// `area` — flush with the top edge and the right edge — distinct from
+    /// the arrow buttons' beside-center position and the dot row's bottom
+    /// position.
+    #[test]
+    fn home_button_renders_top_right() {
+        let scene = RosterManager::new();
+        let (w, h) = (40u16, 20u16);
+        let buf = render_to_buffer(&scene, w, h);
+
+        let area = Rect::new(0, 0, w, h);
+        let rect = RosterManager::home_rect(area);
+
+        assert!(
+            has_non_space(&buf, rect),
+            "home button must paint at least one non-space cell within its rect"
+        );
+        assert_eq!(rect.right(), area.right(), "home button rect must be flush with the right edge of area");
+        assert_eq!(rect.top(), area.top(), "home button rect must be flush with the top edge of area");
+    }
+
+    /// A completed click (Moved+Down+Up, all inside the home button's rect)
+    /// returns a `Transition` to `MainHub` with no params.
+    #[test]
+    fn home_click_transitions_to_main_hub() {
+        let mut scene = RosterManager::new();
+        let (w, h) = (40u16, 20u16);
+        // Render once so the button's rect is set to this frame's `area`
+        // (handle_input hit-tests against the PREVIOUS frame's render).
+        let _ = render_to_buffer(&scene, w, h);
+
+        let area = Rect::new(0, 0, w, h);
+        let rect = RosterManager::home_rect(area);
+        let (cx, cy) = (rect.x, rect.y);
+
+        scene.handle_input(mouse_event(MouseEventKind::Moved, cx, cy));
+        scene.handle_input(mouse_event(MouseEventKind::Down(MouseButton::Left), cx, cy));
+        let t = scene.handle_input(mouse_event(MouseEventKind::Up(MouseButton::Left), cx, cy));
+
+        let t = t.expect("a completed click on the home button must return a Transition");
+        assert_eq!(t.target, SceneId::MainHub, "home button must transition to MainHub");
+        assert!(t.params.is_none(), "home button transition must carry no params");
+    }
+
+    /// A click that does not complete inside the home button's rect (Down
+    /// inside, Up outside) must not transition and must not touch
+    /// `current_index`.
+    #[test]
+    fn home_click_not_completed_returns_none() {
+        let mut scene = RosterManager::new();
+        scene.current_index = 2;
+        let (w, h) = (40u16, 20u16);
+        let _ = render_to_buffer(&scene, w, h);
+
+        let area = Rect::new(0, 0, w, h);
+        let rect = RosterManager::home_rect(area);
+        let (cx, cy) = (rect.x, rect.y);
+        // Bottom-left corner: far from the top-right home rect.
+        let (ox, oy) = (0u16, h - 1);
+
+        scene.handle_input(mouse_event(MouseEventKind::Moved, cx, cy));
+        scene.handle_input(mouse_event(MouseEventKind::Down(MouseButton::Left), cx, cy));
+        let t = scene.handle_input(mouse_event(MouseEventKind::Up(MouseButton::Left), ox, oy));
+
+        assert!(
+            t.is_none(),
+            "a click that does not complete inside the home button rect must not return a Transition"
+        );
+        assert_eq!(
+            scene.current_index, 2,
+            "an incomplete home-button click must not change current_index"
         );
     }
 }
