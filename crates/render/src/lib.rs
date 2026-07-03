@@ -66,6 +66,18 @@ pub fn label(buf: &mut Buffer, area: Rect, text: &str) {
     buf.set_stringn(x, y, text, max_width, Style::default());
 }
 
+/// Decode a bundled raster asset (`bytes`, e.g. `assets::DOT_FILLED`) and
+/// paint it aspect-fit + centered into `area` via `convert` → `draw_grid`.
+/// Zero-area `area` paints nothing. Panics only if `bytes` is not a
+/// decodable image (callers pass first-party bundled assets — invariant, as
+/// in `Button::new`).
+pub fn draw_asset(buf: &mut Buffer, area: Rect, bytes: &[u8]) {
+    let img = image::load_from_memory(bytes)
+        .expect("bundled first-party asset must decode");
+    let grid = convert(&img, area);
+    draw_grid(buf, area, &grid);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,5 +236,49 @@ mod tests {
             "⣿",
             "label should not write braille glyphs"
         );
+    }
+}
+
+// ------------------------------------------------------------------- draw_asset
+
+#[cfg(test)]
+mod draw_asset_tests {
+    use super::*;
+    use crate::assets;
+
+    fn make_buf(w: u16, h: u16) -> Buffer {
+        Buffer::empty(Rect::new(0, 0, w, h))
+    }
+
+    /// `draw_asset` of the bundled `DOT_FILLED` icon into a non-zero area
+    /// paints at least one non-space cell (b3-t3: dot row uses this to paint
+    /// the 6 position-indicator dots).
+    #[test]
+    fn draw_asset_paints_non_space_cell() {
+        let mut buf = make_buf(4, 2);
+        let area = Rect::new(0, 0, 4, 2);
+        draw_asset(&mut buf, area, assets::DOT_FILLED);
+
+        let painted = (0..2u16)
+            .any(|y| (0..4u16).any(|x| buf.cell((x, y)).unwrap().symbol() != " "));
+        assert!(painted, "draw_asset must paint at least one non-space cell");
+    }
+
+    /// A zero-area rect must paint nothing and must not panic.
+    #[test]
+    fn draw_asset_zero_area_paints_nothing() {
+        let mut buf = make_buf(4, 2);
+        let area = Rect::new(0, 0, 0, 2);
+        draw_asset(&mut buf, area, assets::DOT_FILLED);
+
+        for y in 0..2u16 {
+            for x in 0..4u16 {
+                assert_eq!(
+                    buf.cell((x, y)).unwrap().symbol(),
+                    " ",
+                    "zero-area draw_asset must leave every cell untouched"
+                );
+            }
+        }
     }
 }

@@ -12,7 +12,7 @@ pub fn construct(id: SceneId) -> Box<dyn Scene> {
     match id {
         SceneId::MainHub => Box::new(MainHub),
         SceneId::BattleViewer => Box::new(BattleViewer::default()),
-        SceneId::RosterManager => Box::new(RosterManager),
+        SceneId::RosterManager => Box::new(RosterManager::new()),
         SceneId::Leaderboard => Box::new(Leaderboard),
         other => unimplemented!("scene {:?} is not implemented in M1", other),
     }

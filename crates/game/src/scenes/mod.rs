@@ -70,7 +70,7 @@ mod tests {
     #[test]
     fn all_scene_colors_are_distinct() {
         use std::collections::HashSet;
-        let colors = [MainHub::COLOR, RosterManager::COLOR, Leaderboard::COLOR];
+        let colors = [MainHub::COLOR, Leaderboard::COLOR];
         let mut seen: HashSet<(u8, u8, u8)> = HashSet::new();
         for (i, c) in colors.iter().enumerate() {
             assert!(
@@ -128,11 +128,6 @@ mod tests {
         main_hub_fills_with_color_and_correct_id,
         MainHub,
         SceneId::MainHub
-    );
-    scene_fill_and_id_test!(
-        roster_manager_fills_with_color_and_correct_id,
-        RosterManager,
-        SceneId::RosterManager
     );
     scene_fill_and_id_test!(
         leaderboard_fills_with_color_and_correct_id,
