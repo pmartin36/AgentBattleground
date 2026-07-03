@@ -2,12 +2,12 @@ use std::time::Duration;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use scene_core::color::Rgba;
-use scene_core::Inspectable;
-use scene_core::SceneKey;
+use engine_core::color::Rgba;
+use engine_core::Inspectable;
+use engine_core::SceneKey;
 use serde_json::Value as JsonValue;
 
-use scene_core::scene::{EngineCtx, InputEvent, Scene, Transition};
+use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use crate::scene_id::SceneId;
 
 #[derive(Default, Inspectable)]
@@ -38,7 +38,7 @@ impl Scene for Leaderboard {
 
     fn exit(&mut self, _ctx: &mut EngineCtx) {}
 
-    fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+    fn inspect(&mut self) -> &mut dyn engine_core::Inspectable {
         self
     }
 }

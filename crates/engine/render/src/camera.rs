@@ -1,7 +1,7 @@
 //! Camera abstraction: maps world positions to screen-dot coordinates + depth.
 //! Implementation is provided by task b3-t1.
 
-use scene_core::Inspectable;
+use engine_core::Inspectable;
 
 /// Continuous 2D world position. Units are game-defined (spec 16).
 #[derive(Clone, Copy, PartialEq, Debug, Inspectable)]

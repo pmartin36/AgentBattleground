@@ -110,7 +110,7 @@ fn derive_struct(name: &syn::Ident, fields: Fields) -> proc_macro2::TokenStream 
         });
         let range_set = attrs.range.as_ref().map(|(lo, hi)| {
             quote! {
-                f.range = Some(::scene_core::Range { min: (#lo) as f64, max: (#hi) as f64 });
+                f.range = Some(::engine_core::Range { min: (#lo) as f64, max: (#hi) as f64 });
             }
         });
         let readonly_set = if attrs.readonly {
@@ -120,7 +120,7 @@ fn derive_struct(name: &syn::Ident, fields: Fields) -> proc_macro2::TokenStream 
         };
 
         schema_pushes.push(quote! {
-            let mut f = <#ty as ::scene_core::Inspectable>::schema();
+            let mut f = <#ty as ::engine_core::Inspectable>::schema();
             f.name = #ident_str.to_string();
             #label_set
             #range_set
@@ -129,16 +129,16 @@ fn derive_struct(name: &syn::Ident, fields: Fields) -> proc_macro2::TokenStream 
         });
 
         snapshot_inserts.push(quote! {
-            m.insert(#ident_str.to_string(), ::scene_core::Inspectable::snapshot(&self.#ident));
+            m.insert(#ident_str.to_string(), ::engine_core::Inspectable::snapshot(&self.#ident));
         });
 
         if attrs.readonly {
             patch_arms.push(quote! {
-                #ident_str => Err(::scene_core::PatchError::Readonly),
+                #ident_str => Err(::engine_core::PatchError::Readonly),
             });
         } else {
             patch_arms.push(quote! {
-                #ident_str => ::scene_core::Inspectable::apply_patch(
+                #ident_str => ::engine_core::Inspectable::apply_patch(
                     &mut self.#ident,
                     tail.unwrap_or(""),
                     value,
@@ -148,15 +148,15 @@ fn derive_struct(name: &syn::Ident, fields: Fields) -> proc_macro2::TokenStream 
     }
 
     quote! {
-        impl ::scene_core::Inspectable for #name {
-            fn schema() -> ::scene_core::FieldSchema
+        impl ::engine_core::Inspectable for #name {
+            fn schema() -> ::engine_core::FieldSchema
             where
                 Self: Sized,
             {
-                ::scene_core::FieldSchema {
+                ::engine_core::FieldSchema {
                     name: String::new(),
                     label: None,
-                    tag: ::scene_core::FieldTag::Struct,
+                    tag: ::engine_core::FieldTag::Struct,
                     readonly: false,
                     hidden: false,
                     range: None,
@@ -169,27 +169,27 @@ fn derive_struct(name: &syn::Ident, fields: Fields) -> proc_macro2::TokenStream 
                 }
             }
 
-            fn snapshot(&self) -> ::scene_core::__private::serde_json::Value {
-                let mut m = ::scene_core::__private::serde_json::Map::new();
+            fn snapshot(&self) -> ::engine_core::__private::serde_json::Value {
+                let mut m = ::engine_core::__private::serde_json::Map::new();
                 #(#snapshot_inserts)*
-                ::scene_core::__private::serde_json::Value::Object(m)
+                ::engine_core::__private::serde_json::Value::Object(m)
             }
 
             fn apply_patch(
                 &mut self,
                 path: &str,
-                value: ::scene_core::__private::serde_json::Value,
-            ) -> Result<(), ::scene_core::PatchError> {
-                let (seg, tail) = ::scene_core::parse_path_segment(path)?;
+                value: ::engine_core::__private::serde_json::Value,
+            ) -> Result<(), ::engine_core::PatchError> {
+                let (seg, tail) = ::engine_core::parse_path_segment(path)?;
                 let field = match seg {
-                    ::scene_core::Segment::Field(f) => f,
-                    ::scene_core::Segment::Index(_) => {
-                        return Err(::scene_core::PatchError::NotIndexable)
+                    ::engine_core::Segment::Field(f) => f,
+                    ::engine_core::Segment::Index(_) => {
+                        return Err(::engine_core::PatchError::NotIndexable)
                     }
                 };
                 match field {
                     #(#patch_arms)*
-                    _ => Err(::scene_core::PatchError::UnknownField(field.to_string())),
+                    _ => Err(::engine_core::PatchError::UnknownField(field.to_string())),
                 }
             }
         }
@@ -204,15 +204,15 @@ fn derive_enum(name: &syn::Ident, data_enum: syn::DataEnum) -> proc_macro2::Toke
 
     if !all_unit {
         return quote! {
-            impl ::scene_core::Inspectable for #name {
-                fn schema() -> ::scene_core::FieldSchema
+            impl ::engine_core::Inspectable for #name {
+                fn schema() -> ::engine_core::FieldSchema
                 where
                     Self: Sized,
                 {
-                    ::scene_core::FieldSchema {
+                    ::engine_core::FieldSchema {
                         name: String::new(),
                         label: None,
-                        tag: ::scene_core::FieldTag::Json,
+                        tag: ::engine_core::FieldTag::Json,
                         readonly: true,
                         hidden: false,
                         range: None,
@@ -221,17 +221,17 @@ fn derive_enum(name: &syn::Ident, data_enum: syn::DataEnum) -> proc_macro2::Toke
                     }
                 }
 
-                fn snapshot(&self) -> ::scene_core::__private::serde_json::Value {
-                    ::scene_core::__private::serde_json::to_value(self)
+                fn snapshot(&self) -> ::engine_core::__private::serde_json::Value {
+                    ::engine_core::__private::serde_json::to_value(self)
                         .expect("Json-fallback Inspectable enum must be Serialize")
                 }
 
                 fn apply_patch(
                     &mut self,
                     _path: &str,
-                    _value: ::scene_core::__private::serde_json::Value,
-                ) -> Result<(), ::scene_core::PatchError> {
-                    Err(::scene_core::PatchError::Readonly)
+                    _value: ::engine_core::__private::serde_json::Value,
+                ) -> Result<(), ::engine_core::PatchError> {
+                    Err(::engine_core::PatchError::Readonly)
                 }
             }
         };
@@ -249,15 +249,15 @@ fn derive_enum(name: &syn::Ident, data_enum: syn::DataEnum) -> proc_macro2::Toke
     });
 
     quote! {
-        impl ::scene_core::Inspectable for #name {
-            fn schema() -> ::scene_core::FieldSchema
+        impl ::engine_core::Inspectable for #name {
+            fn schema() -> ::engine_core::FieldSchema
             where
                 Self: Sized,
             {
-                ::scene_core::FieldSchema {
+                ::engine_core::FieldSchema {
                     name: String::new(),
                     label: None,
-                    tag: ::scene_core::FieldTag::Enum,
+                    tag: ::engine_core::FieldTag::Enum,
                     readonly: false,
                     hidden: false,
                     range: None,
@@ -266,27 +266,27 @@ fn derive_enum(name: &syn::Ident, data_enum: syn::DataEnum) -> proc_macro2::Toke
                 }
             }
 
-            fn snapshot(&self) -> ::scene_core::__private::serde_json::Value {
+            fn snapshot(&self) -> ::engine_core::__private::serde_json::Value {
                 let name = match self {
                     #(#snapshot_arms)*
                 };
-                ::scene_core::__private::serde_json::Value::String(name.to_string())
+                ::engine_core::__private::serde_json::Value::String(name.to_string())
             }
 
             fn apply_patch(
                 &mut self,
                 path: &str,
-                value: ::scene_core::__private::serde_json::Value,
-            ) -> Result<(), ::scene_core::PatchError> {
+                value: ::engine_core::__private::serde_json::Value,
+            ) -> Result<(), ::engine_core::PatchError> {
                 if !path.is_empty() {
-                    return Err(::scene_core::PatchError::NotIndexable);
+                    return Err(::engine_core::PatchError::NotIndexable);
                 }
                 let variant_name = value
                     .as_str()
-                    .ok_or(::scene_core::PatchError::TypeMismatch)?;
+                    .ok_or(::engine_core::PatchError::TypeMismatch)?;
                 *self = match variant_name {
                     #(#from_name_arms)*
-                    _ => return Err(::scene_core::PatchError::TypeMismatch),
+                    _ => return Err(::engine_core::PatchError::TypeMismatch),
                 };
                 Ok(())
             }

@@ -30,7 +30,7 @@ pub use screen_layout::{anchor, anchor_with_margin, stack, Anchor, RectTween, St
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
-use scene_core::color::Rgba;
+use engine_core::color::Rgba;
 
 /// Fully-lit braille glyph (all 8 dots): U+28FF.
 const FULL: char = '⣿';

@@ -12,12 +12,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use scene_core::net::ipc_server;
-use scene_core::scene::manager::SceneManager;
+use engine_core::net::ipc_server;
+use engine_core::scene::manager::SceneManager;
 use game::registry::GameCatalog;
 use game::scene_id::SceneId;
-use scene_core::ipc::{Envelope, Message, SwitchScene, read_frame, write_frame};
-use scene_core::SceneKey;
+use engine_core::ipc::{Envelope, Message, SwitchScene, read_frame, write_frame};
+use engine_core::SceneKey;
 
 /// Retry-connect to the Unix socket until the accept thread is ready (up to 2 s).
 /// Mirrors the pattern used in ipc_server.rs tests.

@@ -10,7 +10,7 @@
 
 use image::codecs::gif::{GifEncoder, Repeat};
 use image::{DynamicImage, Frame, GenericImageView, Rgba as PixelRgba, RgbaImage};
-use render::AnimatedSprite;
+use engine_render::AnimatedSprite;
 use std::time::Duration;
 
 // ── helper: encode N distinct frames into a GIF byte buffer ──────────────────

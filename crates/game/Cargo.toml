@@ -8,8 +8,8 @@ name = "game"
 path = "src/main.rs"
 
 [dependencies]
-scene-core = { path = "../scene-core" }
-render = { path = "../render" }
+engine-core = { path = "../engine/core" }
+engine-render = { path = "../engine/render" }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 serde = { workspace = true }

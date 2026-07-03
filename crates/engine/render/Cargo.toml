@@ -1,9 +1,9 @@
 [package]
-name = "render"
+name = "engine-render"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-scene-core = { path = "../scene-core" }
+engine-core = { path = "../core" }
 ratatui = { workspace = true }
 image = "0.25"

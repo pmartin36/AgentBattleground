@@ -1,7 +1,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
-use scene_core::color::Rgba;
+use engine_core::color::Rgba;
 
 /// One braille cell: transparent (background shows through) or a lit glyph.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -96,7 +96,7 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use ratatui::style::Color;
-    use scene_core::color::Rgba;
+    use engine_core::color::Rgba;
 
     fn make_buf(w: u16, h: u16) -> Buffer {
         Buffer::empty(Rect::new(0, 0, w, h))

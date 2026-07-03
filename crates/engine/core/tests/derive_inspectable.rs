@@ -1,15 +1,15 @@
 //! Integration tests for `#[derive(Inspectable)]` (`scene-core-derive`).
 //!
 //! Separate integration-test crate (per research.md's Test surface) so
-//! `::scene_core::...` paths emitted by the derive resolve exactly the way a
+//! `::engine_core::...` paths emitted by the derive resolve exactly the way a
 //! real downstream crate (e.g. `render`, b3-t1) would see them. Deliberately
 //! does NOT `use serde_json;` — the derive's generated code must route
-//! through `scene_core::__private::serde_json`, never a bare `serde_json::`
+//! through `engine_core::__private::serde_json`, never a bare `serde_json::`
 //! path (research.md MUST-1); this file only ever references `serde_json::`
 //! via its own direct dependency, fully qualified, proving the derive itself
 //! never requires the caller to import it.
 
-use scene_core::{FieldTag, Inspectable, Range};
+use engine_core::{FieldTag, Inspectable, Range};
 use serde::Serialize;
 
 // --- (a) synthetic struct exercising all 8 non-Json tags at once ------------
@@ -39,7 +39,7 @@ struct AllTags {
     ratio: f32,
     name: String,
     mode: Shade,
-    tint: scene_core::color::Rgba,
+    tint: engine_core::color::Rgba,
     nested: Nested,
     items: Vec<Item>,
     #[inspect(readonly)]
@@ -89,7 +89,7 @@ fn all_tags_struct_schema_reports_each_field_tag_label_range_readonly_and_hides_
         ratio: 1.5,
         name: "n".to_string(),
         mode: Shade::Dark,
-        tint: scene_core::color::Rgba::new(1, 2, 3, 4),
+        tint: engine_core::color::Rgba::new(1, 2, 3, 4),
         nested: Nested { x: 0.0, y: 0.0 },
         items: vec![],
         locked: 9,

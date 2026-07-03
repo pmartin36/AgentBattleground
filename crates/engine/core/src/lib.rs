@@ -1,4 +1,4 @@
-extern crate self as scene_core;
+extern crate self as engine_core;
 
 pub mod catalog;
 pub mod color;
@@ -17,7 +17,7 @@ pub use catalog::SceneCatalog;
 pub use inspect::{
     parse_path_segment, FieldSchema, FieldTag, Inspectable, PatchError, Range, Segment,
 };
-pub use scene_core_derive::Inspectable;
+pub use engine_derive::Inspectable;
 pub use scene_key::SceneKey;
 
 /// Re-exports used only by `#[derive(Inspectable)]`-generated code so that

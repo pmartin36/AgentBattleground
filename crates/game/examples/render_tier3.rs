@@ -20,10 +20,10 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::Frame;
 use ratatui::Terminal;
-use scene_core::SceneKey;
+use engine_core::SceneKey;
 use serde_json::Value as JsonValue;
 
-use scene_core::scene::{EngineCtx, InputEvent, Scene, Transition};
+use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use game::scene_id::SceneId;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -51,7 +51,7 @@ const SPRITE_H: u16 = 22;
 
 /// One animated wizard instance: an `AnimatedSprite` plus placement metadata.
 struct Wizard {
-    sprite: render::AnimatedSprite,
+    sprite: engine_render::AnimatedSprite,
     /// Column (braille cells, 0-based) of the sprite's top-left corner.
     col: i32,
     /// Row (braille cells, 0-based) of the sprite's top-left corner.
@@ -65,7 +65,7 @@ struct Wizard {
 struct Tier3Scene {
     wizards: Vec<Wizard>,
     elapsed: Duration,
-    no_inspect: scene_core::scene::NoInspect,
+    no_inspect: engine_core::scene::NoInspect,
 }
 
 impl Tier3Scene {
@@ -88,7 +88,7 @@ impl Tier3Scene {
         // elapsed=0 and elapsed=FRAME_DUR, so the composited output differs
         // between the two headless captures.
         let make = |speed: f32, col: i32, row: i32, phase_ms: u64| Wizard {
-            sprite: render::AnimatedSprite::from_gif(gif_bytes, FRAME_DUR)
+            sprite: engine_render::AnimatedSprite::from_gif(gif_bytes, FRAME_DUR)
                 .expect("decode wizard.gif")
                 .with_speed(speed),
             col,
@@ -103,7 +103,7 @@ impl Tier3Scene {
                 make(2.0, 14, 7, 66), // front  — depth=row=7, drawn last (on top)
             ],
             elapsed: Duration::ZERO,
-            no_inspect: scene_core::scene::NoInspect,
+            no_inspect: engine_core::scene::NoInspect,
         }
     }
 }
@@ -145,11 +145,11 @@ impl Scene for Tier3Scene {
         // Build all per-sprite DotBuffers into an owned Vec first;
         // DotPlacement borrows &DotBuffer, so the buffers must outlive the
         // placements.
-        let dotbufs: Vec<render::dots::DotBuffer> = self
+        let dotbufs: Vec<engine_render::dots::DotBuffer> = self
             .wizards
             .iter()
             .map(|w| {
-                render::dots::sprite_to_dots(
+                engine_render::dots::sprite_to_dots(
                     w.sprite.frame_at(self.elapsed + w.phase),
                     sprite_dot_cols,
                     sprite_dot_rows,
@@ -157,11 +157,11 @@ impl Scene for Tier3Scene {
             })
             .collect();
 
-        let placements: Vec<render::composite::DotPlacement> = self
+        let placements: Vec<engine_render::composite::DotPlacement> = self
             .wizards
             .iter()
             .zip(&dotbufs)
-            .map(|(w, dots)| render::composite::DotPlacement {
+            .map(|(w, dots)| engine_render::composite::DotPlacement {
                 dots,
                 dot_x: w.col * 2,
                 dot_y: w.row * 4,
@@ -169,12 +169,12 @@ impl Scene for Tier3Scene {
             })
             .collect();
 
-        let composed = render::composite::composite_dots(dot_cols, dot_rows, &placements);
-        let grid = render::dots::dots_to_grid(&composed);
-        render::draw_grid(frame.buffer_mut(), area, &grid);
+        let composed = engine_render::composite::composite_dots(dot_cols, dot_rows, &placements);
+        let grid = engine_render::dots::dots_to_grid(&composed);
+        engine_render::draw_grid(frame.buffer_mut(), area, &grid);
     }
 
-    fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+    fn inspect(&mut self) -> &mut dyn engine_core::Inspectable {
         &mut self.no_inspect
     }
 }

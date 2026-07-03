@@ -7,7 +7,7 @@ use crate::camera::{Camera, WorldPos};
 use crate::composite::DotPlacement;
 use crate::dots::{sprite_to_dots, DotBuffer};
 use image::DynamicImage;
-use scene_core::Inspectable;
+use engine_core::Inspectable;
 
 /// Plain 2D vector (POD). Used for per-axis scale (negative mirrors, applied
 /// in rasterize).
@@ -387,7 +387,7 @@ mod tests {
 
     // ── Inspectable (b3-t1) ──────────────────────────────────────────────────
 
-    use scene_core::FieldTag;
+    use engine_core::FieldTag;
 
     /// `Transform::schema()` must be a `Struct` with exactly the 3 fields, and
     /// its two struct-typed children (`translate`, `scale`) must themselves
@@ -403,7 +403,7 @@ mod tests {
             "Transform must have exactly 3 top-level fields"
         );
 
-        let by_name = |s: &scene_core::FieldSchema, n: &str| {
+        let by_name = |s: &engine_core::FieldSchema, n: &str| {
             s.children
                 .iter()
                 .find(|c| c.name == n)
@@ -432,7 +432,7 @@ mod tests {
     fn transform_apply_patch_mutates_only_translate_x() {
         let mut t = Transform::new(WorldPos::new(1.0, 2.0), 45.0, Vec2::new(2.0, -3.0));
 
-        t.apply_patch("translate.x", scene_core::__private::serde_json::json!(9.5))
+        t.apply_patch("translate.x", engine_core::__private::serde_json::json!(9.5))
             .expect("apply_patch on translate.x must succeed");
 
         assert_eq!(t.translate.x, 9.5, "translate.x must be updated");

@@ -19,10 +19,10 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::Frame;
 use ratatui::Terminal;
-use scene_core::SceneKey;
+use engine_core::SceneKey;
 use serde_json::Value as JsonValue;
 
-use scene_core::scene::{EngineCtx, InputEvent, Scene, Transition};
+use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use game::scene_id::SceneId;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -39,21 +39,21 @@ const MARKER: &str = "---FRAME-BREAK---";
 // ─── Tier2Scene ───────────────────────────────────────────────────────────────
 
 struct Tier2Scene {
-    sprite: render::AnimatedSprite,
+    sprite: engine_render::AnimatedSprite,
     elapsed: Duration,
-    no_inspect: scene_core::scene::NoInspect,
+    no_inspect: engine_core::scene::NoInspect,
 }
 
 impl Tier2Scene {
     fn new() -> Self {
         Tier2Scene {
-            sprite: render::AnimatedSprite::from_gif(
+            sprite: engine_render::AnimatedSprite::from_gif(
                 include_bytes!("assets/wizard.gif"),
                 FRAME_DUR,
             )
             .expect("decode wizard.gif"),
             elapsed: Duration::ZERO,
-            no_inspect: scene_core::scene::NoInspect,
+            no_inspect: engine_core::scene::NoInspect,
         }
     }
 }
@@ -78,11 +78,11 @@ impl Scene for Tier2Scene {
 
     /// Real engine render path: select animated frame → convert to Grid → draw.
     fn render(&self, frame: &mut Frame, area: Rect) {
-        let grid = render::convert(self.sprite.frame_at(self.elapsed), area);
-        render::draw_grid(frame.buffer_mut(), area, &grid);
+        let grid = engine_render::convert(self.sprite.frame_at(self.elapsed), area);
+        engine_render::draw_grid(frame.buffer_mut(), area, &grid);
     }
 
-    fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+    fn inspect(&mut self) -> &mut dyn engine_core::Inspectable {
         &mut self.no_inspect
     }
 }

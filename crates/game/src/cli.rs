@@ -372,16 +372,16 @@ mod tests {
         use ratatui::layout::Rect;
         use serde_json::{json, Value as JsonValue};
 
-        use scene_core::scene::manager::SceneManager;
-        use scene_core::scene::{EngineCtx, InputEvent, Scene, Transition};
+        use engine_core::scene::manager::SceneManager;
+        use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 
         struct ParamsCapturingScene {
             params: Arc<Mutex<Option<JsonValue>>>,
-            no_inspect: scene_core::scene::NoInspect,
+            no_inspect: engine_core::scene::NoInspect,
         }
 
         impl Scene for ParamsCapturingScene {
-            fn id(&self) -> scene_core::SceneKey {
+            fn id(&self) -> engine_core::SceneKey {
                 SceneId::BattleViewer.into()
             }
             fn enter(&mut self, _ctx: &mut EngineCtx, params: Option<JsonValue>) {
@@ -399,7 +399,7 @@ mod tests {
                 None
             }
             fn exit(&mut self, _ctx: &mut EngineCtx) {}
-            fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+            fn inspect(&mut self) -> &mut dyn engine_core::Inspectable {
                 &mut self.no_inspect
             }
         }
@@ -418,7 +418,7 @@ mod tests {
         let captured = Arc::new(Mutex::new(None));
         let scene = ParamsCapturingScene {
             params: Arc::clone(&captured),
-            no_inspect: scene_core::scene::NoInspect,
+            no_inspect: engine_core::scene::NoInspect,
         };
         let _mgr = SceneManager::with_scene_and_params(
             Box::new(scene),

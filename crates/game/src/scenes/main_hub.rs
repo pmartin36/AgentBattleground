@@ -4,13 +4,13 @@ use std::time::Duration;
 use ratatui::buffer::Buffer;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use scene_core::Inspectable;
-use scene_core::SceneKey;
+use engine_core::Inspectable;
+use engine_core::SceneKey;
 use serde_json::Value as JsonValue;
 
-use render::{anchor, anchor_with_margin, stack, Anchor, ButtonState, FrameButton, StackAxis};
+use engine_render::{anchor, anchor_with_margin, stack, Anchor, ButtonState, FrameButton, StackAxis};
 
-use scene_core::scene::{EngineCtx, InputEvent, Scene, Transition};
+use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use crate::scene_id::SceneId;
 
 #[derive(Inspectable)]
@@ -58,11 +58,11 @@ impl Default for MainHub {
             ],
             cursor_index: 0,
             quit_requested: false,
-            title_frame: image::load_from_memory(render::assets::FRAME_PANEL)
+            title_frame: image::load_from_memory(engine_render::assets::FRAME_PANEL)
                 .expect("FRAME_PANEL must decode — bundled first-party asset"),
-            logo: image::load_from_memory(render::assets::LOGO)
+            logo: image::load_from_memory(engine_render::assets::LOGO)
                 .expect("LOGO must decode — bundled first-party asset"),
-            cursor_icon: image::load_from_memory(render::assets::ICON_ARROW_RIGHT)
+            cursor_icon: image::load_from_memory(engine_render::assets::ICON_ARROW_RIGHT)
                 .expect("ICON_ARROW_RIGHT must decode — bundled first-party asset"),
         }
     }
@@ -70,7 +70,7 @@ impl Default for MainHub {
 
 impl MainHub {
     /// The bundled logo's own aspect ratio (width/height in dots — the same
-    /// space `render::convert`'s aspect-preserving fit operates in), used to
+    /// space `engine_render::convert`'s aspect-preserving fit operates in), used to
     /// size the title box's interior so the fit doesn't leave large empty
     /// margins. `crates/render/src/assets/logo.png` is 1212×481 ≈ 2.52:1.
     /// Measured directly against the bundled asset in a test below rather
@@ -166,9 +166,9 @@ impl MainHub {
         }
 
         let frame = &self.title_frame;
-        let dots = render::dots::sprite_to_dots(frame, dot_cols as u32, dot_rows as u32);
-        let grid = render::dots::dots_to_grid(&dots);
-        render::draw_grid(buf, rect, &grid);
+        let dots = engine_render::dots::sprite_to_dots(frame, dot_cols as u32, dot_rows as u32);
+        let grid = engine_render::dots::dots_to_grid(&dots);
+        engine_render::draw_grid(buf, rect, &grid);
     }
 
     /// `title` inset by 1 cell per side — the interior the logo paints into,
@@ -228,8 +228,8 @@ impl Scene for MainHub {
         let title = Self::title_rect(area);
         self.draw_title_frame(buf, title);
         let interior = Self::title_interior(title);
-        let grid = render::convert(&self.logo, interior);
-        render::draw_grid(buf, interior, &grid);
+        let grid = engine_render::convert(&self.logo, interior);
+        engine_render::draw_grid(buf, interior, &grid);
 
         let rects = Self::button_rects(area);
         for (button, rect) in self.buttons.iter().zip(rects) {
@@ -239,8 +239,8 @@ impl Scene for MainHub {
         }
 
         let cursor_rect = Self::cursor_rect(rects[self.cursor_index]);
-        let grid = render::convert(&self.cursor_icon, cursor_rect);
-        render::draw_grid(buf, cursor_rect, &grid);
+        let grid = engine_render::convert(&self.cursor_icon, cursor_rect);
+        engine_render::draw_grid(buf, cursor_rect, &grid);
     }
 
     fn handle_input(&mut self, ev: InputEvent) -> Option<Transition> {
@@ -285,7 +285,7 @@ impl Scene for MainHub {
 
     fn exit(&mut self, _ctx: &mut EngineCtx) {}
 
-    fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+    fn inspect(&mut self) -> &mut dyn engine_core::Inspectable {
         self
     }
 
@@ -488,7 +488,7 @@ mod mouse_input_tests {
     use super::*;
     use crate::scenes::test_util::{mouse_event, render_to_buffer};
     use ratatui::crossterm::event::{MouseButton, MouseEventKind};
-    use render::ButtonState;
+    use engine_render::ButtonState;
 
     const W: u16 = 120;
     const H: u16 = 50;
@@ -644,7 +644,7 @@ mod mouse_input_tests {
 #[cfg(test)]
 mod layout_tests {
     use super::*;
-    use render::{anchor, stack, Anchor, StackAxis};
+    use engine_render::{anchor, stack, Anchor, StackAxis};
 
     /// Fixed screen area used by every case in this module.
     fn area() -> Rect {
@@ -759,7 +759,7 @@ mod render_timing_tests {
     ///
     /// Measured (2026-07-03, this machine): release avg ~2.5ms (the "small
     /// fraction" of the budget), debug avg ~161ms. Debug is dominated by
-    /// `render::convert()` re-rasterizing `logo.png` every frame
+    /// `engine_render::convert()` re-rasterizing `logo.png` every frame
     /// (rasterization caching = spec 27, OUT OF SCOPE here; debug perf is
     /// explicitly deferred by spec 30). So the budget bound is asserted only
     /// in release, where the fix's target actually holds.

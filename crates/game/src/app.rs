@@ -10,9 +10,9 @@ use crossterm::{
 use ratatui::{backend::CrosstermBackend, Terminal};
 
 use crate::registry::GameCatalog;
-use scene_core::net::{inspect, ipc_server};
-use scene_core::scene::manager::{self, SceneManager};
-use scene_core::scene::{InputEvent, Scene, Transition};
+use engine_core::net::{inspect, ipc_server};
+use engine_core::scene::manager::{self, SceneManager};
+use engine_core::scene::{InputEvent, Scene, Transition};
 
 /// Digit ('1'-'9') hotkeys: global scene switch via the gameplay path. Moved
 /// here from `SceneManager::route_key` in b3-t1 (scene-core cannot depend on
@@ -218,7 +218,7 @@ mod tests {
 
     use crate::scene_id::SceneId;
     use crossterm::event::KeyModifiers;
-    use scene_core::SceneKey;
+    use engine_core::SceneKey;
 
     fn key(c: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)

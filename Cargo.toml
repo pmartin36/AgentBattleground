@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/scene-core",
-    "crates/scene-core-derive",
-    "crates/render",
+    "crates/engine/core",
+    "crates/engine/derive",
+    "crates/engine/render",
+    "crates/engine/inspector",
     "crates/game",
-    "crates/inspector",
 ]
 exclude = ["experiments"]
 

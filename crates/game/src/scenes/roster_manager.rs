@@ -4,23 +4,23 @@ use std::time::Duration;
 use ratatui::buffer::Buffer;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use render::tween::Tween;
-use scene_core::Inspectable;
-use scene_core::SceneKey;
+use engine_render::tween::Tween;
+use engine_core::Inspectable;
+use engine_core::SceneKey;
 use serde_json::Value as JsonValue;
 
-use scene_core::scene::{EngineCtx, InputEvent, Scene, Transition};
+use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use crate::scene_id::SceneId;
 
 #[derive(Inspectable)]
 pub struct RosterManager {
     current_index: usize,
     #[inspect(hidden)]
-    creatures: Vec<render::creature::Creature>,
+    creatures: Vec<engine_render::creature::Creature>,
     #[inspect(hidden)]
     elapsed: Duration,
     /// Decoded once at construction (b2-t2) — `render_group` reads these
-    /// instead of decoding `render::assets::DOT_FILLED`/`DOT_UNFILLED` from
+    /// instead of decoding `engine_render::assets::DOT_FILLED`/`DOT_UNFILLED` from
     /// raw bytes on every call.
     #[inspect(hidden)]
     dot_filled: image::DynamicImage,
@@ -30,14 +30,14 @@ pub struct RosterManager {
     /// because `render(&self, ..)` must mutate their rect/state from an
     /// immutable receiver (see research.md b4-t2 blueprint point 1).
     #[inspect(hidden)]
-    left_button: RefCell<render::Button>,
+    left_button: RefCell<engine_render::Button>,
     #[inspect(hidden)]
-    right_button: RefCell<render::Button>,
+    right_button: RefCell<engine_render::Button>,
     /// Top-right button that transitions back to `MainHub` (b4-t3). `RefCell`
     /// for the same immutable-render-mutates-button-state reason as the
     /// arrows.
     #[inspect(hidden)]
-    home_button: RefCell<render::Button>,
+    home_button: RefCell<engine_render::Button>,
     /// Transient scene-internal slide transition (b5-t1), armed by
     /// `navigate()` and driven by `elapsed`. `None` when no slide is active.
     #[inspect(hidden)]
@@ -116,15 +116,15 @@ impl RosterManager {
     pub fn new() -> Self {
         Self {
             current_index: 0,
-            creatures: render::creature::all(),
+            creatures: engine_render::creature::all(),
             elapsed: Duration::ZERO,
-            dot_filled: image::load_from_memory(render::assets::DOT_FILLED)
+            dot_filled: image::load_from_memory(engine_render::assets::DOT_FILLED)
                 .expect("DOT_FILLED must decode — bundled first-party asset"),
-            dot_unfilled: image::load_from_memory(render::assets::DOT_UNFILLED)
+            dot_unfilled: image::load_from_memory(engine_render::assets::DOT_UNFILLED)
                 .expect("DOT_UNFILLED must decode — bundled first-party asset"),
-            left_button: RefCell::new(render::Button::new(Rect::default(), render::assets::ICON_ARROW_LEFT)),
-            right_button: RefCell::new(render::Button::new(Rect::default(), render::assets::ICON_ARROW_RIGHT)),
-            home_button: RefCell::new(render::Button::new(Rect::default(), render::assets::ICON_HOME)),
+            left_button: RefCell::new(engine_render::Button::new(Rect::default(), engine_render::assets::ICON_ARROW_LEFT)),
+            right_button: RefCell::new(engine_render::Button::new(Rect::default(), engine_render::assets::ICON_ARROW_RIGHT)),
+            home_button: RefCell::new(engine_render::Button::new(Rect::default(), engine_render::assets::ICON_HOME)),
             slide: None,
         }
     }
@@ -147,16 +147,16 @@ impl RosterManager {
             Self::ARROW_W.saturating_sub(Self::EDGE_MARGIN),
             Self::ARROW_H,
         );
-        let left_rect = render::anchor_with_margin(
+        let left_rect = engine_render::anchor_with_margin(
             band,
             size,
-            render::Anchor::CenterLeft,
+            engine_render::Anchor::CenterLeft,
             (Self::EDGE_MARGIN, 0),
         );
-        let right_rect = render::anchor_with_margin(
+        let right_rect = engine_render::anchor_with_margin(
             band,
             size,
-            render::Anchor::CenterRight,
+            engine_render::Anchor::CenterRight,
             (Self::EDGE_MARGIN, 0),
         );
         (left_rect, right_rect)
@@ -165,10 +165,10 @@ impl RosterManager {
     /// Top-right rect for the home button — sole place its position is
     /// computed; `render()` and tests both call this.
     fn home_rect(area: Rect) -> Rect {
-        render::anchor_with_margin(
+        engine_render::anchor_with_margin(
             area,
             (Self::HOME_W, Self::HOME_H),
-            render::Anchor::TopRight,
+            engine_render::Anchor::TopRight,
             (Self::EDGE_MARGIN, Self::EDGE_MARGIN),
         )
     }
@@ -205,7 +205,7 @@ impl RosterManager {
     }
 
     /// Column offsets `(outgoing, incoming)` for an active slide `s` at the
-    /// current `elapsed`, eased via `render::tween::Tween`/`ease_in_out`.
+    /// current `elapsed`, eased via `engine_render::tween::Tween`/`ease_in_out`.
     /// A right-nav exits the outgoing group LEFT and enters the incoming
     /// group from the RIGHT; a left-nav is the mirror.
     fn slide_offsets(&self, area: Rect, s: &Slide) -> (i32, i32) {
@@ -234,27 +234,27 @@ impl RosterManager {
         let (sprite_rect, name_rect, dots_rect) = Self::layout(zero_area);
 
         let creature = &self.creatures[index];
-        if let Some(sprite) = creature.animation(render::AnimationKind::Idle) {
-            let (cols, rows) = render::convert::fit_dot_dims(sprite.frame_at(self.elapsed), sprite_rect);
+        if let Some(sprite) = creature.animation(engine_render::AnimationKind::Idle) {
+            let (cols, rows) = engine_render::convert::fit_dot_dims(sprite.frame_at(self.elapsed), sprite_rect);
             if cols > 0 && rows > 0 {
                 let buf = sprite.dots_at(self.elapsed, cols * 2, rows * 4);
-                let grid = render::dots::dots_to_grid(&buf);
-                render::draw_grid(&mut tmp, sprite_rect, &grid);
+                let grid = engine_render::dots::dots_to_grid(&buf);
+                engine_render::draw_grid(&mut tmp, sprite_rect, &grid);
             }
         }
         // White — reads against the scene's dark/transparent background
         // (there's no light panel behind this label the way FrameButton has).
-        render::label(
+        engine_render::label(
             &mut tmp,
             name_rect,
             creature.name(),
-            scene_core::color::Rgba::rgb(0xff, 0xff, 0xff),
+            engine_core::color::Rgba::rgb(0xff, 0xff, 0xff),
         );
 
         for (i, slot) in Self::dot_slots(dots_rect).iter().enumerate() {
             let img = if i == index { &self.dot_filled } else { &self.dot_unfilled };
-            let grid = render::convert(img, *slot);
-            render::draw_grid(&mut tmp, *slot, &grid);
+            let grid = engine_render::convert(img, *slot);
+            engine_render::draw_grid(&mut tmp, *slot, &grid);
         }
 
         for y in 0..area.height {
@@ -371,7 +371,7 @@ impl Scene for RosterManager {
 
     fn exit(&mut self, _ctx: &mut EngineCtx) {}
 
-    fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+    fn inspect(&mut self) -> &mut dyn engine_core::Inspectable {
         self
     }
 }
@@ -386,7 +386,7 @@ mod tests {
         assert_eq!(
             rm.creatures.len(),
             6,
-            "RosterManager::new() must seed all 6 creatures from render::creature::all()"
+            "RosterManager::new() must seed all 6 creatures from engine_render::creature::all()"
         );
         assert_eq!(rm.creatures[0].name(), "Ember Wolf");
         assert_eq!(rm.current_index, 0);
@@ -411,7 +411,7 @@ mod tests {
 #[cfg(test)]
 mod sprite_and_name_render_tests {
     use super::*;
-    use scene_core::scene::EngineCtx;
+    use engine_core::scene::EngineCtx;
     use crate::scenes::test_util::{render_to_buffer, row_containing};
 
     /// A fresh `RosterManager::new()` (current_index == 0) renders the Ember
@@ -464,7 +464,7 @@ mod sprite_and_name_render_tests {
     #[test]
     fn name_label_tracks_current_index() {
         let (w, h) = (40u16, 20u16);
-        let all = render::creature::all();
+        let all = engine_render::creature::all();
 
         for (i, creature) in all.iter().enumerate() {
             let mut scene = RosterManager::new();
@@ -845,13 +845,13 @@ mod home_button_tests {
 /// Slide transition (b5-t1): navigating slides the outgoing creature's
 /// group off-screen in the direction of travel while the incoming
 /// creature's group slides in from the opposite edge, eased via
-/// `render::tween`. Timings below assume the blueprint's documented
+/// `engine_render::tween`. Timings below assume the blueprint's documented
 /// `SLIDE_DUR = 300ms` (research.md b5-t1): 75ms/225ms/425ms total elapsed
 /// land at ~25%/~75%/past-100% progress.
 #[cfg(test)]
 mod slide_transition_tests {
     use super::*;
-    use scene_core::scene::EngineCtx;
+    use engine_core::scene::EngineCtx;
     use crate::scenes::test_util::{key_event, render_to_buffer, row_containing};
     use crossterm::event::KeyCode;
     use ratatui::buffer::Buffer;

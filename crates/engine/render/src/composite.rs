@@ -56,7 +56,7 @@ pub fn composite_dots(
 mod tests {
     use super::*;
     use crate::dots::{Dot, DotBuffer};
-    use scene_core::color::Rgba;
+    use engine_core::color::Rgba;
 
     // ── composite_dots tests ──────────────────────────────────────────────────
 

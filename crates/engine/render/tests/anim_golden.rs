@@ -15,9 +15,9 @@
 //!   selection = floor(elapsed_nanos / frame_dur_nanos) % frame_count
 //!   convert area Rect(0,0,16,8) → identity resize (cols*2=32, rows*4=32 = src 32×32)
 
-use render::{convert, AnimatedSprite, Cell};
+use engine_render::{convert, AnimatedSprite, Cell};
 use ratatui::layout::Rect;
-use scene_core::color::Rgba;
+use engine_core::color::Rgba;
 use std::time::Duration;
 
 // ── shared setup ─────────────────────────────────────────────────────────────

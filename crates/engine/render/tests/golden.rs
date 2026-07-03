@@ -1,4 +1,4 @@
-//! Golden tests for `render::convert` — Tier-1 correctness gate.
+//! Golden tests for `engine_render::convert` — Tier-1 correctness gate.
 //!
 //! Cases (a)–(e) use hand-derived constants that are **independent** of the
 //! implementation. A wrong luma threshold, wrong DOTS ordering, wrong mean
@@ -9,9 +9,9 @@
 //! Generate / update it by running tests with `UPDATE_SNAPSHOTS=1`.
 
 use image::{DynamicImage, Rgba as PixelRgba, RgbaImage};
-use render::{convert, Cell};
+use engine_render::{convert, Cell};
 use ratatui::layout::Rect;
-use scene_core::color::Rgba;
+use engine_core::color::Rgba;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 

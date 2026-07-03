@@ -65,7 +65,7 @@ pub const DOT_UNFILLED: &[u8] = include_bytes!("assets/dot_unfilled.png");
 
 /// Game logo / title sprite, 1212×481 RGBA8. Project-owner-supplied art,
 /// background-removed (alpha-transparent margins, opaque glyph body) —
-/// rendered through `render::convert` as the MainHub title box's only title
+/// rendered through `engine_render::convert` as the MainHub title box's only title
 /// element (spec 25 line 10: the logo image already reads as the title).
 /// Unlike the other entries here it is a supplied raster, not a `gen_*.rs`
 /// output.

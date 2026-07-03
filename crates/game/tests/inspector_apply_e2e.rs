@@ -15,14 +15,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use scene_core::net::ipc_server;
-use scene_core::scene::manager::SceneManager;
+use engine_core::net::ipc_server;
+use engine_core::scene::manager::SceneManager;
 use game::registry::GameCatalog;
 use game::scene_id::SceneId;
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
-use scene_core::ipc::{ApplyState, Envelope, Message, StateSnapshot, read_frame, write_frame};
-use scene_core::SceneKey;
+use engine_core::ipc::{ApplyState, Envelope, Message, StateSnapshot, read_frame, write_frame};
+use engine_core::SceneKey;
 use serde_json::{json, Value as JsonValue};
 
 /// Retry-connect to the Unix socket until the accept thread is ready (up to 2 s).
@@ -298,7 +298,7 @@ fn apply_state_rejects_readonly_field_but_applies_valid_sibling_in_same_patch() 
                 Message::Error(payload) => {
                     assert_eq!(
                         payload.code,
-                        scene_core::ipc::ErrorCode::BadField,
+                        engine_core::ipc::ErrorCode::BadField,
                         "readonly rejection must use ErrorCode::BadField"
                     );
                     error_msg = Some(payload.message);

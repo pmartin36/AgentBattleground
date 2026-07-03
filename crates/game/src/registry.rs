@@ -1,10 +1,10 @@
-use scene_core::inspect::FieldSchema;
-use scene_core::{Inspectable, SceneCatalog, SceneKey};
+use engine_core::inspect::FieldSchema;
+use engine_core::{Inspectable, SceneCatalog, SceneKey};
 
 use crate::scene_id::SceneId;
 
 use crate::scenes::{BattleViewer, Leaderboard, MainHub, RosterManager};
-use scene_core::scene::Scene;
+use engine_core::scene::Scene;
 
 /// Build a fresh boxed instance of the scene for `id` (spec 14: fresh-construct
 /// on switch, state resets). M1 implements four scenes; the other five catalog
@@ -42,7 +42,7 @@ pub fn is_implemented(id: SceneId) -> bool {
         .any(|s| s == id)
 }
 
-/// `scene_core::SceneCatalog` adapter wrapping the free `construct`/`schema_for`/
+/// `engine_core::SceneCatalog` adapter wrapping the free `construct`/`schema_for`/
 /// `is_implemented` functions above (b1-t4). Stateless; converts the engine-opaque
 /// `&SceneKey` boundary value to `SceneId` via `SceneId::from_key`, then delegates.
 pub struct GameCatalog;
@@ -157,7 +157,7 @@ mod tests {
     /// sole source of every `CatalogEntry.schema` (b5-t3).
     #[test]
     fn schema_for_returns_each_scene_type_schema() {
-        use scene_core::Inspectable;
+        use engine_core::Inspectable;
 
         assert_eq!(
             schema_for(SceneId::MainHub),

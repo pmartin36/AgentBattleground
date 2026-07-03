@@ -23,12 +23,12 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::Frame;
 use ratatui::Terminal;
-use scene_core::SceneKey;
+use engine_core::SceneKey;
 use serde_json::Value as JsonValue;
 
-use scene_core::scene::{EngineCtx, InputEvent, Scene, Transition};
+use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use game::scene_id::SceneId;
-use render::camera::{Camera, SideView, WorldPos};
+use engine_render::camera::{Camera, SideView, WorldPos};
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -83,7 +83,7 @@ fn wizard_world_pos(spatial_phase: f32, t: f32) -> WorldPos {
 // ─── Scene ────────────────────────────────────────────────────────────────────
 
 struct Wizard {
-    sprite: render::AnimatedSprite,
+    sprite: engine_render::AnimatedSprite,
     spatial_phase: f32,
 }
 
@@ -91,7 +91,7 @@ struct RenderMovementScene {
     wizards: Vec<Wizard>,
     camera: SideView,
     elapsed: Duration,
-    no_inspect: scene_core::scene::NoInspect,
+    no_inspect: engine_core::scene::NoInspect,
 }
 
 impl RenderMovementScene {
@@ -101,7 +101,7 @@ impl RenderMovementScene {
             .iter()
             .zip(PHASES.iter())
             .map(|(&speed, &spatial_phase)| Wizard {
-                sprite: render::AnimatedSprite::from_gif(gif_bytes, FRAME_DUR)
+                sprite: engine_render::AnimatedSprite::from_gif(gif_bytes, FRAME_DUR)
                     .expect("decode wizard.gif")
                     .with_speed(speed),
                 spatial_phase,
@@ -111,7 +111,7 @@ impl RenderMovementScene {
             wizards,
             camera: SideView::new(SCALE_DOTS),
             elapsed: Duration::ZERO,
-            no_inspect: scene_core::scene::NoInspect,
+            no_inspect: engine_core::scene::NoInspect,
         }
     }
 }
@@ -147,7 +147,7 @@ impl Scene for RenderMovementScene {
 
         // Rasterize first — the DotPlacements below borrow these, so the buffers
         // must outlive the composite call.
-        let dotbufs: Vec<render::dots::DotBuffer> = self
+        let dotbufs: Vec<engine_render::dots::DotBuffer> = self
             .wizards
             .iter()
             .map(|w| {
@@ -156,18 +156,18 @@ impl Scene for RenderMovementScene {
                 let aspect = img_w as f32 / img_h as f32;
                 let dot_rows = WIZARD_DOT_ROWS;
                 let dot_cols = (dot_rows as f32 * aspect).round() as u32;
-                render::dots::sprite_to_dots(img, dot_cols, dot_rows)
+                engine_render::dots::sprite_to_dots(img, dot_cols, dot_rows)
             })
             .collect();
 
-        let placements: Vec<render::composite::DotPlacement> = self
+        let placements: Vec<engine_render::composite::DotPlacement> = self
             .wizards
             .iter()
             .zip(&dotbufs)
             .map(|(w, dots)| {
                 let pos = wizard_world_pos(w.spatial_phase, t);
                 let (dot_x, dot_y) = self.camera.project(pos);
-                render::composite::DotPlacement {
+                engine_render::composite::DotPlacement {
                     dots,
                     dot_x,
                     dot_y,
@@ -176,12 +176,12 @@ impl Scene for RenderMovementScene {
             })
             .collect();
 
-        let composed = render::composite::composite_dots(cols * 2, rows * 4, &placements);
-        let grid = render::dots::dots_to_grid(&composed);
-        render::draw_grid(frame.buffer_mut(), area, &grid);
+        let composed = engine_render::composite::composite_dots(cols * 2, rows * 4, &placements);
+        let grid = engine_render::dots::dots_to_grid(&composed);
+        engine_render::draw_grid(frame.buffer_mut(), area, &grid);
     }
 
-    fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+    fn inspect(&mut self) -> &mut dyn engine_core::Inspectable {
         &mut self.no_inspect
     }
 }

@@ -3,18 +3,18 @@ use std::time::Duration;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use render::camera::{SideView, WorldPos};
-use render::composite::{composite_dots, DotPlacement};
-use render::dots::{dots_to_grid, dots_to_grid_tinted, tint, Dot, DotBuffer};
-use render::transform::{place, Transform, Vec2};
-use render::tween::Tween;
-use render::{draw_grid, AnimatedSprite};
-use scene_core::color::Rgba;
-use scene_core::Inspectable;
-use scene_core::SceneKey;
+use engine_render::camera::{SideView, WorldPos};
+use engine_render::composite::{composite_dots, DotPlacement};
+use engine_render::dots::{dots_to_grid, dots_to_grid_tinted, tint, Dot, DotBuffer};
+use engine_render::transform::{place, Transform, Vec2};
+use engine_render::tween::Tween;
+use engine_render::{draw_grid, AnimatedSprite};
+use engine_core::color::Rgba;
+use engine_core::Inspectable;
+use engine_core::SceneKey;
 use serde_json::Value as JsonValue;
 
-use scene_core::scene::{EngineCtx, InputEvent, Scene, Transition};
+use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use crate::scene_id::SceneId;
 
 /// Single source of truth for the board's column count. Every downstream
@@ -296,7 +296,7 @@ pub fn piece_shape_and_color(
     (raw, tinted)
 }
 
-/// Step d: thin reuse of `render::transform::place` through the shared
+/// Step d: thin reuse of `engine_render::transform::place` through the shared
 /// camera — places `dots` at the piece's stored `transform.translate` world
 /// position (seeded to the cell center by `Piece::new`, thereafter
 /// live-editable).
@@ -561,8 +561,8 @@ impl Scene for BattleViewer {
 mod board_geometry_tests {
     use super::*;
     use ratatui::buffer::Buffer;
-    use render::{draw_grid, Cell, Grid};
-    use scene_core::color::Rgba;
+    use engine_render::{draw_grid, Cell, Grid};
+    use engine_core::color::Rgba;
 
     /// Exact-fit area: 128x64 fits exactly 8 cells of 16x8 dots each.
     #[test]
@@ -635,7 +635,7 @@ mod board_geometry_tests {
     }
 
     /// Cross-check: board_geometry's centering derivation must land at the
-    /// exact same (x,y) as render::draw_grid's own centering formula, when
+    /// exact same (x,y) as engine_render::draw_grid's own centering formula, when
     /// fed a Grid sized to match the geometry's board dimensions.
     #[test]
     fn board_rect_matches_draw_grid_centering() {
@@ -923,7 +923,7 @@ mod piece_layout_tests {
 mod piece_render_tests {
     use super::*;
     use image::{DynamicImage, Rgba as PixelRgba, RgbaImage};
-    use render::dots::Dot;
+    use engine_render::dots::Dot;
 
     /// A uniform fully-opaque RGBA image (source for the synthetic sprites
     /// below) — deterministic, unlike the real GIF asset.
@@ -1458,7 +1458,7 @@ mod event_playback_wiring_tests {
 #[cfg(test)]
 mod move_event_driving_tests {
     use super::*;
-    use scene_core::scene::EngineCtx;
+    use engine_core::scene::EngineCtx;
 
     /// Builds a fresh default scene with piece 0's only playback event: a
     /// `Move` from its seeded start cell to `to`, active on
@@ -1582,7 +1582,7 @@ mod move_event_driving_tests {
 #[cfg(test)]
 mod die_event_driving_tests {
     use super::*;
-    use scene_core::scene::EngineCtx;
+    use engine_core::scene::EngineCtx;
 
     /// Builds a fresh default scene with piece 0's only playback event: a
     /// `Die`, active on `[start_time, start_time + duration)`.
@@ -1693,7 +1693,7 @@ mod die_event_driving_tests {
 #[cfg(test)]
 mod overlapping_events_tests {
     use super::*;
-    use scene_core::scene::EngineCtx;
+    use engine_core::scene::EngineCtx;
 
     /// Builds a scene with two simultaneous, independent events on different
     /// pieces: piece 0 (Team A) `Move`s to `(5, 0)`, piece 6 (Team B) `Die`s —
@@ -1795,11 +1795,11 @@ mod overlapping_events_tests {
 #[cfg(test)]
 mod battle_viewer_scene_wiring_tests {
     use super::*;
-    use scene_core::scene::{EngineCtx, Scene};
+    use engine_core::scene::{EngineCtx, Scene};
     use crate::scenes::test_util::render_to_buffer;
     use ratatui::buffer::Buffer;
     use ratatui::style::Color;
-    use render::camera::Camera;
+    use engine_render::camera::Camera;
 
     /// DELIVERABLE (1): a board-line corner glyph is present at the position
     /// `board_geometry(area)` independently predicts, and is not overwritten
@@ -2214,7 +2214,7 @@ mod battle_viewer_scene_wiring_tests {
 #[cfg(test)]
 mod inspectable_tests {
     use super::*;
-    use scene_core::{FieldSchema, FieldTag, PatchError};
+    use engine_core::{FieldSchema, FieldTag, PatchError};
 
     fn field<'a>(schema: &'a FieldSchema, name: &str) -> &'a FieldSchema {
         schema

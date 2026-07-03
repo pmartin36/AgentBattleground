@@ -1150,6 +1150,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
 
 [[package]]
+name = "engine-core"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "engine-derive",
+ "ratatui",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "engine-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "engine-render"
+version = "0.1.0"
+dependencies = [
+ "engine-core",
+ "image",
+ "ratatui",
+]
+
+[[package]]
 name = "enumflags2"
 version = "0.7.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1448,10 +1477,10 @@ name = "game"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "engine-core",
+ "engine-render",
  "image",
  "ratatui",
- "render",
- "scene-core",
  "serde",
  "serde_json",
 ]
@@ -1900,7 +1929,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
- "scene-core",
+ "engine-core",
  "serde",
  "serde_json",
 ]
@@ -3262,15 +3291,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "render"
-version = "0.1.0"
-dependencies = [
- "image",
- "ratatui",
- "scene-core",
-]
-
-[[package]]
 name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3348,26 +3368,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
-]
-
-[[package]]
-name = "scene-core"
-version = "0.1.0"
-dependencies = [
- "crossterm",
- "ratatui",
- "scene-core-derive",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "scene-core-derive"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]

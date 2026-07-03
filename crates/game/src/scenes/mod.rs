@@ -37,30 +37,30 @@ pub(crate) fn scene_for_digit(c: char) -> Option<SceneId> {
 pub(crate) fn fill_and_label(
     frame: &mut ratatui::Frame,
     area: ratatui::layout::Rect,
-    color: scene_core::color::Rgba,
+    color: engine_core::color::Rgba,
     name: &str,
 ) {
-    render::fill(frame.buffer_mut(), area, color);
+    engine_render::fill(frame.buffer_mut(), area, color);
     // Dark, near-black text — every current caller's fill color (e.g.
     // Leaderboard's bright amber) is light enough that dark text reads
     // clearly; this is a placeholder helper (see module doc), not worth a
     // per-caller contrast computation.
-    render::label(
+    engine_render::label(
         frame.buffer_mut(),
         area,
         name,
-        scene_core::color::Rgba::rgb(0x10, 0x10, 0x10),
+        engine_core::color::Rgba::rgb(0x10, 0x10, 0x10),
     );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scene_core::scene::Scene;
+    use engine_core::scene::Scene;
     use ratatui::backend::TestBackend;
     use ratatui::style::Color;
     use ratatui::Terminal;
-    use scene_core::SceneKey;
+    use engine_core::SceneKey;
 
     /// Render a scene into a fresh TestBackend and return the resulting buffer.
     fn render_scene_to_buffer(scene: &dyn Scene, w: u16, h: u16) -> ratatui::buffer::Buffer {

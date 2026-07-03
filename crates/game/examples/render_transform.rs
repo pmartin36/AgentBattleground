@@ -2,7 +2,7 @@
 //!
 //! A single frozen wizard sprite (`assets/wizard_still.png`) whose `Transform`
 //! animates purely from `elapsed`: `rotation` sweeps a continuous full turn,
-//! `scale` pulses via `render::tween::{lerp, ease_in_out}`, and `translate`
+//! `scale` pulses via `engine_render::tween::{lerp, ease_in_out}`, and `translate`
 //! gently drifts along a Lissajous path. Because the source frame is frozen,
 //! the only motion across frames is the `Transform` — exercising `rasterize`
 //! (b1-t2), `place` (b1-t3), and `tween` (b2-t1) end-to-end through the real
@@ -22,14 +22,14 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::Frame;
 use ratatui::Terminal;
-use scene_core::SceneKey;
+use engine_core::SceneKey;
 use serde_json::Value as JsonValue;
 
-use scene_core::scene::{EngineCtx, InputEvent, Scene, Transition};
+use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use game::scene_id::SceneId;
-use render::camera::{SideView, WorldPos};
-use render::transform::{Transform, Vec2};
-use render::tween;
+use engine_render::camera::{SideView, WorldPos};
+use engine_render::transform::{Transform, Vec2};
+use engine_render::tween;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -90,7 +90,7 @@ struct RenderTransformScene {
     img: image::DynamicImage,
     camera: SideView,
     elapsed: Duration,
-    no_inspect: scene_core::scene::NoInspect,
+    no_inspect: engine_core::scene::NoInspect,
 }
 
 impl RenderTransformScene {
@@ -100,7 +100,7 @@ impl RenderTransformScene {
                 .expect("decode wizard_still.png"),
             camera: SideView::new(SCALE_DOTS),
             elapsed: Duration::ZERO,
-            no_inspect: scene_core::scene::NoInspect,
+            no_inspect: engine_core::scene::NoInspect,
         }
     }
 }
@@ -137,15 +137,15 @@ impl Scene for RenderTransformScene {
 
         // Rasterize before place — the DotPlacement borrows this buffer, so it
         // must outlive the composite call.
-        let dots = render::transform::rasterize(&self.img, &transform, WIZARD_DOT_ROWS);
-        let placement = render::transform::place(&dots, transform.translate, &self.camera);
+        let dots = engine_render::transform::rasterize(&self.img, &transform, WIZARD_DOT_ROWS);
+        let placement = engine_render::transform::place(&dots, transform.translate, &self.camera);
 
-        let composed = render::composite::composite_dots(cols * 2, rows * 4, &[placement]);
-        let grid = render::dots::dots_to_grid(&composed);
-        render::draw_grid(frame.buffer_mut(), area, &grid);
+        let composed = engine_render::composite::composite_dots(cols * 2, rows * 4, &[placement]);
+        let grid = engine_render::dots::dots_to_grid(&composed);
+        engine_render::draw_grid(frame.buffer_mut(), area, &grid);
     }
 
-    fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+    fn inspect(&mut self) -> &mut dyn engine_core::Inspectable {
         &mut self.no_inspect
     }
 }

@@ -5,7 +5,7 @@
 
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView};
-use scene_core::color::Rgba;
+use engine_core::color::Rgba;
 
 use crate::grid::Grid;
 
@@ -289,7 +289,7 @@ mod tests {
     use super::*;
     use crate::grid::Cell;
     use image::{DynamicImage, Rgba as PixelRgba, RgbaImage};
-    use scene_core::color::Rgba;
+    use engine_core::color::Rgba;
 
     // ── helper ────────────────────────────────────────────────────────────────
 

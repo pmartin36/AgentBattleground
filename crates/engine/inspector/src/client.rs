@@ -11,10 +11,10 @@ use std::sync::mpsc::{self, Receiver};
 
 use std::collections::BTreeMap;
 
-use scene_core::ipc::{
+use engine_core::ipc::{
     read_frame, write_frame, ApplyState, Envelope, IpcError, Message, Subscribe, SwitchScene,
 };
-use scene_core::SceneKey;
+use engine_core::SceneKey;
 
 /// Live connection to the game's inspect socket. Owns the write half and the
 /// receiver of decoded inbound messages. Dropping it closes the write half;
@@ -105,8 +105,8 @@ impl InspectorClient {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use scene_core::inspect::{FieldSchema, FieldTag};
-    use scene_core::ipc::{
+    use engine_core::inspect::{FieldSchema, FieldTag};
+    use engine_core::ipc::{
         write_frame, read_frame, CatalogEntry, Envelope, Hello, Message,
     };
     use std::os::unix::net::UnixListener;

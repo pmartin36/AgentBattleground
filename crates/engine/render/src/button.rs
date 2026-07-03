@@ -9,7 +9,7 @@ use image::DynamicImage;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
-use scene_core::color::Rgba;
+use engine_core::color::Rgba;
 
 use crate::assets;
 

@@ -8,7 +8,7 @@ name = "inspector"
 path = "src/main.rs"
 
 [dependencies]
-scene-core = { path = "../scene-core" }
+engine-core = { path = "../core" }
 eframe = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }

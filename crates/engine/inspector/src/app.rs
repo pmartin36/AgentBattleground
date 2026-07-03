@@ -8,11 +8,11 @@
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
-use scene_core::color::Rgba;
-use scene_core::inspect::{FieldSchema, FieldTag};
-use scene_core::ipc::{CatalogEntry, Message};
-use scene_core::SceneKey;
-use scene_core::{parse_path_segment, Segment};
+use engine_core::color::Rgba;
+use engine_core::inspect::{FieldSchema, FieldTag};
+use engine_core::ipc::{CatalogEntry, Message};
+use engine_core::SceneKey;
+use engine_core::{parse_path_segment, Segment};
 use crate::client::InspectorClient;
 
 /// Deliberate vertical gap (px) between the scene-selector row and the
@@ -758,12 +758,12 @@ impl eframe::App for InspectorApp {
 mod tests {
     use super::*;
     use crate::client::tests::stub_schema;
-    use scene_core::inspect::{FieldSchema, FieldTag};
-    use scene_core::ipc::{CatalogEntry, Hello, Message, SceneChanged};
+    use engine_core::inspect::{FieldSchema, FieldTag};
+    use engine_core::ipc::{CatalogEntry, Hello, Message, SceneChanged};
 
     // ── b4-t4: field-editor widget matrix (headless egui harness) ──────────
 
-    use scene_core::inspect::Range;
+    use engine_core::inspect::Range;
 
     fn leaf(name: &str, tag: FieldTag) -> FieldSchema {
         FieldSchema {
@@ -1323,18 +1323,18 @@ mod tests {
     /// interaction on it can ever mark it dirty.
     #[test]
     fn json_field_renders_noninteractive_pretty_printed() {
-        use scene_core::Inspectable as _;
+        use engine_core::Inspectable as _;
 
         // `Empty` is never constructed in this test — it exists so `Payload`
         // is a realistic multi-variant data-carrying enum, not a red flag.
         #[allow(dead_code)]
-        #[derive(serde::Serialize, scene_core::Inspectable)]
+        #[derive(serde::Serialize, engine_core::Inspectable)]
         enum Payload {
             Loaded { hp: u32, mana: u32 },
             Empty,
         }
 
-        #[derive(scene_core::Inspectable)]
+        #[derive(engine_core::Inspectable)]
         struct Carrier {
             payload: Payload,
         }
@@ -1533,7 +1533,7 @@ mod tests {
     #[test]
     fn pump_sets_should_exit_on_eof() {
         use crate::client::connect;
-        use scene_core::ipc::{write_frame, Envelope};
+        use engine_core::ipc::{write_frame, Envelope};
         use std::os::unix::net::UnixListener;
         use std::time::Duration;
 
@@ -1754,7 +1754,7 @@ mod tests {
 
     // ── b4-t3: dirty-overlay buffer + StateSnapshot no-clobber ──────────────
 
-    use scene_core::ipc::StateSnapshot;
+    use engine_core::ipc::StateSnapshot;
 
     /// Fresh state: no dirty entries at all.
     #[test]
@@ -1929,12 +1929,12 @@ mod tests {
         tag: &str,
     ) -> (
         InspectorApp,
-        std::sync::mpsc::Receiver<scene_core::ipc::Envelope>,
+        std::sync::mpsc::Receiver<engine_core::ipc::Envelope>,
         std::os::unix::net::UnixStream,
         std::path::PathBuf,
     ) {
         use crate::client::connect;
-        use scene_core::ipc::read_frame;
+        use engine_core::ipc::read_frame;
         use std::os::unix::net::UnixListener;
 
         let path = std::env::temp_dir().join(format!(
@@ -2281,7 +2281,7 @@ mod tests {
     /// marks the submit in-flight.
     #[test]
     fn submit_sends_apply_state_with_only_dirty_patch_and_marks_awaiting() {
-        use scene_core::ipc::{write_frame, Envelope};
+        use engine_core::ipc::{write_frame, Envelope};
         use std::time::Duration;
 
         let (mut app, frame_rx, mut server_write, path) = stub_app_harness("submit");
@@ -2326,7 +2326,7 @@ mod tests {
     /// Submitting with an empty dirty buffer sends nothing over the socket.
     #[test]
     fn submit_with_empty_dirty_sends_nothing() {
-        use scene_core::ipc::{write_frame, Envelope};
+        use engine_core::ipc::{write_frame, Envelope};
         use std::time::Duration;
 
         let (mut app, frame_rx, mut server_write, path) = stub_app_harness("submit-empty");
@@ -2353,7 +2353,7 @@ mod tests {
     /// the new snapshot.
     #[test]
     fn ack_then_state_snapshot_after_submit_clears_dirty_and_refreshes() {
-        use scene_core::ipc::{write_frame, Envelope};
+        use engine_core::ipc::{write_frame, Envelope};
         use std::time::Duration;
 
         let (mut app, frame_rx, mut server_write, path) = stub_app_harness("submit-reply");
@@ -2404,7 +2404,7 @@ mod tests {
     /// dirty buffer.
     #[test]
     fn revert_sends_nothing_and_clears_dirty() {
-        use scene_core::ipc::{write_frame, Envelope};
+        use engine_core::ipc::{write_frame, Envelope};
         use std::time::Duration;
 
         let (mut app, frame_rx, mut server_write, path) = stub_app_harness("revert");
@@ -2493,7 +2493,7 @@ mod tests {
     /// sends its own `ApplyState` without waiting for Submit.
     #[test]
     fn set_live_apply_sends_subscribe_once_then_edit_sends_own_apply_state() {
-        use scene_core::ipc::{write_frame, Envelope};
+        use engine_core::ipc::{write_frame, Envelope};
         use std::time::Duration;
 
         let (mut app, frame_rx, mut server_write, path) = stub_app_harness("live-apply");

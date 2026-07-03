@@ -18,18 +18,18 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::Frame;
 use ratatui::Terminal;
-use scene_core::SceneKey;
+use engine_core::SceneKey;
 use serde_json::Value as JsonValue;
 
-use scene_core::scene::manager::SceneManager;
-use scene_core::scene::{EngineCtx, InputEvent, Scene, Transition};
+use engine_core::scene::manager::SceneManager;
+use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use game::scene_id::SceneId;
 
 // ─── Tier1Scene ───────────────────────────────────────────────────────────────
 
 struct Tier1Scene {
     img: image::DynamicImage,
-    no_inspect: scene_core::scene::NoInspect,
+    no_inspect: engine_core::scene::NoInspect,
 }
 
 impl Tier1Scene {
@@ -37,7 +37,7 @@ impl Tier1Scene {
         Tier1Scene {
             img: image::load_from_memory(include_bytes!("assets/wizard_still.png"))
                 .expect("decode wizard_still.png"),
-            no_inspect: scene_core::scene::NoInspect,
+            no_inspect: engine_core::scene::NoInspect,
         }
     }
 }
@@ -61,11 +61,11 @@ impl Scene for Tier1Scene {
 
     /// Real engine render path: convert image → Grid → draw into frame buffer.
     fn render(&self, frame: &mut Frame, area: Rect) {
-        let grid = render::convert(&self.img, area);
-        render::draw_grid(frame.buffer_mut(), area, &grid);
+        let grid = engine_render::convert(&self.img, area);
+        engine_render::draw_grid(frame.buffer_mut(), area, &grid);
     }
 
-    fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+    fn inspect(&mut self) -> &mut dyn engine_core::Inspectable {
         &mut self.no_inspect
     }
 }
