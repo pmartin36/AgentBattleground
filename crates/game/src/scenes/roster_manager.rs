@@ -385,30 +385,7 @@ mod tests {
 mod sprite_and_name_render_tests {
     use super::*;
     use crate::scene::EngineCtx;
-    use ratatui::backend::TestBackend;
-    use ratatui::Terminal;
-
-    /// Render `scene` into a fresh `TestBackend` and return the buffer.
-    fn render_to_buffer(scene: &RosterManager, w: u16, h: u16) -> ratatui::buffer::Buffer {
-        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
-        terminal
-            .draw(|f| {
-                let area = f.area();
-                scene.render(f, area);
-            })
-            .unwrap();
-        terminal.backend().buffer().clone()
-    }
-
-    /// Row index of the first row whose text contains `needle`, if any.
-    fn row_containing(buf: &ratatui::buffer::Buffer, w: u16, h: u16, needle: &str) -> Option<u16> {
-        (0..h).find(|&y| {
-            let row_text: String = (0..w)
-                .map(|x| buf.cell((x, y)).unwrap().symbol().to_string())
-                .collect();
-            row_text.contains(needle)
-        })
-    }
+    use crate::scenes::test_util::{render_to_buffer, row_containing};
 
     /// A fresh `RosterManager::new()` (current_index == 0) renders the Ember
     /// Wolf idle sprite centered above a name row that reads "Ember Wolf".
@@ -478,20 +455,8 @@ mod sprite_and_name_render_tests {
 #[cfg(test)]
 mod dot_row_render_tests {
     use super::*;
-    use ratatui::backend::TestBackend;
+    use crate::scenes::test_util::render_to_buffer;
     use ratatui::style::Color;
-    use ratatui::Terminal;
-
-    fn render_to_buffer(scene: &RosterManager, w: u16, h: u16) -> ratatui::buffer::Buffer {
-        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
-        terminal
-            .draw(|f| {
-                let area = f.area();
-                scene.render(f, area);
-            })
-            .unwrap();
-        terminal.backend().buffer().clone()
-    }
 
     /// The fg color of the first non-space cell found inside `slot`, or
     /// `None` if the slot has no painted cell.
@@ -564,11 +529,8 @@ mod dot_row_render_tests {
 #[cfg(test)]
 mod arrow_key_navigation_tests {
     use super::*;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-    fn key_event(code: KeyCode) -> InputEvent {
-        InputEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
-    }
+    use crate::scenes::test_util::key_event;
+    use crossterm::event::KeyCode;
 
     /// Right arrow from the last index (5) wraps to 0.
     #[test]
@@ -614,36 +576,8 @@ mod arrow_key_navigation_tests {
 #[cfg(test)]
 mod arrow_button_tests {
     use super::*;
-    use ratatui::backend::TestBackend;
-    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-    use ratatui::Terminal;
-
-    fn render_to_buffer(scene: &RosterManager, w: u16, h: u16) -> ratatui::buffer::Buffer {
-        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
-        terminal
-            .draw(|f| {
-                let area = f.area();
-                scene.render(f, area);
-            })
-            .unwrap();
-        terminal.backend().buffer().clone()
-    }
-
-    fn mouse_event(kind: MouseEventKind, column: u16, row: u16) -> InputEvent {
-        InputEvent::Mouse(MouseEvent {
-            kind,
-            column,
-            row,
-            modifiers: KeyModifiers::empty(),
-        })
-    }
-
-    /// True if any cell inside `rect` is non-space.
-    fn has_non_space(buf: &ratatui::buffer::Buffer, rect: Rect) -> bool {
-        (rect.top()..rect.bottom())
-            .flat_map(|y| (rect.left()..rect.right()).map(move |x| (x, y)))
-            .any(|(x, y)| buf.cell((x, y)).unwrap().symbol() != " ")
-    }
+    use crate::scenes::test_util::{has_non_space, mouse_event, render_to_buffer};
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
 
     /// Leftmost column (if any) within `rect` painted non-space.
     fn leftmost_non_space(buf: &ratatui::buffer::Buffer, rect: Rect) -> Option<u16> {
@@ -794,36 +728,8 @@ mod arrow_button_tests {
 #[cfg(test)]
 mod home_button_tests {
     use super::*;
-    use ratatui::backend::TestBackend;
-    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-    use ratatui::Terminal;
-
-    fn render_to_buffer(scene: &RosterManager, w: u16, h: u16) -> ratatui::buffer::Buffer {
-        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
-        terminal
-            .draw(|f| {
-                let area = f.area();
-                scene.render(f, area);
-            })
-            .unwrap();
-        terminal.backend().buffer().clone()
-    }
-
-    fn mouse_event(kind: MouseEventKind, column: u16, row: u16) -> InputEvent {
-        InputEvent::Mouse(MouseEvent {
-            kind,
-            column,
-            row,
-            modifiers: KeyModifiers::empty(),
-        })
-    }
-
-    /// True if any cell inside `rect` is non-space.
-    fn has_non_space(buf: &ratatui::buffer::Buffer, rect: Rect) -> bool {
-        (rect.top()..rect.bottom())
-            .flat_map(|y| (rect.left()..rect.right()).map(move |x| (x, y)))
-            .any(|(x, y)| buf.cell((x, y)).unwrap().symbol() != " ")
-    }
+    use crate::scenes::test_util::{has_non_space, mouse_event, render_to_buffer};
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
 
     /// `render()` paints the home button, and its rect sits top-right of
     /// `area` — inset from the top edge and the right edge by
@@ -919,35 +825,9 @@ mod home_button_tests {
 mod slide_transition_tests {
     use super::*;
     use crate::scene::EngineCtx;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use ratatui::backend::TestBackend;
+    use crate::scenes::test_util::{key_event, render_to_buffer, row_containing};
+    use crossterm::event::KeyCode;
     use ratatui::buffer::Buffer;
-    use ratatui::Terminal;
-
-    fn render_to_buffer(scene: &RosterManager, w: u16, h: u16) -> Buffer {
-        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
-        terminal
-            .draw(|f| {
-                let area = f.area();
-                scene.render(f, area);
-            })
-            .unwrap();
-        terminal.backend().buffer().clone()
-    }
-
-    fn key_event(code: KeyCode) -> InputEvent {
-        InputEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
-    }
-
-    /// Row index of the first row whose text contains `needle`, if any.
-    fn row_containing(buf: &Buffer, w: u16, h: u16, needle: &str) -> Option<u16> {
-        (0..h).find(|&y| {
-            let row_text: String = (0..w)
-                .map(|x| buf.cell((x, y)).unwrap().symbol().to_string())
-                .collect();
-            row_text.contains(needle)
-        })
-    }
 
     /// Leftmost non-space column in row `y`, if any.
     fn leftmost_non_space_in_row(buf: &Buffer, w: u16, y: u16) -> Option<u16> {

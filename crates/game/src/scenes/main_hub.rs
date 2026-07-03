@@ -4,7 +4,6 @@ use std::time::Duration;
 use ratatui::buffer::Buffer;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use scene_core::color::Rgba;
 use scene_core::scene_id::SceneId;
 use scene_core::Inspectable;
 use serde_json::Value as JsonValue;
@@ -48,8 +47,6 @@ impl Default for MainHub {
 }
 
 impl MainHub {
-    pub const COLOR: Rgba = Rgba::rgb(0x1e, 0x3a, 0xc8);
-
     /// Title box size (b5-t1).
     const TITLE_W: u16 = 40;
     const TITLE_H: u16 = 8;
@@ -203,8 +200,8 @@ impl Scene for MainHub {
             InputEvent::Mouse(me) => {
                 let mut clicked: Option<usize> = None;
                 let mut hovered: Option<usize> = None;
-                for (i, button) in self.buttons.iter().enumerate() {
-                    let mut b = button.borrow_mut();
+                for (i, button) in self.buttons.iter_mut().enumerate() {
+                    let b = button.get_mut();
                     if b.handle_mouse(&me) {
                         clicked = Some(i);
                     }
@@ -239,29 +236,16 @@ impl Scene for MainHub {
 #[cfg(test)]
 mod render_tests {
     use super::*;
-    use crate::scene::Scene;
-    use ratatui::backend::TestBackend;
-    use ratatui::Terminal;
-
-    fn render_to_buffer(w: u16, h: u16) -> (ratatui::buffer::Buffer, Rect) {
-        let scene = MainHub::default();
-        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
-        let mut area = Rect::new(0, 0, 0, 0);
-        terminal
-            .draw(|f| {
-                area = f.area();
-                scene.render(f, area);
-            })
-            .unwrap();
-        (terminal.backend().buffer().clone(), area)
-    }
+    use crate::scenes::test_util::render_to_buffer;
 
     /// b5-t2 deliverable: the title box paints real content (frame + logo,
     /// non-space cells) and the bare display-name text "Main Hub" appears
     /// nowhere in the rendered buffer — the logo is the title, not a label.
     #[test]
     fn main_hub_title_box_paints_and_has_no_text() {
-        let (buf, area) = render_to_buffer(120, 50);
+        let (w, h) = (120u16, 50u16);
+        let area = Rect::new(0, 0, w, h);
+        let buf = render_to_buffer(&MainHub::default(), w, h);
         let title = MainHub::title_rect(area);
 
         let painted = (title.top()..title.bottom()).any(|y| {
@@ -292,7 +276,9 @@ mod render_tests {
     /// in order Roster, Battle, Exit.
     #[test]
     fn main_hub_renders_three_menu_button_labels() {
-        let (buf, area) = render_to_buffer(120, 50);
+        let (w, h) = (120u16, 50u16);
+        let area = Rect::new(0, 0, w, h);
+        let buf = render_to_buffer(&MainHub::default(), w, h);
         let rects = MainHub::button_rects(area);
         let labels = ["Roster", "Battle", "Exit"];
 
@@ -323,15 +309,9 @@ mod render_tests {
             cursor_index: 1,
             ..Default::default()
         };
-        let mut terminal = Terminal::new(TestBackend::new(120, 50)).unwrap();
-        let mut area = Rect::new(0, 0, 0, 0);
-        terminal
-            .draw(|f| {
-                area = f.area();
-                scene.render(f, area);
-            })
-            .unwrap();
-        let buf = terminal.backend().buffer().clone();
+        let (w, h) = (120u16, 50u16);
+        let area = Rect::new(0, 0, w, h);
+        let buf = render_to_buffer(&scene, w, h);
 
         let rects = MainHub::button_rects(area);
         let cursor_w: u16 = 2;
@@ -361,11 +341,8 @@ mod render_tests {
 #[cfg(test)]
 mod keyboard_input_tests {
     use super::*;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-    fn key_event(code: KeyCode) -> InputEvent {
-        InputEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
-    }
+    use crate::scenes::test_util::key_event;
+    use crossterm::event::KeyCode;
 
     fn hub_at(cursor_index: usize) -> MainHub {
         MainHub {
@@ -448,10 +425,8 @@ mod keyboard_input_tests {
 #[cfg(test)]
 mod mouse_input_tests {
     use super::*;
-    use crate::scene::Scene;
-    use ratatui::backend::TestBackend;
-    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-    use ratatui::Terminal;
+    use crate::scenes::test_util::{mouse_event, render_to_buffer};
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
     use render::ButtonState;
 
     const W: u16 = 120;
@@ -461,24 +436,8 @@ mod mouse_input_tests {
     /// `set_rect`, per b5-t6 research's "render before dispatch" note) and
     /// returns the fixed `area` used by `button_rects`.
     fn render_once(scene: &MainHub) -> Rect {
-        let mut terminal = Terminal::new(TestBackend::new(W, H)).unwrap();
-        let mut area = Rect::new(0, 0, 0, 0);
-        terminal
-            .draw(|f| {
-                area = f.area();
-                scene.render(f, area);
-            })
-            .unwrap();
-        area
-    }
-
-    fn mouse_event(kind: MouseEventKind, column: u16, row: u16) -> InputEvent {
-        InputEvent::Mouse(MouseEvent {
-            kind,
-            column,
-            row,
-            modifiers: KeyModifiers::empty(),
-        })
+        render_to_buffer(scene, W, H);
+        Rect::new(0, 0, W, H)
     }
 
     fn center(rect: Rect) -> (u16, u16) {

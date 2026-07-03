@@ -10,6 +10,8 @@ pub mod battle_viewer;
 pub mod leaderboard;
 pub mod main_hub;
 pub mod roster_manager;
+#[cfg(test)]
+mod test_util;
 
 pub use battle_viewer::BattleViewer;
 pub use leaderboard::Leaderboard;
@@ -61,24 +63,6 @@ mod tests {
             })
             .unwrap();
         terminal.backend().buffer().clone()
-    }
-
-    // ------------------------------------------------------------------ colors
-
-    /// All four scene COLOR consts must be distinct — guards against copy-paste
-    /// bugs where two scenes are accidentally given the same fill color.
-    #[test]
-    fn all_scene_colors_are_distinct() {
-        use std::collections::HashSet;
-        let colors = [MainHub::COLOR, Leaderboard::COLOR];
-        let mut seen: HashSet<(u8, u8, u8)> = HashSet::new();
-        for (i, c) in colors.iter().enumerate() {
-            assert!(
-                seen.insert((c.r, c.g, c.b)),
-                "scene color #{i} (r={}, g={}, b={}) is a duplicate — each scene must declare a unique COLOR",
-                c.r, c.g, c.b
-            );
-        }
     }
 
     // ----------------------------------------------------------------- fill + id

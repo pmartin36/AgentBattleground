@@ -1686,22 +1686,10 @@ mod overlapping_events_tests {
 mod battle_viewer_scene_wiring_tests {
     use super::*;
     use crate::scene::{EngineCtx, Scene};
-    use ratatui::backend::TestBackend;
+    use crate::scenes::test_util::render_to_buffer;
     use ratatui::buffer::Buffer;
     use ratatui::style::Color;
-    use ratatui::Terminal;
     use render::camera::Camera;
-
-    fn render_to_buffer(scene: &BattleViewer, w: u16, h: u16) -> Buffer {
-        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
-        terminal
-            .draw(|f| {
-                let area = f.area();
-                scene.render(f, area);
-            })
-            .unwrap();
-        terminal.backend().buffer().clone()
-    }
 
     /// DELIVERABLE (1): a board-line corner glyph is present at the position
     /// `board_geometry(area)` independently predicts, and is not overwritten
