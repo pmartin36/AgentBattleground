@@ -172,4 +172,28 @@ mod tests {
 
         panic::set_hook(prev_hook);
     }
+
+    /// `schema_for`'s panic/success partition must agree with `is_implemented`
+    /// for every catalog entry, not just the single id `schema_for_panics_for_unimplemented`
+    /// pins — mirrors `is_implemented_matches_construct_panic_behavior` exactly so a
+    /// scene added to `construct` but missed in `schema_for` (or vice versa) is caught.
+    #[test]
+    fn is_implemented_matches_schema_for_panic_behavior() {
+        use std::panic::{self, AssertUnwindSafe};
+
+        let prev_hook = panic::take_hook();
+        panic::set_hook(Box::new(|_| {}));
+
+        for &id in SceneId::all() {
+            let result = panic::catch_unwind(AssertUnwindSafe(|| schema_for(id)));
+            assert_eq!(
+                result.is_ok(),
+                is_implemented(id),
+                "is_implemented({:?}) disagrees with schema_for's panic behavior",
+                id
+            );
+        }
+
+        panic::set_hook(prev_hook);
+    }
 }
