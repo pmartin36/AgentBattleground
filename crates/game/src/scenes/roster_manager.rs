@@ -18,6 +18,13 @@ pub struct RosterManager {
     creatures: Vec<render::creature::Creature>,
     #[inspect(hidden)]
     elapsed: Duration,
+    /// Decoded once at construction (b2-t2) — `render_group` reads these
+    /// instead of decoding `render::assets::DOT_FILLED`/`DOT_UNFILLED` from
+    /// raw bytes on every call.
+    #[inspect(hidden)]
+    dot_filled: image::DynamicImage,
+    #[inspect(hidden)]
+    dot_unfilled: image::DynamicImage,
     /// Mouse-driven navigation buttons beside the sprite (b4-t2). `RefCell`
     /// because `render(&self, ..)` must mutate their rect/state from an
     /// immutable receiver (see research.md b4-t2 blueprint point 1).
@@ -110,6 +117,10 @@ impl RosterManager {
             current_index: 0,
             creatures: render::creature::all(),
             elapsed: Duration::ZERO,
+            dot_filled: image::load_from_memory(render::assets::DOT_FILLED)
+                .expect("DOT_FILLED must decode — bundled first-party asset"),
+            dot_unfilled: image::load_from_memory(render::assets::DOT_UNFILLED)
+                .expect("DOT_UNFILLED must decode — bundled first-party asset"),
             left_button: RefCell::new(render::Button::new(Rect::default(), render::assets::ICON_ARROW_LEFT)),
             right_button: RefCell::new(render::Button::new(Rect::default(), render::assets::ICON_ARROW_RIGHT)),
             home_button: RefCell::new(render::Button::new(Rect::default(), render::assets::ICON_HOME)),
@@ -240,12 +251,9 @@ impl RosterManager {
         );
 
         for (i, slot) in Self::dot_slots(dots_rect).iter().enumerate() {
-            let bytes = if i == index {
-                render::assets::DOT_FILLED
-            } else {
-                render::assets::DOT_UNFILLED
-            };
-            render::draw_asset(&mut tmp, *slot, bytes);
+            let img = if i == index { &self.dot_filled } else { &self.dot_unfilled };
+            let grid = render::convert(img, *slot);
+            render::draw_grid(&mut tmp, *slot, &grid);
         }
 
         for y in 0..area.height {

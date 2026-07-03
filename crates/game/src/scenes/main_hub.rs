@@ -40,6 +40,11 @@ pub struct MainHub {
     /// frame by `render()` without re-decoding.
     #[inspect(hidden)]
     logo: image::DynamicImage,
+
+    /// Decoded once at construction — the selection-cursor arrow, painted
+    /// per frame by `render()` without re-decoding.
+    #[inspect(hidden)]
+    cursor_icon: image::DynamicImage,
 }
 
 impl Default for MainHub {
@@ -56,6 +61,8 @@ impl Default for MainHub {
                 .expect("FRAME_PANEL must decode — bundled first-party asset"),
             logo: image::load_from_memory(render::assets::LOGO)
                 .expect("LOGO must decode — bundled first-party asset"),
+            cursor_icon: image::load_from_memory(render::assets::ICON_ARROW_RIGHT)
+                .expect("ICON_ARROW_RIGHT must decode — bundled first-party asset"),
         }
     }
 }
@@ -230,11 +237,9 @@ impl Scene for MainHub {
             b.render(buf);
         }
 
-        render::draw_asset(
-            buf,
-            Self::cursor_rect(rects[self.cursor_index]),
-            render::assets::ICON_ARROW_RIGHT,
-        );
+        let cursor_rect = Self::cursor_rect(rects[self.cursor_index]);
+        let grid = render::convert(&self.cursor_icon, cursor_rect);
+        render::draw_grid(buf, cursor_rect, &grid);
     }
 
     fn handle_input(&mut self, ev: InputEvent) -> Option<Transition> {
