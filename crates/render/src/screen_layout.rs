@@ -2,7 +2,11 @@
 //! container `Rect` (b1-t1). Stacking (b2) and Tween-backed animation (b3)
 //! extend this same module.
 
+use std::time::Duration;
+
 use ratatui::layout::Rect;
+
+use crate::tween::Tween;
 
 /// A named position within the standard 3x3 anchor grid.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -104,6 +108,45 @@ pub fn stack(container: Rect, sizes: &[(u16, u16)], gap: u16, axis: StackAxis) -
     }
 
     out
+}
+
+/// Animates an element's `Rect` from `from` to `to` over `dur`, delegating
+/// all interpolation/easing to `crate::tween::Tween` (one channel per Rect
+/// field).
+pub struct RectTween {
+    x: Tween,
+    y: Tween,
+    width: Tween,
+    height: Tween,
+}
+
+impl RectTween {
+    pub fn new(from: Rect, to: Rect, dur: Duration) -> Self {
+        RectTween {
+            x: Tween::new(from.x as f32, to.x as f32, dur),
+            y: Tween::new(from.y as f32, to.y as f32, dur),
+            width: Tween::new(from.width as f32, to.width as f32, dur),
+            height: Tween::new(from.height as f32, to.height as f32, dur),
+        }
+    }
+
+    /// Sample the animated `Rect` at `elapsed`. Each field is the eased
+    /// value from its `Tween`, rounded to nearest and clamped into `u16`
+    /// range.
+    pub fn at(&self, elapsed: Duration) -> Rect {
+        Rect::new(
+            to_u16(self.x.at(elapsed)),
+            to_u16(self.y.at(elapsed)),
+            to_u16(self.width.at(elapsed)),
+            to_u16(self.height.at(elapsed)),
+        )
+    }
+}
+
+/// Round to nearest and clamp into `u16` (floor at 0 defensively; the f32
+/// here never goes negative given u16 inputs and t in [0,1]).
+fn to_u16(v: f32) -> u16 {
+    v.round().clamp(0.0, u16::MAX as f32) as u16
 }
 
 #[cfg(test)]
@@ -284,5 +327,92 @@ mod tests {
 
         let got = stack(c, &sizes, 5, StackAxis::Vertical);
         assert_eq!(got, vec![Rect::new(c.x, c.y, 20, 8)]);
+    }
+
+    // ----------------------------------------------------------- RectTween
+
+    /// Round-half-away-from-zero then clamp to `[0, u16::MAX]` — the
+    /// conversion `RectTween::at` must apply per field, matched here so
+    /// comparisons against a raw `Tween` don't spuriously differ by 1 on
+    /// half-integer midpoints.
+    fn to_u16(v: f32) -> u16 {
+        v.round().clamp(0.0, u16::MAX as f32) as u16
+    }
+
+    /// `at(Duration::ZERO) == from` and `at(dur) == to`, with a nonzero
+    /// `dur` and distinct values on all four fields so a swapped-field bug
+    /// is caught.
+    #[test]
+    fn rect_tween_hits_endpoints() {
+        let from = Rect::new(0, 5, 10, 20);
+        let to = Rect::new(50, 40, 30, 60);
+        let dur = Duration::from_secs(2);
+
+        let tw = RectTween::new(from, to, dur);
+
+        assert_eq!(tw.at(Duration::ZERO), from, "at(0) must equal from");
+        assert_eq!(tw.at(dur), to, "at(dur) must equal to");
+    }
+
+    /// `at(dur/2)` for each of x/y/width/height must equal delegating to
+    /// `tween::Tween::at` directly on that field (proving delegation, not
+    /// reimplementation of lerp/easing).
+    #[test]
+    fn rect_tween_midpoint_delegates_to_tween_per_field() {
+        let from = Rect::new(0, 5, 10, 20);
+        let to = Rect::new(50, 40, 30, 60);
+        let dur = Duration::from_secs(2);
+        let half = dur / 2;
+
+        let tw = RectTween::new(from, to, dur);
+        let got = tw.at(half);
+
+        let expected_x = to_u16(Tween::new(from.x as f32, to.x as f32, dur).at(half));
+        let expected_y = to_u16(Tween::new(from.y as f32, to.y as f32, dur).at(half));
+        let expected_w = to_u16(Tween::new(from.width as f32, to.width as f32, dur).at(half));
+        let expected_h = to_u16(Tween::new(from.height as f32, to.height as f32, dur).at(half));
+
+        assert_eq!(got.x, expected_x, "x must delegate to Tween::at");
+        assert_eq!(got.y, expected_y, "y must delegate to Tween::at");
+        assert_eq!(got.width, expected_w, "width must delegate to Tween::at");
+        assert_eq!(got.height, expected_h, "height must delegate to Tween::at");
+    }
+
+    /// Composition with `anchor()`: sliding in from off-screen-left (x=0) to
+    /// an anchor()-computed resting `Rect` inside a container with `x > 0`
+    /// produces x that is non-decreasing across elapsed and strictly greater
+    /// at the far end than the near end, reaching `to.x` at `dur`.
+    #[test]
+    fn rect_tween_slide_in_from_off_screen_left_is_monotonic_and_reaches_target() {
+        let container = Rect::new(20, 0, 100, 10);
+        let size = (20, 10);
+        let to = anchor(container, size, Anchor::BottomCenter);
+        let from = Rect::new(0, to.y, to.width, to.height); // off-screen-left
+
+        let dur = Duration::from_secs(4);
+        let tw = RectTween::new(from, to, dur);
+
+        let samples: Vec<u16> = [
+            Duration::ZERO,
+            dur / 4,
+            dur / 2,
+            dur * 3 / 4,
+            dur,
+        ]
+        .into_iter()
+        .map(|elapsed| tw.at(elapsed).x)
+        .collect();
+
+        for pair in samples.windows(2) {
+            assert!(
+                pair[1] >= pair[0],
+                "x must be non-decreasing across elapsed: {samples:?}"
+            );
+        }
+        assert!(
+            samples[4] > samples[0],
+            "x must strictly increase from near to far end: {samples:?}"
+        );
+        assert_eq!(*samples.last().unwrap(), to.x, "must reach target x at dur");
     }
 }
