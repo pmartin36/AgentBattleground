@@ -103,7 +103,7 @@ impl InspectorClient {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use scene_core::inspect::{FieldSchema, FieldTag};
     use scene_core::ipc::{
@@ -114,7 +114,8 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
-    fn stub_schema(name: &str) -> FieldSchema {
+    /// Shared with `app::tests` — the sole definition, not duplicated.
+    pub(crate) fn stub_schema(name: &str) -> FieldSchema {
         FieldSchema {
             name: name.to_string(),
             label: None,

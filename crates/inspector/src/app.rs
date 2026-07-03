@@ -47,12 +47,10 @@ pub struct SwitcherState {
     /// True from `begin_submit()` until the matching `Ack`/`StateSnapshot`
     /// reply is observed by the reducer; gates the post-submit dirty-clear
     /// so an unprompted `StateSnapshot` still can't clobber a live edit (b4-t9).
-    #[allow(dead_code)]
     pub awaiting_submit: bool,
     /// Per-frame live-edit signal for "apply on change" mode, drained by
     /// `InspectorApp::flush_edits` each frame. Separate from the persistent
     /// `dirty` buffer, which still feeds Submit (b4-t9).
-    #[allow(dead_code)]
     pub frame_edits: Vec<(String, serde_json::Value)>,
 }
 
@@ -180,14 +178,12 @@ impl SwitcherState {
     }
 
     /// Snapshot of exactly the buffered edits, keyed by path.
-    #[allow(dead_code)]
     pub fn dirty_patch(&self) -> BTreeMap<String, serde_json::Value> {
         self.dirty.clone()
     }
 
     /// Discard all buffered edits. Also resets `awaiting_submit` so a
     /// mid-flight revert can't be clobbered by a late stray `Ack` (b4-t9).
-    #[allow(dead_code)]
     pub fn revert(&mut self) {
         self.dirty.clear();
         self.awaiting_submit = false;
@@ -195,14 +191,12 @@ impl SwitcherState {
 
     /// Mark a Submit as in-flight (b4-t9): sets `awaiting_submit`, gating the
     /// reducer's post-reply dirty-clear.
-    #[allow(dead_code)]
     pub fn begin_submit(&mut self) {
         self.awaiting_submit = true;
     }
 
     /// Drain and return this frame's live-edit signal (b4-t9), leaving
     /// `frame_edits` empty for the next frame.
-    #[allow(dead_code)]
     pub fn take_frame_edits(&mut self) -> Vec<(String, serde_json::Value)> {
         std::mem::take(&mut self.frame_edits)
     }
@@ -211,7 +205,6 @@ impl SwitcherState {
 /// Read-only navigator: walks `path` (dotted fields + `[N]` indices, via the
 /// shared grammar) into `root`, returning `None` on any missing/mismatched
 /// segment rather than panicking.
-#[allow(dead_code)]
 fn navigate<'a>(root: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
     let mut cur = root;
     let mut rest = path;
@@ -270,6 +263,31 @@ fn scroll_field_panel(
         .show(ui, |ui| render_field_panel(ui, state))
 }
 
+/// Shared `Int`/`Float` field-render body: a labeled row with a `DragValue`,
+/// range-clamped when `schema.range` is present. `T` is `i64` for `Int`,
+/// `f64` for `Float` — the only two `Numeric` types `render_field` uses this
+/// for.
+fn render_numeric_field<T: egui::emath::Numeric>(
+    ui: &mut egui::Ui,
+    dirty: bool,
+    label: &str,
+    readonly: bool,
+    value: &mut T,
+    range: Option<std::ops::RangeInclusive<T>>,
+) -> egui::Response {
+    ui.horizontal(|ui| {
+        field_label(ui, dirty, label);
+        interactive(ui, readonly, |ui| {
+            let mut dv = egui::DragValue::new(value);
+            if let Some(r) = range {
+                dv = dv.range(r);
+            }
+            ui.add(dv)
+        })
+    })
+    .inner
+}
+
 /// Recursive worker: render one field (and its descendants), appending each
 /// leaf's `Response` into `out`, keyed by its full patch path. Skips
 /// `schema.hidden` fields. Struct/List are containers — they are not
@@ -311,19 +329,8 @@ fn render_field(
                 .display_value(path)
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0);
-            let range = schema.range;
-            let resp = ui
-                .horizontal(|ui| {
-                    field_label(ui, dirty, label.as_str());
-                    interactive(ui, schema.readonly, |ui| {
-                        let mut dv = egui::DragValue::new(&mut value);
-                        if let Some(r) = range {
-                            dv = dv.range((r.min as i64)..=(r.max as i64));
-                        }
-                        ui.add(dv)
-                    })
-                })
-                .inner;
+            let range = schema.range.map(|r| (r.min as i64)..=(r.max as i64));
+            let resp = render_numeric_field(ui, dirty, &label, schema.readonly, &mut value, range);
             if resp.changed() {
                 state.mark_dirty(path, serde_json::json!(value));
             }
@@ -334,19 +341,8 @@ fn render_field(
                 .display_value(path)
                 .and_then(|v| v.as_f64())
                 .unwrap_or(0.0);
-            let range = schema.range;
-            let resp = ui
-                .horizontal(|ui| {
-                    field_label(ui, dirty, label.as_str());
-                    interactive(ui, schema.readonly, |ui| {
-                        let mut dv = egui::DragValue::new(&mut value);
-                        if let Some(r) = range {
-                            dv = dv.range(r.min..=r.max);
-                        }
-                        ui.add(dv)
-                    })
-                })
-                .inner;
+            let range = schema.range.map(|r| r.min..=r.max);
+            let resp = render_numeric_field(ui, dirty, &label, schema.readonly, &mut value, range);
             if resp.changed() {
                 state.mark_dirty(path, serde_json::json!(value));
             }
@@ -527,7 +523,6 @@ pub struct InspectorApp {
     state: SwitcherState,
     client: InspectorClient,
     /// "Apply on change" toggle (b4-t9); on by default (b2-t1).
-    #[allow(dead_code)]
     live_apply: bool,
 }
 
@@ -556,7 +551,6 @@ impl InspectorApp {
 
     /// Send `ApplyState{active, dirty_patch()}` if the dirty buffer is
     /// non-empty, and mark the submit in-flight (b4-t9).
-    #[allow(dead_code)]
     pub fn submit(&mut self) {
         let patch = self.state.dirty_patch();
         if patch.is_empty() {
@@ -571,14 +565,12 @@ impl InspectorApp {
     }
 
     /// Discard buffered edits; no socket I/O (b4-t9).
-    #[allow(dead_code)]
     pub fn revert(&mut self) {
         self.state.revert();
     }
 
     /// Toggle "apply on change"; sends `Subscribe{live}` only on a real
     /// transition (b4-t9).
-    #[allow(dead_code)]
     pub fn set_live_apply(&mut self, on: bool) {
         if on != self.live_apply {
             if let Err(e) = self.client.send_subscribe(on) {
@@ -591,7 +583,6 @@ impl InspectorApp {
     /// Send the initial `Subscribe` reflecting `live_apply`'s default,
     /// exactly once at startup (b2-t1). Callers must invoke this exactly
     /// once, right after construction — it does not run automatically.
-    #[allow(dead_code)]
     pub fn start(&mut self) {
         if let Err(e) = self.client.send_subscribe(self.live_apply) {
             eprintln!("inspector: send_subscribe failed: {e}");
@@ -600,7 +591,6 @@ impl InspectorApp {
 
     /// Drain this frame's live-edit signal; while `live_apply` is on, send
     /// one `ApplyState` per edit (b4-t9).
-    #[allow(dead_code)]
     pub fn flush_edits(&mut self) {
         let edits = self.state.take_frame_edits();
         if !self.live_apply {
@@ -739,11 +729,10 @@ impl InspectorApp {
 }
 
 /// Submit / Revert button `Response`s from the action row, surfaced so tests
-/// can inspect `Response::enabled()` (b2-t2).
+/// can inspect `Response::enabled()` (b2-t2). Fields are read only by tests.
+#[allow(dead_code)]
 struct ActionRow {
-    #[allow(dead_code)]
     submit: egui::Response,
-    #[allow(dead_code)]
     revert: egui::Response,
 }
 
@@ -768,6 +757,7 @@ impl eframe::App for InspectorApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::tests::stub_schema;
     use scene_core::inspect::{FieldSchema, FieldTag};
     use scene_core::ipc::{CatalogEntry, Hello, Message, SceneChanged};
     use scene_core::scene_id::SceneId;
@@ -1336,15 +1326,16 @@ mod tests {
     fn json_field_renders_noninteractive_pretty_printed() {
         use scene_core::Inspectable as _;
 
-        #[derive(serde::Serialize, scene_core::Inspectable)]
+        // `Empty` is never constructed in this test — it exists so `Payload`
+        // is a realistic multi-variant data-carrying enum, not a red flag.
         #[allow(dead_code)]
+        #[derive(serde::Serialize, scene_core::Inspectable)]
         enum Payload {
             Loaded { hp: u32, mana: u32 },
             Empty,
         }
 
         #[derive(scene_core::Inspectable)]
-        #[allow(dead_code)]
         struct Carrier {
             payload: Payload,
         }
@@ -1385,19 +1376,6 @@ mod tests {
             !state.dirty_patch().contains_key("payload"),
             "a Json field must never appear in dirty_patch()'s output"
         );
-    }
-
-    fn stub_schema(name: &str) -> FieldSchema {
-        FieldSchema {
-            name: name.to_string(),
-            label: None,
-            tag: FieldTag::Struct,
-            readonly: false,
-            hidden: false,
-            range: None,
-            children: vec![],
-            variants: vec![],
-        }
     }
 
     /// Like `stub_schema` but with `field_count` synthetic `Bool` children, so
