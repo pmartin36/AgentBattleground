@@ -32,34 +32,32 @@ impl ButtonState {
     }
 }
 
-/// A clickable, hoverable on-screen button. Owns its hit-test rect, current
-/// [`ButtonState`], and its decoded panel/icon images for rendering; mutated
-/// by feeding it mouse events.
-pub struct Button {
+/// Shared mouse-driven interaction core: owns the hit-test rect and current
+/// [`ButtonState`], independent of how a button paints itself. Reused by
+/// [`Button`] (panel+icon render) and `FrameButton` (bordered frame + text
+/// label render).
+pub struct ButtonCore {
     rect: Rect,
     state: ButtonState,
-    panel: DynamicImage,
-    icon: DynamicImage,
 }
 
-impl Button {
-    /// New button over `rect`, starting `Idle`. `icon` is the bundled icon
-    /// asset bytes (e.g. `assets::ICON_HOME`) composited on top of the
-    /// shared `assets::BUTTON_PANEL` background at render time.
-    pub fn new(rect: Rect, icon: &[u8]) -> Self {
+impl ButtonCore {
+    /// New core over `rect`, starting `Idle`.
+    pub fn new(rect: Rect) -> Self {
         Self {
             rect,
             state: ButtonState::Idle,
-            panel: image::load_from_memory(assets::BUTTON_PANEL)
-                .expect("BUTTON_PANEL must decode — bundled first-party asset"),
-            icon: image::load_from_memory(icon)
-                .expect("icon bytes must decode — bundled first-party asset"),
         }
     }
 
-    /// Current visual state (b3 reads this to pick the tint).
+    /// Current visual state.
     pub fn state(&self) -> ButtonState {
         self.state
+    }
+
+    /// Current hit-test rect.
+    pub fn rect(&self) -> Rect {
+        self.rect
     }
 
     /// Update on-screen rect (scenes recompute layout each frame).
@@ -106,6 +104,46 @@ impl Button {
             _ => false,
         }
     }
+}
+
+/// A clickable, hoverable on-screen button. Owns its interaction [`ButtonCore`]
+/// and its decoded panel/icon images for rendering; mutated by feeding it
+/// mouse events.
+pub struct Button {
+    core: ButtonCore,
+    panel: DynamicImage,
+    icon: DynamicImage,
+}
+
+impl Button {
+    /// New button over `rect`, starting `Idle`. `icon` is the bundled icon
+    /// asset bytes (e.g. `assets::ICON_HOME`) composited on top of the
+    /// shared `assets::BUTTON_PANEL` background at render time.
+    pub fn new(rect: Rect, icon: &[u8]) -> Self {
+        Self {
+            core: ButtonCore::new(rect),
+            panel: image::load_from_memory(assets::BUTTON_PANEL)
+                .expect("BUTTON_PANEL must decode — bundled first-party asset"),
+            icon: image::load_from_memory(icon)
+                .expect("icon bytes must decode — bundled first-party asset"),
+        }
+    }
+
+    /// Current visual state (b3 reads this to pick the tint).
+    pub fn state(&self) -> ButtonState {
+        self.core.state()
+    }
+
+    /// Update on-screen rect (scenes recompute layout each frame).
+    pub fn set_rect(&mut self, rect: Rect) {
+        self.core.set_rect(rect);
+    }
+
+    /// Drive the state machine with one mouse event. Returns `true` exactly
+    /// on the call that completes a click (Up while Pressed, inside rect).
+    pub fn handle_mouse(&mut self, ev: &MouseEvent) -> bool {
+        self.core.handle_mouse(ev)
+    }
 
     /// Paint the composed, state-tinted panel+icon onto `self.rect` in
     /// `buf`, via the existing dot pipeline (`sprite_to_dots` →
@@ -113,7 +151,7 @@ impl Button {
     /// research.md's blueprint for b3-t2). Cells outside `self.rect` are
     /// left untouched; a zero-area or oversized `self.rect` must not panic.
     pub fn render(&self, buf: &mut Buffer) {
-        let rect = self.rect;
+        let rect = self.core.rect();
         let dot_cols = rect.width as usize * 2;
         let dot_rows = rect.height as usize * 4;
         if dot_cols == 0 || dot_rows == 0 {
@@ -145,7 +183,7 @@ impl Button {
             },
         ];
         let composed = crate::composite::composite_dots(dot_cols, dot_rows, &placements);
-        let tinted = crate::dots::tint(&composed, self.state.tint_color());
+        let tinted = crate::dots::tint(&composed, self.core.state().tint_color());
         let grid = crate::dots::dots_to_grid(&tinted);
         crate::grid::draw_grid(buf, rect, &grid);
     }

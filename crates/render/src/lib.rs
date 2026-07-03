@@ -21,7 +21,7 @@ pub mod screen_layout;
 pub mod transform;
 pub mod tween;
 pub use anim::AnimatedSprite;
-pub use button::{Button, ButtonState};
+pub use button::{Button, ButtonCore, ButtonState};
 pub use composite::{composite, Placement};
 pub use convert::convert;
 pub use creature::{AnimationKind, Creature};
