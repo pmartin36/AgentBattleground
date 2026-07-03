@@ -71,6 +71,41 @@ pub fn anchor(container: Rect, size: (u16, u16), pos: Anchor) -> Rect {
     Rect::new(x, y, w, h).intersection(container)
 }
 
+/// Axis along which `stack` sequences elements.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StackAxis {
+    Vertical,
+    Horizontal,
+}
+
+/// Lay out each element in `sizes` in order along `axis`, starting at
+/// `container`'s origin edge on that axis and advancing by each element's
+/// main-axis extent plus `gap`. Cross-axis position is `container`'s start
+/// edge; cross-axis size is the element's own declared size (no stretch).
+/// Empty `sizes` returns an empty `Vec`. Never panics.
+pub fn stack(container: Rect, sizes: &[(u16, u16)], gap: u16, axis: StackAxis) -> Vec<Rect> {
+    let mut out = Vec::with_capacity(sizes.len());
+
+    match axis {
+        StackAxis::Vertical => {
+            let mut cursor = container.y;
+            for &(w, h) in sizes {
+                out.push(Rect::new(container.x, cursor, w, h));
+                cursor = cursor.saturating_add(h).saturating_add(gap);
+            }
+        }
+        StackAxis::Horizontal => {
+            let mut cursor = container.x;
+            for &(w, h) in sizes {
+                out.push(Rect::new(cursor, container.y, w, h));
+                cursor = cursor.saturating_add(w).saturating_add(gap);
+            }
+        }
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +221,68 @@ mod tests {
         assert_eq!(got.y, c.y, "oversized height must clamp offset to container origin");
         assert!(got.bottom() <= c.bottom(), "result must not escape container bottom edge");
         assert!(got.y >= c.y);
+    }
+
+    // --------------------------------------------------------------- stack
+
+    /// Vertical stack of 3 elements with distinct heights (differing from
+    /// `container.width`, to catch a stretch-to-fill bug) and a nonzero gap:
+    /// exact y-offsets accumulate by each element's own height + gap, x stays
+    /// at `container.x`, and width is each element's own w (not
+    /// `container.width`).
+    #[test]
+    fn stack_vertical_three_elements_exact_offsets_and_own_cross_size() {
+        let c = container(); // x=10, y=20, width=100, height=40
+        let sizes = [(15u16, 5u16), (30, 8), (10, 12)];
+        let gap = 3u16;
+
+        let got = stack(c, &sizes, gap, StackAxis::Vertical);
+
+        let expected = vec![
+            Rect::new(10, 20, 15, 5),
+            Rect::new(10, 20 + 5 + 3, 30, 8),
+            Rect::new(10, 20 + 5 + 3 + 8 + 3, 10, 12),
+        ];
+        assert_eq!(got, expected);
+    }
+
+    /// Horizontal stack is the exact x/width <-> y/height mirror of the
+    /// vertical case: x-offsets accumulate by own width + gap, y stays at
+    /// `container.y`, height is each element's own h.
+    #[test]
+    fn stack_horizontal_three_elements_exact_offsets_and_own_cross_size() {
+        let c = container(); // x=10, y=20, width=100, height=40
+        let sizes = [(5u16, 15u16), (8, 30), (12, 10)];
+        let gap = 3u16;
+
+        let got = stack(c, &sizes, gap, StackAxis::Horizontal);
+
+        let expected = vec![
+            Rect::new(10, 20, 5, 15),
+            Rect::new(10 + 5 + 3, 20, 8, 30),
+            Rect::new(10 + 5 + 3 + 8 + 3, 20, 12, 10),
+        ];
+        assert_eq!(got, expected);
+    }
+
+    /// An empty `sizes` slice returns an empty `Vec` without panicking, for
+    /// either axis.
+    #[test]
+    fn stack_empty_sizes_returns_empty_vec() {
+        let c = container();
+        assert!(stack(c, &[], 4, StackAxis::Vertical).is_empty());
+        assert!(stack(c, &[], 4, StackAxis::Horizontal).is_empty());
+    }
+
+    /// A single element returns a length-1 `Vec` positioned at the
+    /// container's origin with the element's own size — the gap must not
+    /// affect a single-element stack.
+    #[test]
+    fn stack_single_element_at_container_origin() {
+        let c = container();
+        let sizes = [(20u16, 8u16)];
+
+        let got = stack(c, &sizes, 5, StackAxis::Vertical);
+        assert_eq!(got, vec![Rect::new(c.x, c.y, 20, 8)]);
     }
 }
