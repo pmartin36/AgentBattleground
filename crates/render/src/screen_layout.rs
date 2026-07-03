@@ -98,6 +98,9 @@ pub enum StackAxis {
 /// `container`'s origin edge on that axis and advancing by each element's
 /// main-axis extent plus `gap`. Cross-axis position is `container`'s start
 /// edge; cross-axis size is the element's own declared size (no stretch).
+/// Every returned `Rect` is intersected with `container` — same containment
+/// guarantee `anchor`/`anchor_with_margin` make — so an overflowing element
+/// or accumulated run is clipped rather than silently escaping `container`.
 /// Empty `sizes` returns an empty `Vec`. Never panics.
 pub fn stack(container: Rect, sizes: &[(u16, u16)], gap: u16, axis: StackAxis) -> Vec<Rect> {
     let mut out = Vec::with_capacity(sizes.len());
@@ -106,14 +109,14 @@ pub fn stack(container: Rect, sizes: &[(u16, u16)], gap: u16, axis: StackAxis) -
         StackAxis::Vertical => {
             let mut cursor = container.y;
             for &(w, h) in sizes {
-                out.push(Rect::new(container.x, cursor, w, h));
+                out.push(Rect::new(container.x, cursor, w, h).intersection(container));
                 cursor = cursor.saturating_add(h).saturating_add(gap);
             }
         }
         StackAxis::Horizontal => {
             let mut cursor = container.x;
             for &(w, h) in sizes {
-                out.push(Rect::new(cursor, container.y, w, h));
+                out.push(Rect::new(cursor, container.y, w, h).intersection(container));
                 cursor = cursor.saturating_add(w).saturating_add(gap);
             }
         }
