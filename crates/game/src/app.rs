@@ -106,12 +106,20 @@ pub fn run_with_params(
             mgr.apply_command(cmd, &events);
         }
 
-        // 2. Poll crossterm input (non-blocking). All key routing (1–4 / q / Ctrl-C)
-        //    is handled by route_key.
-        if event::poll(Duration::ZERO)? {
+        // 2. Poll crossterm input (non-blocking), draining ALL events queued
+        //    this frame — not just one. A single `if` here let a burst of
+        //    rapid real input (fast mouse movement, key mashing) back up
+        //    across multiple frames, each event only advancing 33ms of
+        //    apparent lag per frame; the debug command channel above already
+        //    drains fully with `while let Ok(..) = try_recv()`, this matches
+        //    that pattern. All key routing (1–4 / q / Ctrl-C) is handled by
+        //    route_key.
+        let mut should_quit = false;
+        while event::poll(Duration::ZERO)? {
             match event::read()? {
                 Event::Key(key) => {
                     if mgr.route_key(key) {
+                        should_quit = true;
                         break;
                     }
                 }
@@ -122,6 +130,9 @@ pub fn run_with_params(
                 }
                 _ => {}
             }
+        }
+        if should_quit {
+            break;
         }
 
         // 2b. A scene may itself request the same exit `q`/Ctrl-C produce
