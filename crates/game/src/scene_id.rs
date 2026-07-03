@@ -1,8 +1,7 @@
-/// Closed enum of every scene in the catalog (spec 14, M1).
-/// Wire-encoded as its exact Rust variant name string (e.g. `"BattleViewer"`).
-
 use scene_core::SceneKey;
 
+/// Closed enum of every scene in the catalog (spec 14, M1).
+/// Wire-encoded as its exact Rust variant name string (e.g. `"BattleViewer"`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum SceneId {
     Onboarding,

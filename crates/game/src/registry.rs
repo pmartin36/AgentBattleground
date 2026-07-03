@@ -77,7 +77,7 @@ impl SceneCatalog for GameCatalog {
     }
 
     fn is_available(&self, key: &SceneKey) -> bool {
-        SceneId::from_key(key).map_or(false, is_implemented)
+        SceneId::from_key(key).is_some_and(is_implemented)
     }
 }
 
