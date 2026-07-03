@@ -9,12 +9,12 @@ use ratatui::layout::Rect;
 
 use crate::grid::Grid;
 
-/// Convert `img` into a braille [`Grid`] aspect-preserving fitted into `area`.
-///
-/// Returns `Grid::new(0, 0)` when `area.width == 0` or `area.height == 0`.
-pub fn convert(img: &DynamicImage, area: Rect) -> Grid {
+/// Aspect-preserving braille dot-cell dimensions `(cols, rows)` for fitting
+/// `img` into `area`. Mirrors the fit computation `convert` uses internally.
+/// Returns `(0, 0)` when `area.width == 0 || area.height == 0`.
+pub fn fit_dot_dims(img: &DynamicImage, area: Rect) -> (u32, u32) {
     if area.width == 0 || area.height == 0 {
-        return Grid::new(0, 0);
+        return (0, 0);
     }
 
     // Guard against a degenerate source (should never happen with real images).
@@ -36,12 +36,25 @@ pub fn convert(img: &DynamicImage, area: Rect) -> Grid {
     cols = cols.clamp(1, area.width as u32);
     rows = rows.clamp(1, area.height as u32);
 
+    (cols, rows)
+}
+
+/// Convert `img` into a braille [`Grid`] aspect-preserving fitted into `area`.
+///
+/// Returns `Grid::new(0, 0)` when `area.width == 0` or `area.height == 0`.
+pub fn convert(img: &DynamicImage, area: Rect) -> Grid {
+    let (cols, rows) = fit_dot_dims(img, area);
+    if cols == 0 || rows == 0 {
+        return Grid::new(0, 0);
+    }
+
     crate::dots::dots_to_grid(&crate::dots::sprite_to_dots(img, cols * 2, rows * 4))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::convert;
+    use super::{convert, fit_dot_dims};
+    use crate::dots::{dots_to_grid, sprite_to_dots};
     use crate::grid::Cell;
     use image::{DynamicImage, Rgba as PixelRgba, RgbaImage};
     use ratatui::layout::Rect;
@@ -140,5 +153,49 @@ mod tests {
         let g_zero_h = convert(&img, Rect::new(0, 0, 8, 0));
         assert_eq!(g_zero_h.cols(), 0, "zero-height area: expected cols = 0");
         assert_eq!(g_zero_h.rows(), 0, "zero-height area: expected rows = 0");
+    }
+
+    // ── b3-t1: `fit_dot_dims` extraction (roster_manager cached-path prep) ────
+
+    /// `fit_dot_dims`'s returned `(cols, rows)` must be exactly the dims
+    /// `convert` uses to rasterize — i.e. feeding them into
+    /// `dots_to_grid(sprite_to_dots(img, cols*2, rows*4))` by hand must equal
+    /// calling `convert(img, area)` directly, for several aspect/area combos.
+    /// This is the contract roster_manager's cached `dots_at` call depends on
+    /// for pixel-identical output.
+    #[test]
+    fn fit_dot_dims_matches_convert_output_dims() {
+        let cases = [
+            // (img_w, img_h, area_w, area_h)
+            (16u32, 16u32, 8u16, 4u16),  // square image, width-first fit
+            (32, 16, 20, 6),             // wide image, height overflow -> height-first fit
+            (16, 32, 10, 20),            // tall image
+            (1, 1, 5, 5),                // degenerate 1x1 image
+        ];
+
+        for (iw, ih, aw, ah) in cases {
+            let img = solid_image(iw, ih, 10, 20, 30, 255);
+            let area = Rect::new(0, 0, aw, ah);
+
+            let (cols, rows) = fit_dot_dims(&img, area);
+            assert!(cols > 0 && rows > 0, "non-zero area must fit to non-zero dims");
+
+            let expected = convert(&img, area);
+            let actual = dots_to_grid(&sprite_to_dots(&img, cols * 2, rows * 4));
+            assert_eq!(
+                actual, expected,
+                "fit_dot_dims({iw}x{ih} into {aw}x{ah}) dims must reproduce convert()'s output exactly"
+            );
+        }
+    }
+
+    /// A zero-width or zero-height `area` returns `(0, 0)` — matching
+    /// `convert`'s own zero-area short-circuit (`convert_zero_area_returns_empty_grid`).
+    #[test]
+    fn fit_dot_dims_zero_area_returns_zero() {
+        let img = solid_image(16, 16, 200, 100, 50, 255);
+
+        assert_eq!(fit_dot_dims(&img, Rect::new(0, 0, 0, 4)), (0, 0));
+        assert_eq!(fit_dot_dims(&img, Rect::new(0, 0, 8, 0)), (0, 0));
     }
 }

@@ -223,8 +223,12 @@ impl RosterManager {
 
         let creature = &self.creatures[index];
         if let Some(sprite) = creature.animation(render::AnimationKind::Idle) {
-            let grid = render::convert(sprite.frame_at(self.elapsed), sprite_rect);
-            render::draw_grid(&mut tmp, sprite_rect, &grid);
+            let (cols, rows) = render::convert::fit_dot_dims(sprite.frame_at(self.elapsed), sprite_rect);
+            if cols > 0 && rows > 0 {
+                let buf = sprite.dots_at(self.elapsed, cols * 2, rows * 4);
+                let grid = render::dots::dots_to_grid(&buf);
+                render::draw_grid(&mut tmp, sprite_rect, &grid);
+            }
         }
         // White — reads against the scene's dark/transparent background
         // (there's no light panel behind this label the way FrameButton has).
