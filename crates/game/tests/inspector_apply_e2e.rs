@@ -15,8 +15,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use game::ipc_server;
-use game::manager::SceneManager;
+use scene_core::net::ipc_server;
+use scene_core::scene::manager::SceneManager;
 use game::registry::GameCatalog;
 use game::scene_id::SceneId;
 use ratatui::backend::TestBackend;

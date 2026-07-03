@@ -23,7 +23,7 @@ use ratatui::Terminal;
 use scene_core::SceneKey;
 use serde_json::Value as JsonValue;
 
-use game::scene::{EngineCtx, InputEvent, Scene, Transition};
+use scene_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use game::scene_id::SceneId;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -65,7 +65,7 @@ struct Wizard {
 struct Tier3Scene {
     wizards: Vec<Wizard>,
     elapsed: Duration,
-    no_inspect: game::scene::NoInspect,
+    no_inspect: scene_core::scene::NoInspect,
 }
 
 impl Tier3Scene {
@@ -103,7 +103,7 @@ impl Tier3Scene {
                 make(2.0, 14, 7, 66), // front  — depth=row=7, drawn last (on top)
             ],
             elapsed: Duration::ZERO,
-            no_inspect: game::scene::NoInspect,
+            no_inspect: scene_core::scene::NoInspect,
         }
     }
 }

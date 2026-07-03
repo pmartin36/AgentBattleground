@@ -21,15 +21,15 @@ use ratatui::Terminal;
 use scene_core::SceneKey;
 use serde_json::Value as JsonValue;
 
-use game::manager::SceneManager;
-use game::scene::{EngineCtx, InputEvent, Scene, Transition};
+use scene_core::scene::manager::SceneManager;
+use scene_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use game::scene_id::SceneId;
 
 // ─── Tier1Scene ───────────────────────────────────────────────────────────────
 
 struct Tier1Scene {
     img: image::DynamicImage,
-    no_inspect: game::scene::NoInspect,
+    no_inspect: scene_core::scene::NoInspect,
 }
 
 impl Tier1Scene {
@@ -37,7 +37,7 @@ impl Tier1Scene {
         Tier1Scene {
             img: image::load_from_memory(include_bytes!("assets/wizard_still.png"))
                 .expect("decode wizard_still.png"),
-            no_inspect: game::scene::NoInspect,
+            no_inspect: scene_core::scene::NoInspect,
         }
     }
 }

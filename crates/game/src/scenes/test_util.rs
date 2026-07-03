@@ -11,7 +11,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::Terminal;
 
-use crate::scene::{InputEvent, Scene};
+use scene_core::scene::{InputEvent, Scene};
 
 /// Render `scene` into a fresh `w`×`h` `TestBackend` and return the resulting
 /// buffer. The render area is always `Rect::new(0, 0, w, h)` — construct that

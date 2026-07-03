@@ -14,7 +14,7 @@ use scene_core::Inspectable;
 use scene_core::SceneKey;
 use serde_json::Value as JsonValue;
 
-use crate::scene::{EngineCtx, InputEvent, Scene, Transition};
+use scene_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use crate::scene_id::SceneId;
 
 /// Single source of truth for the board's column count. Every downstream
@@ -1458,7 +1458,7 @@ mod event_playback_wiring_tests {
 #[cfg(test)]
 mod move_event_driving_tests {
     use super::*;
-    use crate::scene::EngineCtx;
+    use scene_core::scene::EngineCtx;
 
     /// Builds a fresh default scene with piece 0's only playback event: a
     /// `Move` from its seeded start cell to `to`, active on
@@ -1582,7 +1582,7 @@ mod move_event_driving_tests {
 #[cfg(test)]
 mod die_event_driving_tests {
     use super::*;
-    use crate::scene::EngineCtx;
+    use scene_core::scene::EngineCtx;
 
     /// Builds a fresh default scene with piece 0's only playback event: a
     /// `Die`, active on `[start_time, start_time + duration)`.
@@ -1693,7 +1693,7 @@ mod die_event_driving_tests {
 #[cfg(test)]
 mod overlapping_events_tests {
     use super::*;
-    use crate::scene::EngineCtx;
+    use scene_core::scene::EngineCtx;
 
     /// Builds a scene with two simultaneous, independent events on different
     /// pieces: piece 0 (Team A) `Move`s to `(5, 0)`, piece 6 (Team B) `Die`s —
@@ -1795,7 +1795,7 @@ mod overlapping_events_tests {
 #[cfg(test)]
 mod battle_viewer_scene_wiring_tests {
     use super::*;
-    use crate::scene::{EngineCtx, Scene};
+    use scene_core::scene::{EngineCtx, Scene};
     use crate::scenes::test_util::render_to_buffer;
     use ratatui::buffer::Buffer;
     use ratatui::style::Color;

@@ -56,7 +56,7 @@ pub(crate) fn fill_and_label(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::Scene;
+    use scene_core::scene::Scene;
     use ratatui::backend::TestBackend;
     use ratatui::style::Color;
     use ratatui::Terminal;

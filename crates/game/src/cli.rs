@@ -372,12 +372,12 @@ mod tests {
         use ratatui::layout::Rect;
         use serde_json::{json, Value as JsonValue};
 
-        use crate::manager::SceneManager;
-        use crate::scene::{EngineCtx, InputEvent, Scene, Transition};
+        use scene_core::scene::manager::SceneManager;
+        use scene_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 
         struct ParamsCapturingScene {
             params: Arc<Mutex<Option<JsonValue>>>,
-            no_inspect: crate::scene::NoInspect,
+            no_inspect: scene_core::scene::NoInspect,
         }
 
         impl Scene for ParamsCapturingScene {
@@ -418,7 +418,7 @@ mod tests {
         let captured = Arc::new(Mutex::new(None));
         let scene = ParamsCapturingScene {
             params: Arc::clone(&captured),
-            no_inspect: crate::scene::NoInspect,
+            no_inspect: scene_core::scene::NoInspect,
         };
         let _mgr = SceneManager::with_scene_and_params(
             Box::new(scene),

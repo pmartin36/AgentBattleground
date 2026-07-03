@@ -26,7 +26,7 @@ use ratatui::Terminal;
 use scene_core::SceneKey;
 use serde_json::Value as JsonValue;
 
-use game::scene::{EngineCtx, InputEvent, Scene, Transition};
+use scene_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use game::scene_id::SceneId;
 use render::camera::{Camera, SideView, WorldPos};
 
@@ -91,7 +91,7 @@ struct RenderMovementScene {
     wizards: Vec<Wizard>,
     camera: SideView,
     elapsed: Duration,
-    no_inspect: game::scene::NoInspect,
+    no_inspect: scene_core::scene::NoInspect,
 }
 
 impl RenderMovementScene {
@@ -111,7 +111,7 @@ impl RenderMovementScene {
             wizards,
             camera: SideView::new(SCALE_DOTS),
             elapsed: Duration::ZERO,
-            no_inspect: game::scene::NoInspect,
+            no_inspect: scene_core::scene::NoInspect,
         }
     }
 }

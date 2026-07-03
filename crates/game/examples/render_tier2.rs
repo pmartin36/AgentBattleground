@@ -22,7 +22,7 @@ use ratatui::Terminal;
 use scene_core::SceneKey;
 use serde_json::Value as JsonValue;
 
-use game::scene::{EngineCtx, InputEvent, Scene, Transition};
+use scene_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use game::scene_id::SceneId;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -41,7 +41,7 @@ const MARKER: &str = "---FRAME-BREAK---";
 struct Tier2Scene {
     sprite: render::AnimatedSprite,
     elapsed: Duration,
-    no_inspect: game::scene::NoInspect,
+    no_inspect: scene_core::scene::NoInspect,
 }
 
 impl Tier2Scene {
@@ -53,7 +53,7 @@ impl Tier2Scene {
             )
             .expect("decode wizard.gif"),
             elapsed: Duration::ZERO,
-            no_inspect: game::scene::NoInspect,
+            no_inspect: scene_core::scene::NoInspect,
         }
     }
 }

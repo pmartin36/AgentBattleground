@@ -25,7 +25,7 @@ use ratatui::Terminal;
 use scene_core::SceneKey;
 use serde_json::Value as JsonValue;
 
-use game::scene::{EngineCtx, InputEvent, Scene, Transition};
+use scene_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use game::scene_id::SceneId;
 use render::camera::{SideView, WorldPos};
 use render::transform::{Transform, Vec2};
@@ -90,7 +90,7 @@ struct RenderTransformScene {
     img: image::DynamicImage,
     camera: SideView,
     elapsed: Duration,
-    no_inspect: game::scene::NoInspect,
+    no_inspect: scene_core::scene::NoInspect,
 }
 
 impl RenderTransformScene {
@@ -100,7 +100,7 @@ impl RenderTransformScene {
                 .expect("decode wizard_still.png"),
             camera: SideView::new(SCALE_DOTS),
             elapsed: Duration::ZERO,
-            no_inspect: game::scene::NoInspect,
+            no_inspect: scene_core::scene::NoInspect,
         }
     }
 }

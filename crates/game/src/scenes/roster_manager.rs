@@ -9,7 +9,7 @@ use scene_core::Inspectable;
 use scene_core::SceneKey;
 use serde_json::Value as JsonValue;
 
-use crate::scene::{EngineCtx, InputEvent, Scene, Transition};
+use scene_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use crate::scene_id::SceneId;
 
 #[derive(Inspectable)]
@@ -411,7 +411,7 @@ mod tests {
 #[cfg(test)]
 mod sprite_and_name_render_tests {
     use super::*;
-    use crate::scene::EngineCtx;
+    use scene_core::scene::EngineCtx;
     use crate::scenes::test_util::{render_to_buffer, row_containing};
 
     /// A fresh `RosterManager::new()` (current_index == 0) renders the Ember
@@ -851,7 +851,7 @@ mod home_button_tests {
 #[cfg(test)]
 mod slide_transition_tests {
     use super::*;
-    use crate::scene::EngineCtx;
+    use scene_core::scene::EngineCtx;
     use crate::scenes::test_util::{key_event, render_to_buffer, row_containing};
     use crossterm::event::KeyCode;
     use ratatui::buffer::Buffer;

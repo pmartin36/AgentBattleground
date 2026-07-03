@@ -3,8 +3,8 @@ use scene_core::{Inspectable, SceneCatalog, SceneKey};
 
 use crate::scene_id::SceneId;
 
-use crate::scene::Scene;
 use crate::scenes::{BattleViewer, Leaderboard, MainHub, RosterManager};
+use scene_core::scene::Scene;
 
 /// Build a fresh boxed instance of the scene for `id` (spec 14: fresh-construct
 /// on switch, state resets). M1 implements four scenes; the other five catalog

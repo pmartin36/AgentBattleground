@@ -7,7 +7,7 @@ use scene_core::Inspectable;
 use scene_core::SceneKey;
 use serde_json::Value as JsonValue;
 
-use crate::scene::{EngineCtx, InputEvent, Scene, Transition};
+use scene_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use crate::scene_id::SceneId;
 
 #[derive(Default, Inspectable)]

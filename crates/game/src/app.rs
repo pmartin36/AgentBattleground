@@ -9,12 +9,10 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 
-use crate::{
-    inspect, ipc_server, manager,
-    manager::SceneManager,
-    registry::GameCatalog,
-    scene::{InputEvent, Scene, Transition},
-};
+use crate::registry::GameCatalog;
+use scene_core::net::{inspect, ipc_server};
+use scene_core::scene::manager::{self, SceneManager};
+use scene_core::scene::{InputEvent, Scene, Transition};
 
 /// Digit ('1'-'9') hotkeys: global scene switch via the gameplay path. Moved
 /// here from `SceneManager::route_key` in b3-t1 (scene-core cannot depend on
