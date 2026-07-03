@@ -3354,6 +3354,8 @@ dependencies = [
 name = "scene-core"
 version = "0.1.0"
 dependencies = [
+ "crossterm",
+ "ratatui",
  "scene-core-derive",
  "serde",
  "serde_json",
