@@ -30,6 +30,16 @@ pub struct MainHub {
     /// not editable state.
     #[inspect(hidden)]
     quit_requested: bool,
+
+    /// Decoded once at construction — the title box's frame panel, painted
+    /// per frame by `draw_title_frame` without re-decoding.
+    #[inspect(hidden)]
+    title_frame: image::DynamicImage,
+
+    /// Decoded once at construction — the title box's logo, painted per
+    /// frame by `render()` without re-decoding.
+    #[inspect(hidden)]
+    logo: image::DynamicImage,
 }
 
 impl Default for MainHub {
@@ -42,6 +52,10 @@ impl Default for MainHub {
             ],
             cursor_index: 0,
             quit_requested: false,
+            title_frame: image::load_from_memory(render::assets::FRAME_PANEL)
+                .expect("FRAME_PANEL must decode — bundled first-party asset"),
+            logo: image::load_from_memory(render::assets::LOGO)
+                .expect("LOGO must decode — bundled first-party asset"),
         }
     }
 }
@@ -136,16 +150,15 @@ impl MainHub {
     /// Paint `assets::FRAME_PANEL` stretched to fill `rect` exactly (same
     /// stretch-fit routine `FrameButton::render` uses for its panel), static
     /// (no `ButtonState` tint). Early-returns on a zero-dim rect.
-    fn draw_title_frame(buf: &mut Buffer, rect: Rect) {
+    fn draw_title_frame(&self, buf: &mut Buffer, rect: Rect) {
         let dot_cols = rect.width as usize * 2;
         let dot_rows = rect.height as usize * 4;
         if dot_cols == 0 || dot_rows == 0 {
             return;
         }
 
-        let frame = image::load_from_memory(render::assets::FRAME_PANEL)
-            .expect("FRAME_PANEL must decode — bundled first-party asset");
-        let dots = render::dots::sprite_to_dots(&frame, dot_cols as u32, dot_rows as u32);
+        let frame = &self.title_frame;
+        let dots = render::dots::sprite_to_dots(frame, dot_cols as u32, dot_rows as u32);
         let grid = render::dots::dots_to_grid(&dots);
         render::draw_grid(buf, rect, &grid);
     }
@@ -205,8 +218,10 @@ impl Scene for MainHub {
     fn render(&self, frame: &mut Frame, area: Rect) {
         let buf = frame.buffer_mut();
         let title = Self::title_rect(area);
-        Self::draw_title_frame(buf, title);
-        render::draw_asset(buf, Self::title_interior(title), render::assets::LOGO);
+        self.draw_title_frame(buf, title);
+        let interior = Self::title_interior(title);
+        let grid = render::convert(&self.logo, interior);
+        render::draw_grid(buf, interior, &grid);
 
         let rects = Self::button_rects(area);
         for (button, rect) in self.buttons.iter().zip(rects) {
