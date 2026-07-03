@@ -8,8 +8,8 @@ Today the crate meant to be the shared foundation (`scene-core`) is itself entir
 ## Current Coupling (baseline, before this spec)
 - `crates/scene-core/src/scene_id.rs`: closed `SceneId` enum, hardcoded to this game's 9 scenes. Depended on by `render`, `inspector`, and `game` alike — the literal "core" is game content.
 - `crates/scene-core/src/ipc.rs`: every wire message (`Hello`, `CatalogEntry`, `SceneChanged`, `ApplyState`, `StateSnapshot`) carries `SceneId` as a typed Rust field.
-- `SceneId` is referenced **376 times across 20 files** (`scene-core`, `game`, `inspector`, plus examples/tests) — the majority of the mechanical work in this conversion.
-- `scene-core-derive`'s generated code hardcodes `::scene_core::...` paths (13 occurrences in `crates/scene-core-derive/src/lib.rs`) — any crate rename must update the proc-macro's emitted paths too, or every `#[derive(Inspectable)]` call site breaks.
+- `SceneId` is referenced extensively across `scene-core`, `game`, `inspector`, and examples/tests — the majority of the mechanical work in this conversion. (Exact file/reference counts drift as other work lands; re-grep at implementation time rather than trust a number pinned in this document.)
+- `scene-core-derive`'s generated code hardcodes `::scene_core::...` paths throughout `crates/scene-core-derive/src/lib.rs` — any crate rename must update every one of the proc-macro's emitted paths too, or every `#[derive(Inspectable)]` call site breaks. (Same caveat: count fresh, don't trust a number written here.)
 - `crates/game/src/scene.rs` (`Scene` trait, `EngineCtx`, `Transition`, `InputEvent`, `NoInspect`) and `crates/game/src/manager.rs` (`SceneManager`) are the actual engine main-loop — generic scene-switching/IPC-pump/live-snapshot machinery — but live in `game`, reaching into game-specific code only via `registry::construct`/`crate::scenes::scene_for_digit`. Neither file imports anything from `render` — both depend only on `scene_core`, `ratatui`, `crossterm`, and `serde_json`.
 - `crates/game/src/ipc_server.rs` (Unix-socket transport thread) and `crates/game/src/inspect.rs` (`--inspect` flag, sibling-binary discovery, spawn logic) are already 100% generic — nothing in either file is game-specific — but also live in `game`.
 - `crates/render/src/creature.rs` + `creature/bundled.rs` + `assets/creatures/*.gif`: 6 concrete creatures (Ember Wolf, Frost Lizard, Shadow Cat, Stone Golem, Storm Hawk, Verdant Treant) baked into the rendering crate via `include_bytes!`.
@@ -27,7 +27,7 @@ Convert the workspace to five crates under two top-level directories:
 
 This is a **relocation and rename**, not a merge: `engine-core` and `engine-render` remain two separate Cargo packages with their own `Cargo.toml`/`lib.rs`, each internally organized into modules (as they already reasonably are) — nothing from `render` is folded into `scene-core`'s file tree or vice versa. `crates/engine/` is a plain directory grouping four sibling crates, not itself a Cargo package.
 
-Also in scope: documentation that makes the boundary durable — the project-root `CLAUDE.md` and `README.md`, a directory-level `crates/engine/README.md`, plus a `CLAUDE.md` and `README.md` in each of the five crates (Phase G).
+Also in scope: documentation that makes the boundary durable — at minimum the project-root `CLAUDE.md` and `README.md` (Phase G); how much further to go (per-crate docs, a directory-level README) is an implementation call, not a fixed checklist.
 
 Out of scope: any change to the M1/M2 wire protocol shape, any change to what the inspector or game can do, any new features. This is a pure crate-boundary move plus the minimum type change (`SceneId` → `SceneKey`) needed to make it possible.
 
@@ -120,7 +120,7 @@ Each phase is an independent, compiling, fully-tested checkpoint — `cargo buil
 - `game::SceneId` gains `From<SceneId> for SceneKey` and `SceneId::from_key(&SceneKey) -> Option<Self>`.
 - `game::registry` implements `SceneCatalog` for a new `GameCatalog` struct, wrapping today's `construct`/`schema_for`/`is_implemented` logic.
 - `SceneManager` takes `Box<dyn SceneCatalog>` instead of calling `registry::construct` directly; `hello()` uses `catalog.catalog_keys()` instead of the hardcoded `['1','2','3','4']` scan.
-- Update the ~20 files / 376 references from `SceneId` to `SceneKey` (or to game's now-internal `SceneId` where the code is genuinely game-specific, e.g. inside `scenes/*.rs`).
+- Update every `SceneId` reference across `scene-core`/`game`/`inspector`/examples-tests to `SceneKey` (or to game's now-internal `SceneId` where the code is genuinely game-specific, e.g. inside `scenes/*.rs`) — re-grep at the start of this phase for the actual current file/reference count rather than trusting any number from this spec's drafting time.
 - `scene-core`'s own re-export of `SceneId` is deleted; `SceneId` becomes a `game`-only type for the rest of the conversion.
 - This is the largest single mechanical phase — do it in one atomic pass, not interleaved with later phases, so no test breaks twice.
 
@@ -131,7 +131,7 @@ Each phase is an independent, compiling, fully-tested checkpoint — `cargo buil
 
 **Phase C — Relocate and rename crates. No file-tree merging.**
 - Move `crates/scene-core` → `crates/engine/core`, renaming the package `scene-core` → `engine-core`.
-- Move `crates/scene-core-derive` → `crates/engine/derive`, renaming the package → `engine-derive`; update all `::scene_core::` paths emitted by the macro (13 occurrences) to `::engine_core::`.
+- Move `crates/scene-core-derive` → `crates/engine/derive`, renaming the package → `engine-derive`; update every `::scene_core::` path emitted by the macro to `::engine_core::` (grep-confirm zero `::scene_core::` remain in the crate before considering this step done — don't rely on a pre-counted occurrence total).
 - Move `crates/render` → `crates/engine/render`, renaming the package `render` → `engine-render`; update its `scene_core::` imports to `engine_core::`.
 - Move `crates/inspector` → `crates/engine/inspector` (package name stays `inspector`); update its `scene_core::` imports to `engine_core::`.
 - `engine-core` and `engine-render` remain two distinct crates throughout — nothing from one's `src/` tree moves into the other's. Each keeps (and where helpful, tidies) its own existing module structure.
@@ -151,31 +151,29 @@ Each phase is an independent, compiling, fully-tested checkpoint — `cargo buil
 **Phase F — Inspector.**
 - Confirm `crates/engine/inspector/src/{app,client}.rs` compiles cleanly against `engine_core::` (moved/renamed in Phase C); `SceneId` usages become `SceneKey` (HashMap keys, dropdown state) — expected to be close to mechanical since the inspector never pattern-matched on specific variants.
 - Manually re-verify the spec-14 M1 test plan end to end: launch `game --inspect`, switch scenes from the dropdown, confirm the game screen changes and the dropdown reflects gameplay-driven switches — i.e., the sync link between inspector and game is unaffected by the crate split.
+- Explicitly confirm `game`'s sibling-binary discovery (`CLAUDE.md`'s documented gotcha: `game` finds `inspector` via `current_exe().parent()/"inspector"`) still works after `inspector`'s source moves under `crates/engine/inspector/` — Cargo's flat per-profile `target/<profile>/` output layout shouldn't change regardless of source directory, but this is exactly the kind of build-topology assumption worth verifying directly rather than assuming, given it's a recurring gotcha in this repo.
 
 **Phase G — Documentation: make the boundary explicit and durable.**
-This is not cleanup after the fact — it's the mechanism that keeps the split from eroding the next time a feature gets bolted on under time pressure. All of the following are new or updated as part of this spec's scope, not a follow-up.
+This is not cleanup after the fact — it's the mechanism that keeps the split from eroding the next time a feature gets bolted on under time pressure. Documenting the boundary is in scope; the exact file list and wording below is a starting sketch, not a checklist to satisfy literally — research/implementation should right-size it (fewer, more load-bearing docs are better than many thin ones) rather than mechanically produce one file per bullet.
 
-- **Project-root `CLAUDE.md`**: add an "Engine / Game Boundary" section (peer to the existing "Key Constraints" section) stating:
-  - This is a two-product workspace: everything under `crates/engine/` (`engine-core`, `engine-render`, `engine-derive`, `inspector`) is reusable by any future game; everything under `crates/game/` is this game's content only.
-  - Rule of thumb: if a change would still make sense for a hypothetical different game built on this engine, it belongs under `crates/engine/`. If it only makes sense for Agent Battleground specifically (a concrete scene, a specific creature, this game's skin assets, digit-hotkey policy), it belongs in `crates/game/`.
+- **Project-root `CLAUDE.md`**: add an "Engine / Game Boundary" section (peer to the existing "Key Constraints" section) covering, at minimum:
+  - This is a two-product workspace: everything under `crates/engine/` is reusable by any future game; everything under `crates/game/` is this game's content only.
+  - Rule of thumb: if a change would still make sense for a hypothetical different game built on this engine, it belongs under `crates/engine/`; if it only makes sense for Agent Battleground specifically, it belongs in `crates/game/`.
   - Hard invariants: no crate under `crates/engine/` contains `include_bytes!`-bundled game art, a closed enum of concrete scenes/creatures/pieces, or a path dependency on `crates/game`.
-  - **When it's unclear which crate something belongs in, ask the project owner — do not guess and place it wherever compiles.**
-- **Project-root `README.md`**: add an "Architecture" subsection (peer to "Tech Stack") documenting the five-crate, two-directory layout and the same one-line boundary rule as above; add this spec (`31`) to the specs table.
-- **`crates/engine/README.md` (new, directory-level, not a crate)**: one paragraph — these four sub-crates (`engine-core`, `engine-render`, `engine-derive`, `inspector`) together form the reusable engine; none of them may depend on `crates/game`.
-- **`crates/engine/core/CLAUDE.md`, `crates/engine/render/CLAUDE.md` (new)**: each crate's contract — no game-specific types, no bundled assets beyond tiny synthetic test fixtures, all game content flows in as constructor parameters or through `SceneCatalog`. Before adding a new module or public item here, ask: would a second, unrelated game built on this engine plausibly want this too? If the answer isn't clearly yes, ask the project owner before adding it.
-- **`crates/engine/inspector/CLAUDE.md` (new)**: depends only on `engine-core`, never on `game`; stays a native egui window, not braille (per this spec's Scope) — so a future contributor doesn't "fix" this by porting it to the braille pipeline.
-- **`crates/game/CLAUDE.md` (new)**: this crate owns all Agent-Battleground-specific content (concrete `SceneId`, scenes, creature roster, skin assets, digit-hotkey table). Must never be depended on by any crate under `crates/engine/` — a dependency arrow pointing from engine toward game is always wrong and means something got put in the wrong crate.
-- **`README.md` in each of `crates/engine/core/`, `crates/engine/render/`, `crates/engine/derive/`, `crates/engine/inspector/`, `crates/game/` (new)**: one short paragraph each — what the crate is, what may depend on it, what it must never depend on. Mechanical, but every crate should be self-explanatory to someone who lands on it via `cargo doc` or a GitHub file browse without first reading the root README.
+  - When it's unclear which crate something belongs in, ask the project owner — don't guess and place it wherever compiles.
+- **Project-root `README.md`**: add an "Architecture" subsection (peer to "Tech Stack") documenting the crate layout and the same boundary rule; add this spec (`31`) to the specs table.
+- Per-crate documentation (a `crates/engine/README.md` at the directory level, plus something in each of the five crates establishing what it is / what may depend on it / what it must never depend on) is worth having, but the split between root docs and per-crate docs, and how much belongs in each, is an implementation call — don't treat the specific file list above as mandatory line items to check off.
 
 ## Test Plan
 - After every phase: `cargo build --workspace` and `cargo test --workspace` both green.
 - After Phase D: `grep -rn "include_bytes!" crates/engine/` returns nothing.
 - After Phase F: manual run of spec-14's M1 test plan (`Hello` on connect, `SwitchScene` → `SceneChanged`, gameplay-driven switch reflected in the inspector) — this is the concrete proof that "switch scenes in the inspector, and in the game, and they stay synced" still holds, since the wire format is byte-identical to before this spec.
+- After Phase F: run `game --inspect` and confirm it actually spawns and connects to the sibling `inspector` binary (not just that both binaries individually build) — the concrete proof the sibling-discovery gotcha survived the move.
 - Spot-check: `cargo doc -p engine-core -p engine-render --no-deps` builds with no game-specific type leaking into either crate's public API surface (manual scan of the generated docs' item list).
-- After Phase G: `CLAUDE.md`/`README.md` exist and are non-empty in all five crates plus `crates/engine/README.md`; project-root `CLAUDE.md` and `README.md` both mention the engine/game boundary rule; the specs table in `README.md` includes this spec.
+- After Phase G: project-root `CLAUDE.md` and `README.md` both state the engine/game boundary rule; the specs table in `README.md` includes this spec; the boundary is documented somewhere durable enough that a future contributor would find it before misplacing a new module — exact file count not prescribed.
 
 ## Risks / Concerns
-- **Phase A is genuinely large** (376 `SceneId` references across 20 files) — mechanical but not risk-free; doing it as one atomic commit rather than spread across phases avoids double-breaking tests.
+- **Phase A is genuinely large** (a couple dozen files' worth of `SceneId` references, workspace-wide) — mechanical but not risk-free; doing it as one atomic commit rather than spread across phases avoids double-breaking tests.
 - **The `engine-derive` proc-macro rename is a hard dependency of every later phase** — nothing else compiles until its emitted paths are updated, since `#[derive(Inspectable)]` is used throughout `scene-core`'s own types, `render`'s `transform.rs`/`camera.rs`, and every game scene.
 - **`SceneCatalog::construct` still panics for a cataloged-but-unbuilt scene** (mirroring today's `unimplemented!()`), guarded by `is_available` upstream exactly as `registry::is_implemented` guards `construct` today — this spec preserves that behavior rather than changing it to a `Result`/`Option` return, to keep the phase-A diff minimal. A follow-up spec could revisit this if it's ever a real papercut.
 - **No wire format changes** — `SceneKey` serializes identically to how `SceneId` already did (`wire_name()` string), so there is no protocol version bump and no risk to the inspector/game sync contract this spec is explicitly protecting.
