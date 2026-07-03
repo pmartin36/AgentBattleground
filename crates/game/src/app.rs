@@ -124,6 +124,13 @@ pub fn run_with_params(
             }
         }
 
+        // 2b. A scene may itself request the same exit `q`/Ctrl-C produce
+        //     (b4-t1), reachable from inside `handle_input` on either the
+        //     keyboard or mouse path above.
+        if mgr.active_quit_requested() {
+            break;
+        }
+
         // 3. Update active scene with wall-clock dt = time since the previous
         //    frame (≈ frame_budget incl. sleep), NOT intra-frame elapsed.
         let dt = clock.tick();

@@ -19,6 +19,13 @@ pub trait Scene {
     /// persist on the real scene (b5-t2) — every implementor below is a
     /// RED stub (`unimplemented!()`) pending the code-writer's real bodies.
     fn inspect(&mut self) -> &mut dyn Inspectable;
+    /// Engine polls this once per frame after input dispatch (b4-t1); return
+    /// `true` to request the same app exit `route_key`'s `q`/Ctrl-C already
+    /// produce. Defaults to `false` so every existing `Scene` impl compiles
+    /// unchanged.
+    fn quit_requested(&self) -> bool {
+        false
+    }
 }
 
 /// A request to switch the active scene (spec 14 line 87).

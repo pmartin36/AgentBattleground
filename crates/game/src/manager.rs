@@ -95,6 +95,13 @@ impl SceneManager {
         self.active.inspect()
     }
 
+    /// Returns whether the active scene has requested application exit
+    /// (b4-t1) — mirrors the `active_id`/`active_inspect` delegating
+    /// accessor pattern.
+    pub fn active_quit_requested(&self) -> bool {
+        self.active.quit_requested()
+    }
+
     /// Debug command: set `pending`, overriding any prior transition (debug always wins).
     pub fn set_debug_transition(&mut self, t: Transition) {
         self.pending = Some(t);
@@ -751,6 +758,70 @@ mod tests {
             manager.active_id(),
             SceneId::RosterManager,
             "debug transition must override the digit gameplay transition"
+        );
+    }
+
+    // ═══════════════════════════════════════ b4-t1: engine quit signal ═════════
+
+    /// A scene can request the same "main loop must quit" outcome
+    /// `route_key_q_returns_quit_active_unchanged` pins for `q`, reachable
+    /// from inside `handle_input` (not just pre-dispatch key routing).
+    /// `active_quit_requested()` must reflect the active scene's own
+    /// `quit_requested()`, reading `true` immediately after the scene sets
+    /// its flag — no real terminal involved.
+    #[test]
+    fn scene_quit_signal_reaches_engine_flag() {
+        use ratatui::layout::Rect;
+        use serde_json::Value as JsonValue;
+
+        struct QuitScene {
+            quit: bool,
+            no_inspect: crate::scene::NoInspect,
+        }
+
+        impl Scene for QuitScene {
+            fn id(&self) -> SceneId {
+                SceneId::Leaderboard
+            }
+            fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {}
+            fn update(
+                &mut self,
+                _ctx: &mut EngineCtx,
+                _dt: std::time::Duration,
+            ) -> Option<Transition> {
+                None
+            }
+            fn render(&self, _frame: &mut ratatui::Frame, _area: Rect) {}
+            fn handle_input(&mut self, _ev: InputEvent) -> Option<Transition> {
+                self.quit = true;
+                None
+            }
+            fn exit(&mut self, _ctx: &mut EngineCtx) {}
+            fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
+                &mut self.no_inspect
+            }
+            fn quit_requested(&self) -> bool {
+                self.quit
+            }
+        }
+
+        let scene = QuitScene {
+            quit: false,
+            no_inspect: crate::scene::NoInspect,
+        };
+        let mut mgr = SceneManager::with_scene(Box::new(scene));
+
+        assert!(
+            !mgr.active_quit_requested(),
+            "active_quit_requested must be false before the scene requests quit"
+        );
+
+        mgr.handle_input(InputEvent::Key(key('x', KeyModifiers::NONE)));
+
+        assert!(
+            mgr.active_quit_requested(),
+            "active_quit_requested must read true immediately after the scene's \
+             handle_input sets its own quit flag"
         );
     }
 
