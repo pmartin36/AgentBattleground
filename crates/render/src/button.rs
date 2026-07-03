@@ -108,14 +108,29 @@ impl ButtonCore {
     }
 }
 
+/// Multiply-tint applied to an icon layer before compositing it over
+/// `BUTTON_PANEL`, so the icon reads as a distinct shape instead of
+/// disappearing into the panel. Both `BUTTON_PANEL` and the bundled icons
+/// are pure opaque white (confirmed by sampling both directly) — with zero
+/// brightness difference, the braille rasterizer's per-cell adaptive luma
+/// threshold (`dots::cell_from_dots`: a dot's bit is set only if its luma is
+/// `>=` the cell's average) can't tell icon pixels from panel pixels within
+/// a mixed cell, smearing the icon's edges into the panel instead of
+/// showing a clean silhouette. Darkening just the icon layer first restores
+/// the contrast; the whole composed result is still multiplied by the
+/// button's `ButtonState` tint afterward, so this relative darkness (icon
+/// always darker than the panel behind it) holds across Idle/Hover/Pressed.
+const ICON_CONTRAST_TINT: Rgba = Rgba::rgb(0x40, 0x40, 0x40);
+
 /// Shared render sequence for a [`ButtonCore`]-backed widget: stretch-fit
 /// `background` to `rect`, optionally composite an aspect-fit-centered
-/// `icon` on top (depth 1 over the background's depth 0), tint the result by
-/// `tint_color`, and blit it into `buf`. Cells outside `rect` are left
-/// untouched; a zero-area or oversized `rect` must not panic. This is the
-/// sequence [`Button`] and `FrameButton` both used to duplicate — they now
-/// differ only in whether they pass an icon and whether they draw a label
-/// afterward.
+/// `icon` on top (depth 1 over the background's depth 0, pre-darkened via
+/// `ICON_CONTRAST_TINT` so it doesn't disappear into a same-brightness
+/// panel), tint the result by `tint_color`, and blit it into `buf`. Cells
+/// outside `rect` are left untouched; a zero-area or oversized `rect` must
+/// not panic. This is the sequence [`Button`] and `FrameButton` both used to
+/// duplicate — they now differ only in whether they pass an icon and
+/// whether they draw a label afterward.
 fn render_tinted(
     buf: &mut Buffer,
     rect: Rect,
@@ -139,7 +154,8 @@ fn render_tinted(
             let fitted = crate::convert::convert(icon_img, rect);
             let icon_cols = fitted.cols() * 2;
             let icon_rows = fitted.rows() * 4;
-            let icon_dots = crate::dots::sprite_to_dots(icon_img, icon_cols as u32, icon_rows as u32);
+            let icon_dots_raw = crate::dots::sprite_to_dots(icon_img, icon_cols as u32, icon_rows as u32);
+            let icon_dots = crate::dots::tint(&icon_dots_raw, ICON_CONTRAST_TINT);
 
             let placements = [
                 crate::composite::DotPlacement {
@@ -550,6 +566,54 @@ mod tests {
         let oversized = Button::new(Rect::new(0, 0, 50, 50), assets::ICON_HOME);
         let mut buf_small = make_buf(5, 5);
         oversized.render(&mut buf_small); // must not panic
+    }
+}
+
+/// Regression coverage for `ICON_CONTRAST_TINT`: `BUTTON_PANEL` and every
+/// bundled icon are pure opaque white, so without pre-darkening the icon
+/// layer, an icon's rendered color would be indistinguishable from the
+/// panel's — the exact bug that made the arrow icon unreadable once
+/// composited (confirmed by rendering real output before this fix existed).
+/// Separate module so `mod tests` above stays untouched (its own
+/// byte-for-byte constraint from the b1-t1 refactor).
+#[cfg(test)]
+mod icon_contrast_tests {
+    use super::*;
+    use ratatui::style::Color;
+
+    fn make_buf(w: u16, h: u16) -> Buffer {
+        Buffer::empty(Rect::new(0, 0, w, h))
+    }
+
+    fn luma(c: Color) -> u32 {
+        match c {
+            Color::Rgb(r, g, b) => r as u32 + g as u32 + b as u32,
+            _ => 0,
+        }
+    }
+
+    /// The icon (centered, aspect-fit) must render measurably darker than a
+    /// panel-only cell near the button's edge — proving `ICON_CONTRAST_TINT`
+    /// actually creates the contrast the braille rasterizer's per-cell
+    /// adaptive luma threshold needs to distinguish icon from panel.
+    #[test]
+    fn icon_is_darker_than_panel_only_cell() {
+        let rect = Rect::new(0, 0, 8, 4);
+        let b = Button::new(rect, assets::ICON_ARROW_LEFT);
+        let mut buf = make_buf(8, 4);
+        b.render(&mut buf);
+
+        let center = buf.cell((4, 2)).expect("center cell must exist");
+        let edge = buf.cell((0, 0)).expect("edge cell must exist");
+
+        assert_ne!(center.symbol(), " ", "center (icon) cell must be painted");
+        assert_ne!(edge.symbol(), " ", "edge (panel-only) cell must be painted");
+        assert!(
+            luma(center.fg) < luma(edge.fg),
+            "icon cell (luma {}) must be darker than a panel-only cell (luma {}) for the icon to read as a distinct shape",
+            luma(center.fg),
+            luma(edge.fg)
+        );
     }
 }
 
