@@ -66,6 +66,7 @@ High-level design specs for each segment of the game live in `/specs`:
 | 24 | [Roster — Carousel](specs/completed/24-roster-carousel.md) ✅ |
 | 25 | [Main Hub Navigation](specs/completed/25-main-hub-navigation.md) ✅ |
 | 26 | [Screen-Space Positioning](specs/completed/26-screen-space-positioning.md) ✅ |
+| 27 | [Render Frame Caching](specs/completed/27-render-frame-caching.md) ✅ |
 | 28 | [Anchor Margin Support](specs/completed/28-anchor-margin-support.md) ✅ |
 | 29 | [Tint Shape Invariance](specs/29-tint-shape-invariance.md) |
 | 30 | [Asset Decode Caching](specs/30-asset-decode-caching.md) |

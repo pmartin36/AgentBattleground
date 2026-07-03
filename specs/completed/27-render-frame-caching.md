@@ -1,6 +1,9 @@
 # Render Frame Caching
 
-> **Status: draft (not started).** Skip re-rasterizing a sprite (`sprite_to_dots`/`rasterize`, `13-rendering` / `16-world-space-and-camera`) when nothing that affects its output has changed since the last frame. Split out as new scope rather than added to `13-rendering`'s TBDs — `13` is already marked done.
+> # ✅ DONE! — Completed 2026-07-03
+> Status: implemented. `AnimatedSprite` (`crates/render/src/anim.rs`) caches rasterized `DotBuffer` output per instance, keyed by animation-frame index + dot dims (plain path, `dots_at`) or + rotation/scale (transform path, `rasterize_at`; `translate` excluded from the key). Wired into `battle_viewer.rs::piece_dots` and `roster_manager.rs::render_group`. Caching is scoped strictly to the pre-tint rasterization step — tint is always recomputed fresh on top of the (possibly cached) buffer, so it is unaffected by this cache.
+>
+> Skip re-rasterizing a sprite (`sprite_to_dots`/`rasterize`, `13-rendering` / `16-world-space-and-camera`) when nothing that affects its output has changed since the last frame. Split out as new scope rather than added to `13-rendering`'s TBDs — `13` is already marked done.
 
 ## Purpose
 Every sprite is currently fully re-rasterized every frame, unconditionally, even when its animation frame and transform haven't changed since the previous tick. At 30fps with a GIF frame duration of ~100ms, the same source image gets resized/re-rasterized ~3× before the animation frame index ever advances. This spec is about caching that redundant work.
