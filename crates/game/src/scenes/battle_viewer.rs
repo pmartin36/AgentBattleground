@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use render::camera::{SideView, WorldPos};
 use render::composite::{composite_dots, DotPlacement};
-use render::dots::{dots_to_grid, tint, Dot, DotBuffer};
+use render::dots::{dots_to_grid, dots_to_grid_tinted, tint, Dot, DotBuffer};
 use render::transform::{place, Transform, Vec2};
 use render::tween::Tween;
 use render::{draw_grid, AnimatedSprite};
@@ -261,19 +261,38 @@ pub fn sprite_base_dot_rows(camera: &SideView) -> u32 {
 /// Steps a-c of the per-piece pipeline: pick the staggered idle frame,
 /// rasterize it (scale/mirror sized off `geom.camera`), then tint with the
 /// piece's team color. Returns an owned `DotBuffer` (see research.md's
-/// REFINED lifetime split — `place_piece`, b4-t4, borrows from this).
+/// REFINED lifetime split — `place_piece`, b4-t4, borrows from this). Thin
+/// delegate over `piece_shape_and_color`'s tinted `.1` — see that function
+/// for the untinted `raw` shape buffer.
 pub fn piece_dots(
     piece: &Piece,
     sprite: &AnimatedSprite,
     elapsed: Duration,
     geom: &BoardGeometry,
 ) -> DotBuffer {
+    piece_shape_and_color(piece, sprite, elapsed, geom).1
+}
+
+/// Same rasterize-once step as `piece_dots`, but returns BOTH the untinted
+/// `raw` shape buffer (`.0`, real sprite RGB) and the team-tinted color
+/// buffer (`.1`, `tint(&raw, piece.color)`) — order is `(shape, color)` =
+/// `(untinted, tinted)`. `raw` and `tinted` always share identical dims and
+/// identical Lit/Transparent topology (guaranteed by `tint`'s construction).
+/// b3-t2 feeds `.0`s into the `shape` composite and `.1`s into the `color`
+/// composite for `dots_to_grid_tinted`.
+pub fn piece_shape_and_color(
+    piece: &Piece,
+    sprite: &AnimatedSprite,
+    elapsed: Duration,
+    geom: &BoardGeometry,
+) -> (DotBuffer, DotBuffer) {
     let raw = sprite.rasterize_at(
         piece_elapsed(elapsed, piece.index),
         &piece.transform,
         sprite_base_dot_rows(&geom.camera),
     );
-    tint(&raw, piece.color)
+    let tinted = tint(&raw, piece.color);
+    (raw, tinted)
 }
 
 /// Step d: thin reuse of `render::transform::place` through the shared
@@ -495,22 +514,30 @@ impl Scene for BattleViewer {
 
         let elapsed = Duration::from_secs_f32(self.elapsed);
         let alive: Vec<&Piece> = self.pieces.iter().filter(|p| p.alive).collect();
-        let dotbufs: Vec<DotBuffer> = alive
+        // One rasterize per piece -> (raw untinted shape buffer, team-tinted color
+        // buffer). Compositing the raw set and the tinted set at identical placements
+        // yields two buffers with identical Lit/Transparent topology, differing only
+        // in RGB, so the glyph mask stays invariant to tint (dots_to_grid_tinted).
+        let pairs: Vec<(DotBuffer, DotBuffer)> = alive
             .iter()
-            .map(|&p| piece_dots(p, &self.sprite, elapsed, &geom))
+            .map(|&p| piece_shape_and_color(p, &self.sprite, elapsed, &geom))
             .collect();
-        let placements: Vec<DotPlacement> = alive
+        let shape_placements: Vec<DotPlacement> = alive
             .iter()
-            .zip(&dotbufs)
-            .map(|(&p, dots)| place_piece(dots, p, &geom))
+            .zip(&pairs)
+            .map(|(&p, pair)| place_piece(&pair.0, p, &geom))
+            .collect();
+        let color_placements: Vec<DotPlacement> = alive
+            .iter()
+            .zip(&pairs)
+            .map(|(&p, pair)| place_piece(&pair.1, p, &geom))
             .collect();
 
-        let composed = composite_dots(
-            (geom.board_rect.width * 2) as usize,
-            (geom.board_rect.height * 4) as usize,
-            &placements,
-        );
-        let grid = dots_to_grid(&composed);
+        let w = (geom.board_rect.width * 2) as usize;
+        let h = (geom.board_rect.height * 4) as usize;
+        let shape = composite_dots(w, h, &shape_placements);
+        let color = composite_dots(w, h, &color_placements);
+        let grid = dots_to_grid_tinted(&shape, &color);
         draw_grid(frame.buffer_mut(), geom.board_rect, &grid);
     }
 
@@ -1074,6 +1101,89 @@ mod piece_render_tests {
                     dots.get(col, row),
                     Dot::Lit(Rgba::rgb(0, 0, 0)),
                     "piece_dots must tint using the mutated piece.color field (black), not piece.team.tint_color()"
+                );
+            }
+        }
+    }
+
+    /// b3-t1 DELIVERABLE: `piece_shape_and_color`'s untinted `.0` carries the
+    /// raw source RGB (not multiplied by `piece.color`), and its tinted `.1`
+    /// equals the hand-derived per-team multiply-blend (same expected values
+    /// as `piece_dots_tints_each_team_distinctly_via_multiply_blend`).
+    #[test]
+    fn piece_shape_and_color_untinted_carries_raw_source_rgb() {
+        let sprite = AnimatedSprite::new(vec![opaque_image(6, 12)], Duration::from_millis(100));
+        let geom = test_geom();
+        let piece_a = Piece::new(1, TEAM_A_ROW, Team::A, 0);
+
+        let (raw, tinted) = piece_shape_and_color(&piece_a, &sprite, Duration::ZERO, &geom);
+
+        // TEAM_A_COLOR = (255,232,176): 200*255/255=200, 200*232/255=181, 200*176/255=138
+        let expected_tinted = Rgba::rgb(200, 181, 138);
+
+        assert!(raw.cols() > 0 && raw.rows() > 0, "raw buffer must be non-empty");
+        for row in 0..raw.rows() {
+            for col in 0..raw.cols() {
+                assert_eq!(
+                    raw.get(col, row),
+                    Dot::Lit(Rgba::rgb(200, 200, 200)),
+                    "raw dot ({col},{row}) must carry the source RGB, not the team tint"
+                );
+                assert_eq!(
+                    tinted.get(col, row),
+                    Dot::Lit(expected_tinted),
+                    "tinted dot ({col},{row}) must equal the multiply-blend of raw with piece.color"
+                );
+            }
+        }
+    }
+
+    /// b3-t1 DELIVERABLE: `raw`/`tinted` share identical dims and identical
+    /// Lit/Transparent topology at every dot (mask parity) — no dot may be
+    /// Lit in one buffer and Transparent in the other.
+    #[test]
+    fn piece_shape_and_color_topology_parity() {
+        let sprite = AnimatedSprite::new(vec![opaque_image(6, 12)], Duration::from_millis(100));
+        let geom = test_geom();
+        let piece_b = Piece::new(1, TEAM_B_ROW, Team::B, 0);
+
+        let (raw, tinted) = piece_shape_and_color(&piece_b, &sprite, Duration::ZERO, &geom);
+
+        assert_eq!(raw.cols(), tinted.cols(), "raw/tinted must share identical column count");
+        assert_eq!(raw.rows(), tinted.rows(), "raw/tinted must share identical row count");
+
+        for row in 0..raw.rows() {
+            for col in 0..raw.cols() {
+                let raw_transparent = matches!(raw.get(col, row), Dot::Transparent);
+                let tinted_transparent = matches!(tinted.get(col, row), Dot::Transparent);
+                assert_eq!(
+                    raw_transparent, tinted_transparent,
+                    "dot ({col},{row}) must be Transparent in both buffers or neither"
+                );
+            }
+        }
+    }
+
+    /// b3-t1 DELIVERABLE (delegation pin): `piece_shape_and_color(...).1` must
+    /// equal `piece_dots(...)` for the same inputs — the pair producer's
+    /// tinted half is not a separate, divergent computation.
+    #[test]
+    fn piece_shape_and_color_tinted_matches_piece_dots() {
+        let sprite = AnimatedSprite::new(vec![opaque_image(6, 12)], Duration::from_millis(100));
+        let geom = test_geom();
+        let piece = Piece::new(1, TEAM_A_ROW, Team::A, 0);
+
+        let expected = piece_dots(&piece, &sprite, Duration::ZERO, &geom);
+        let (_, tinted) = piece_shape_and_color(&piece, &sprite, Duration::ZERO, &geom);
+
+        assert_eq!(tinted.cols(), expected.cols());
+        assert_eq!(tinted.rows(), expected.rows());
+        for row in 0..expected.rows() {
+            for col in 0..expected.cols() {
+                assert_eq!(
+                    tinted.get(col, row),
+                    expected.get(col, row),
+                    "tinted dot ({col},{row}) must match piece_dots' output"
                 );
             }
         }
@@ -1854,6 +1964,51 @@ mod battle_viewer_scene_wiring_tests {
             }
         }
         assert!(found_glyph, "expected at least one sprite glyph cell in the board");
+    }
+
+    /// b3-t2 DELIVERABLE: the tint-shape-invariance bug. `render()`'s glyph
+    /// mask (braille `symbol`) must be decided from the untinted sprite shape
+    /// alone — changing ONLY a piece's `color` (team tint), with its
+    /// transform/frame/placement held fixed, must never move the mask. Holds
+    /// the SAME piece fixed (so `Team::scale_x`'s mirror never enters) and
+    /// varies just `piece.color` between TEAM_A_COLOR and TEAM_B_COLOR — the
+    /// spec's own "team-A/team-B" verification technique, isolated to a
+    /// single piece so only the tint differs between the two renders.
+    #[test]
+    fn render_glyph_mask_invariant_to_tint() {
+        let mut scene = BattleViewer::default();
+        scene.pieces.truncate(1);
+        let area = Rect::new(0, 0, 100, 50);
+        let geom = board_geometry(area);
+
+        let buf_a = render_to_buffer(&scene, 100, 50);
+
+        scene.pieces[0].color = TEAM_B_COLOR;
+        let buf_b = render_to_buffer(&scene, 100, 50);
+
+        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR.r, GRID_LINE_COLOR.g, GRID_LINE_COLOR.b);
+        let mut color_diff_found = false;
+        for y in geom.board_rect.y..geom.board_rect.bottom() {
+            for x in geom.board_rect.x..geom.board_rect.right() {
+                let cell_a = buf_a.cell((x, y)).unwrap();
+                let cell_b = buf_b.cell((x, y)).unwrap();
+                assert_eq!(
+                    cell_a.symbol(),
+                    cell_b.symbol(),
+                    "cell ({x},{y}) glyph must be invariant to a tint-only piece.color change"
+                );
+                if cell_a.fg == grid_line_fg {
+                    continue; // board grid-line glyph, not piece tint
+                }
+                if is_braille_glyph(cell_a.symbol()) && cell_a.fg != cell_b.fg {
+                    color_diff_found = true;
+                }
+            }
+        }
+        assert!(
+            color_diff_found,
+            "expected at least one piece glyph cell's color to differ between the two tints"
+        );
     }
 
     /// Projects a world position to the terminal cell its sprite is CENTERED
