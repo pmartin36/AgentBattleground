@@ -206,6 +206,18 @@ pub fn socket_path() -> PathBuf {
 
 // ── READER thread body ────────────────────────────────────────────────────────
 
+/// Forward `cmd` to the main loop, then reply `Ack{reply_to: seq}` — the
+/// "forward a command, then acknowledge" shape shared by `SwitchScene`
+/// (known target), `ApplyState`, and `Subscribe`, previously duplicated
+/// verbatim at each call site.
+fn forward_and_ack(cmd_tx: &std::sync::mpsc::Sender<Command>, event_tx: &Sender<Event>, cmd: Command, seq: u64) {
+    let _ = cmd_tx.send(cmd);
+    let _ = event_tx.send(Event {
+        body: Message::Ack,
+        reply_to: Some(seq),
+    });
+}
+
 /// Reads framed messages from `stream` (the read half of the accepted connection).
 ///
 /// - `Message::SwitchScene` with a known target → forwards `Command::SwitchScene`.
@@ -228,15 +240,15 @@ fn reader_loop(
                 match env.body {
                     Message::SwitchScene(ss) => match SceneId::from_wire(&ss.target) {
                         Some(target) => {
-                            let _ = cmd_tx.send(Command::SwitchScene {
-                                target,
-                                params: ss.params,
-                            });
-                            // Ack is sent in-thread where env.seq is available (b4-t2).
-                            let _ = event_tx.send(Event {
-                                body: Message::Ack,
-                                reply_to: Some(env.seq),
-                            });
+                            forward_and_ack(
+                                &cmd_tx,
+                                &event_tx,
+                                Command::SwitchScene {
+                                    target,
+                                    params: ss.params,
+                                },
+                                env.seq,
+                            );
                         }
                         None => {
                             let _ = event_tx.send(Event {
@@ -249,21 +261,23 @@ fn reader_loop(
                         }
                     },
                     Message::ApplyState(a) => {
-                        let _ = cmd_tx.send(Command::ApplyState {
-                            id: a.id,
-                            patch: a.patch,
-                        });
-                        let _ = event_tx.send(Event {
-                            body: Message::Ack,
-                            reply_to: Some(env.seq),
-                        });
+                        forward_and_ack(
+                            &cmd_tx,
+                            &event_tx,
+                            Command::ApplyState {
+                                id: a.id,
+                                patch: a.patch,
+                            },
+                            env.seq,
+                        );
                     }
                     Message::Subscribe(s) => {
-                        let _ = cmd_tx.send(Command::Subscribe { live: s.live });
-                        let _ = event_tx.send(Event {
-                            body: Message::Ack,
-                            reply_to: Some(env.seq),
-                        });
+                        forward_and_ack(
+                            &cmd_tx,
+                            &event_tx,
+                            Command::Subscribe { live: s.live },
+                            env.seq,
+                        );
                     }
                     _ => {
                         // All other message types are ignored in M1.
