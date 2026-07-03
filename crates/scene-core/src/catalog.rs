@@ -1,22 +1,17 @@
 use crate::inspect::FieldSchema;
+use crate::scene::Scene;
 use crate::scene_key::SceneKey;
 
 /// Game-supplied scene registry the engine dispatches through (spec 31, Decision 2).
 ///
-/// Phase-A interim shape: `Scene` is an associated type rather than the spec's literal
-/// `Box<dyn Scene>`, because the `Scene` trait still lives in `game` this phase and
-/// scene-core must not depend on `game`. `game`'s `GameCatalog` binds
-/// `type Scene = dyn crate::scene::Scene`; Phase B moves `Scene` into engine-core and
-/// collapses this back to the literal `Box<dyn Scene>`.
+/// Literal, non-generic shape (b3-t1 collapse): `Scene` now lives in scene-core
+/// itself, so this returns `Box<dyn Scene>` directly rather than the Phase-A
+/// interim associated-type form (`type Scene: ?Sized`).
 pub trait SceneCatalog: Send {
-    /// The engine-side scene object this catalog constructs. `game` binds this to
-    /// its `dyn Scene`; unsized so it can be a trait object.
-    type Scene: ?Sized;
-
     /// Build a fresh boxed scene for `key`. Panics for a cataloged-but-unbuilt key
     /// (mirrors today's `registry::construct` `unimplemented!()`); callers guard with
     /// `is_available` first (spec Risks: panic behavior preserved, not turned into Result).
-    fn construct(&self, key: &SceneKey) -> Box<Self::Scene>;
+    fn construct(&self, key: &SceneKey) -> Box<dyn Scene>;
 
     /// Type-level schema for `key` — the source of every `CatalogEntry.schema`.
     /// Same panic contract as `construct` for an unbuilt key.
@@ -37,84 +32,32 @@ pub trait SceneCatalog: Send {
 mod tests {
     use super::*;
     use crate::inspect::FieldTag;
-
-    trait MockScene {
-        fn tag(&self) -> &str;
-    }
-
-    struct ConcreteMockScene(&'static str);
-
-    impl MockScene for ConcreteMockScene {
-        fn tag(&self) -> &str {
-            self.0
-        }
-    }
-
-    struct MockCatalog;
-
-    impl SceneCatalog for MockCatalog {
-        type Scene = dyn MockScene;
-
-        fn construct(&self, key: &SceneKey) -> Box<Self::Scene> {
-            match key.as_str() {
-                "A" => Box::new(ConcreteMockScene("tag-a")),
-                "B" => Box::new(ConcreteMockScene("tag-b")),
-                other => panic!("MockCatalog::construct: unbuilt key {other}"),
-            }
-        }
-
-        fn schema_for(&self, key: &SceneKey) -> FieldSchema {
-            match key.as_str() {
-                "A" => FieldSchema {
-                    name: "A".to_string(),
-                    label: None,
-                    tag: FieldTag::Struct,
-                    readonly: false,
-                    hidden: false,
-                    range: None,
-                    children: Vec::new(),
-                    variants: Vec::new(),
-                },
-                other => panic!("MockCatalog::schema_for: unbuilt key {other}"),
-            }
-        }
-
-        fn display_name(&self, key: &SceneKey) -> &str {
-            match key.as_str() {
-                "A" => "Mock A",
-                "B" => "Mock B",
-                other => panic!("MockCatalog::display_name: unbuilt key {other}"),
-            }
-        }
-
-        fn catalog_keys(&self) -> Vec<SceneKey> {
-            vec![SceneKey::new("A"), SceneKey::new("B")]
-        }
-
-        fn is_available(&self, key: &SceneKey) -> bool {
-            matches!(key.as_str(), "A" | "B")
-        }
-    }
+    // b3-t1: rewritten against the shared `test_support` mock fixture — the
+    // old generic-associated-type `MockScene`/`MockCatalog` pair (asserting
+    // `.tag()` on a non-`Scene` mock trait) is gone with the collapsed
+    // `SceneCatalog` shape; this now builds a real `dyn Scene` and asserts on
+    // its real `id()`.
+    use crate::test_support::MockCatalog;
 
     #[test]
     fn constructs_as_trait_object() {
-        let catalog: Box<dyn SceneCatalog<Scene = dyn MockScene>> = Box::new(MockCatalog);
+        let catalog: Box<dyn SceneCatalog> = Box::new(MockCatalog);
         assert!(catalog.is_available(&SceneKey::new("A")));
     }
 
     #[test]
-    fn construct_returns_boxed_scene() {
-        let catalog: Box<dyn SceneCatalog<Scene = dyn MockScene>> = Box::new(MockCatalog);
+    fn construct_returns_boxed_scene_with_requested_id() {
+        let catalog: Box<dyn SceneCatalog> = Box::new(MockCatalog);
         let scene = catalog.construct(&SceneKey::new("A"));
-        assert_eq!(scene.tag(), "tag-a");
+        assert_eq!(scene.id(), SceneKey::new("A"));
     }
 
     #[test]
     fn catalog_keys_and_display_name() {
-        let catalog: Box<dyn SceneCatalog<Scene = dyn MockScene>> = Box::new(MockCatalog);
+        let catalog: Box<dyn SceneCatalog> = Box::new(MockCatalog);
         assert_eq!(
             catalog.catalog_keys(),
-            vec![SceneKey::new("A"), SceneKey::new("B")]
+            vec![SceneKey::new("A"), SceneKey::new("B"), SceneKey::new("C")]
         );
         assert_eq!(catalog.display_name(&SceneKey::new("A")), "Mock A");
         assert_eq!(catalog.display_name(&SceneKey::new("B")), "Mock B");
@@ -122,16 +65,15 @@ mod tests {
 
     #[test]
     fn is_available_partition() {
-        let catalog: Box<dyn SceneCatalog<Scene = dyn MockScene>> = Box::new(MockCatalog);
+        let catalog: Box<dyn SceneCatalog> = Box::new(MockCatalog);
         assert!(catalog.is_available(&SceneKey::new("A")));
         assert!(!catalog.is_available(&SceneKey::new("Nope")));
     }
 
     #[test]
     fn schema_for_returns_fieldschema() {
-        let catalog: Box<dyn SceneCatalog<Scene = dyn MockScene>> = Box::new(MockCatalog);
+        let catalog: Box<dyn SceneCatalog> = Box::new(MockCatalog);
         let schema = catalog.schema_for(&SceneKey::new("A"));
-        assert_eq!(schema.name, "A");
         assert_eq!(schema.tag, FieldTag::Struct);
     }
 }

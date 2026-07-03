@@ -239,6 +239,17 @@ impl Envelope {
     }
 }
 
+// ── Event (manager → transport outbound item) ──────────────────────────────────
+
+/// Outbound item pushed by `SceneManager` to the IPC transport's writer
+/// thread (b3-t1, moved from `game::ipc_server` — the transport itself
+/// relocates in b4-t1). The writer thread stamps the monotonic `seq`;
+/// callers only supply `body` + optional `reply_to`.
+pub struct Event {
+    pub body: Message,
+    pub reply_to: Option<u64>,
+}
+
 // ── Stream framing helpers ─────────────────────────────────────────────────────
 
 /// Read exactly one framed message from `r`.

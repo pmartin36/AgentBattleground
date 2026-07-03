@@ -16,11 +16,10 @@ use crate::scene_id::SceneId;
 
 /// Outbound item pushed by the main loop (b4-t2) to the IPC writer thread.
 /// The writer thread stamps the monotonic `seq`; callers only supply body +
-/// optional `reply_to`.
-pub struct Event {
-    pub body: Message,
-    pub reply_to: Option<u64>,
-}
+/// optional `reply_to`. Canonical definition moved to `scene_core::ipc::Event`
+/// (b3-t1); re-exported here so every existing `ipc_server::Event` path keeps
+/// resolving.
+pub use scene_core::ipc::Event;
 
 /// Handle returned by `spawn`. Owns the socket-path record and the outbound
 /// event sender. Removes the socket file on `Drop`.

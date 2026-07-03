@@ -48,9 +48,7 @@ pub fn is_implemented(id: SceneId) -> bool {
 pub struct GameCatalog;
 
 impl SceneCatalog for GameCatalog {
-    type Scene = dyn Scene;
-
-    fn construct(&self, key: &SceneKey) -> Box<Self::Scene> {
+    fn construct(&self, key: &SceneKey) -> Box<dyn Scene> {
         let id = SceneId::from_key(key)
             .unwrap_or_else(|| panic!("unknown SceneKey: {:?}", key.as_str()));
         construct(id)

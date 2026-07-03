@@ -6,6 +6,8 @@ use crate::Inspectable;
 use crate::SceneKey;
 use serde_json::Value as JsonValue;
 
+pub mod manager;
+
 /// A full-screen game mode. Exactly one is active at a time (spec 14).
 pub trait Scene {
     fn id(&self) -> SceneKey;
