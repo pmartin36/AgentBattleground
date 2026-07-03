@@ -8,7 +8,7 @@ use scene_core::scene_id::SceneId;
 use scene_core::Inspectable;
 use serde_json::Value as JsonValue;
 
-use render::{anchor, stack, Anchor, ButtonState, FrameButton, StackAxis};
+use render::{anchor, anchor_with_margin, stack, Anchor, ButtonState, FrameButton, StackAxis};
 
 use crate::scene::{EngineCtx, InputEvent, Scene, Transition};
 
@@ -47,9 +47,20 @@ impl Default for MainHub {
 }
 
 impl MainHub {
-    /// Title box size (b5-t1).
-    const TITLE_W: u16 = 40;
-    const TITLE_H: u16 = 8;
+    /// The bundled logo's own aspect ratio (width/height in dots — the same
+    /// space `render::convert`'s aspect-preserving fit operates in), used to
+    /// size the title box's interior so the fit doesn't leave large empty
+    /// margins. `crates/render/src/assets/logo.png` is 1212×481 ≈ 2.52:1.
+    /// Measured directly against the bundled asset in a test below rather
+    /// than trusted as a magic number.
+    const LOGO_ASPECT: f32 = 1212.0 / 481.0;
+
+    /// Fraction of the render area the title box's width/height occupy.
+    /// Deliberately large — the previous fixed 40×8 size rendered the logo
+    /// illegibly small on any real terminal (confirmed by rendering it and
+    /// looking at the result).
+    const TITLE_W_FRAC: f32 = 0.8;
+    const TITLE_H_MAX_FRAC: f32 = 0.55;
 
     /// One menu button's size and the vertical gap between stacked buttons.
     const BUTTON_W: u16 = 20;
@@ -62,21 +73,50 @@ impl MainHub {
     const MENU_W: u16 = Self::BUTTON_W;
     const MENU_H: u16 = 3 * Self::BUTTON_H + 2 * Self::MENU_GAP;
 
+    /// Gap kept clear between the bottom of the menu (Exit) and the very
+    /// bottom edge of the screen.
+    const MENU_BOTTOM_MARGIN: u16 = 2;
+
     /// Selection-cursor arrow size and the gap between it and its target
     /// button.
     const CURSOR_W: u16 = 2;
     const CURSOR_GAP: u16 = 1;
 
-    /// Title box rect for `area` — sole place its position is computed;
-    /// `render()` and tests both call this.
-    fn title_rect(area: Rect) -> Rect {
-        anchor(area, (Self::TITLE_W, Self::TITLE_H), Anchor::TopCenter)
+    /// Title box size for `area`: width is `TITLE_W_FRAC` of `area.width`
+    /// (with a sane floor so it's never absurdly small on a tiny terminal),
+    /// height derived from `LOGO_ASPECT` so the logo's own aspect ratio
+    /// fills the interior without large empty margins, capped at
+    /// `TITLE_H_MAX_FRAC` of `area.height` so there's always real room left
+    /// for the menu below.
+    fn title_size(area: Rect) -> (u16, u16) {
+        let w = ((area.width as f32 * Self::TITLE_W_FRAC) as u16).max(20);
+        // Interior (after the 1-cell border inset each side) should match
+        // LOGO_ASPECT in DOT space: (interior_w_cells*2) / (interior_h_cells*4)
+        // == LOGO_ASPECT  =>  interior_h_cells == interior_w_cells / (2*LOGO_ASPECT).
+        let interior_w = w.saturating_sub(2).max(1) as f32;
+        let interior_h = (interior_w / (2.0 * Self::LOGO_ASPECT)).max(1.0);
+        let h_from_aspect = (interior_h as u16).saturating_add(2);
+        let h_cap = ((area.height as f32 * Self::TITLE_H_MAX_FRAC) as u16).max(6);
+        (w, h_from_aspect.min(h_cap))
     }
 
-    /// Menu group container rect for `area` — sole place its position is
-    /// computed; feeds `button_rects` via `stack`.
+    /// Title box rect for `area` — sole place its position/size is
+    /// computed; `render()` and tests both call this.
+    fn title_rect(area: Rect) -> Rect {
+        anchor(area, Self::title_size(area), Anchor::TopCenter)
+    }
+
+    /// Menu group container rect for `area` — anchored near the BOTTOM of
+    /// the screen (not dead-center) so Exit sits close to the bottom edge,
+    /// leaving the open space above for the much bigger title box. Sole
+    /// place its position is computed; feeds `button_rects` via `stack`.
     fn menu_container(area: Rect) -> Rect {
-        anchor(area, (Self::MENU_W, Self::MENU_H), Anchor::Center)
+        anchor_with_margin(
+            area,
+            (Self::MENU_W, Self::MENU_H),
+            Anchor::BottomCenter,
+            (0, Self::MENU_BOTTOM_MARGIN),
+        )
     }
 
     /// The 3 menu-button rects for `area`, top-to-bottom (index 0 Roster, 1
@@ -590,13 +630,49 @@ mod layout_tests {
         Rect::new(0, 0, 120, 50)
     }
 
-    /// `title_rect` is exactly `anchor(area, (TITLE_W, TITLE_H),
+    /// `title_rect` is exactly `anchor(area, title_size(area),
     /// Anchor::TopCenter)` — the mechanism, not hand-derived arithmetic.
     #[test]
     fn title_rect_is_top_center_anchor() {
         let a = area();
-        let expected = anchor(a, (MainHub::TITLE_W, MainHub::TITLE_H), Anchor::TopCenter);
+        let expected = anchor(a, MainHub::title_size(a), Anchor::TopCenter);
         assert_eq!(MainHub::title_rect(a), expected);
+    }
+
+    /// The title box is unmistakably large relative to the screen — a
+    /// regression guard for the "logo renders illegibly tiny" bug: at a
+    /// realistic terminal size, width must be a large majority of the
+    /// screen width, not a small fixed box.
+    #[test]
+    fn title_is_a_large_fraction_of_the_screen() {
+        let a = area();
+        let (w, h) = MainHub::title_size(a);
+        assert!(
+            w as f32 >= a.width as f32 * 0.6,
+            "title width {w} must be a large fraction of screen width {}",
+            a.width
+        );
+        assert!(h >= 10, "title height {h} must be tall enough to read a wordmark logo");
+    }
+
+    /// The menu sits near the BOTTOM of the screen (Exit close to the
+    /// bottom edge), not dead-center — the fix for the "menu floats in the
+    /// middle with a huge empty gap above the tiny title" complaint.
+    #[test]
+    fn menu_container_is_anchored_near_the_bottom() {
+        let a = area();
+        let container = MainHub::menu_container(a);
+        let title = MainHub::title_rect(a);
+        assert!(
+            container.bottom() > a.bottom() * 3 / 4,
+            "menu container bottom {} must be in the bottom quarter of the screen (bottom={})",
+            container.bottom(),
+            a.bottom()
+        );
+        assert!(
+            container.y > title.bottom(),
+            "menu container must sit below the title box, with the freed vertical space between them"
+        );
     }
 
     /// `button_rects` is exactly `stack(menu_container(area), ..)` — proves
