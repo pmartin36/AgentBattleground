@@ -89,6 +89,55 @@ mod tests {
 
     // --- all() ---
 
+    /// Compile-time guard that `SceneId::all()` cannot silently miss a
+    /// variant. `display_name()`/`wire_name()` already force a touchpoint
+    /// when a variant is added (their own matches are exhaustive over the
+    /// enum, so the compiler rejects a missing arm) — `all()` is a bare
+    /// literal array with no such enforcement, and could drift out of sync
+    /// with the enum with nothing catching it until some other, unrelated
+    /// runtime test happens to notice.
+    ///
+    /// This match is exhaustive with NO wildcard arm, specifically so that
+    /// adding a new `SceneId` variant fails to compile right here — do not
+    /// add a `_ => {}` arm to silence a compile error; that defeats the
+    /// entire point. When you do get a compile error from this match because
+    /// you added a variant: add the new arm here, AND add it to `all()`,
+    /// AND bump the expected count in `all_has_nine_unique_variants` above.
+    fn assert_variant_is_in_all(v: SceneId) {
+        match v {
+            SceneId::Onboarding
+            | SceneId::MainHub
+            | SceneId::RosterManager
+            | SceneId::Matchmaking
+            | SceneId::BattleViewer
+            | SceneId::PostBattle
+            | SceneId::ReplayBrowser
+            | SceneId::Leaderboard
+            | SceneId::Settings => {
+                assert!(
+                    SceneId::all().contains(&v),
+                    "{v:?} is a SceneId variant but missing from SceneId::all()"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn all_variant_exhaustiveness_guard() {
+        // One call per current variant. If you just added a new variant to
+        // fix a compile error in `assert_variant_is_in_all` above, add its
+        // call here too.
+        assert_variant_is_in_all(SceneId::Onboarding);
+        assert_variant_is_in_all(SceneId::MainHub);
+        assert_variant_is_in_all(SceneId::RosterManager);
+        assert_variant_is_in_all(SceneId::Matchmaking);
+        assert_variant_is_in_all(SceneId::BattleViewer);
+        assert_variant_is_in_all(SceneId::PostBattle);
+        assert_variant_is_in_all(SceneId::ReplayBrowser);
+        assert_variant_is_in_all(SceneId::Leaderboard);
+        assert_variant_is_in_all(SceneId::Settings);
+    }
+
     #[test]
     fn all_has_nine_unique_variants() {
         let variants = SceneId::all();

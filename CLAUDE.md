@@ -42,6 +42,8 @@ The spec files are numbered by dependency order — lower numbers are more found
 
 - **`game` and `inspector` are separate spawned binaries.** The game finds the inspector as a sibling next to its own executable (`current_exe().parent()/"inspector"`), not as a linked dependency. `cargo run -p game` only rebuilds `game` — if you're testing an inspector-only change, run `cargo build --workspace` (or at least `-p inspector`) too, or the game will spawn a stale inspector binary and the change won't appear.
 
+- **Search for an existing function/type/test before adding a new one.** Duplicate helpers and duplicate tests are a recurring source of drift — grep for the behavior you're about to add (not just the exact name you have in mind) before writing it from scratch.
+
 ## Battle Viewer is the Priority
 
 The Battle Viewer (spec 05) is the most important scene. It is what makes this game feel alive. When in doubt about scope or complexity tradeoffs, prioritize this scene.
