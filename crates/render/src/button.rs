@@ -108,29 +108,38 @@ impl ButtonCore {
     }
 }
 
-/// Multiply-tint applied to an icon layer before compositing it over
-/// `BUTTON_PANEL`, so the icon reads as a distinct shape instead of
-/// disappearing into the panel. Both `BUTTON_PANEL` and the bundled icons
-/// are pure opaque white (confirmed by sampling both directly) — with zero
-/// brightness difference, the braille rasterizer's per-cell adaptive luma
-/// threshold (`dots::cell_from_dots`: a dot's bit is set only if its luma is
-/// `>=` the cell's average) can't tell icon pixels from panel pixels within
-/// a mixed cell, smearing the icon's edges into the panel instead of
-/// showing a clean silhouette. Darkening just the icon layer first restores
-/// the contrast; the whole composed result is still multiplied by the
-/// button's `ButtonState` tint afterward, so this relative darkness (icon
-/// always darker than the panel behind it) holds across Idle/Hover/Pressed.
-const ICON_CONTRAST_TINT: Rgba = Rgba::rgb(0x40, 0x40, 0x40);
+/// Multiply-tint applied to the background/panel layer before compositing,
+/// giving every button a warm gold body instead of `BUTTON_PANEL`/
+/// `FRAME_PANEL`'s native near-white. Applied to both `Button`'s solid panel
+/// and `FrameButton`'s hollow frame ring (its transparent interior is
+/// unaffected — alpha-zero pixels stay alpha-zero regardless of tint).
+const PANEL_GOLD_TINT: Rgba = Rgba::rgb(0xc9, 0xa0, 0x3c);
+
+/// Multiply-tint applied to an icon layer before compositing it over the
+/// (now gold) panel, so the icon reads as a distinct shape instead of
+/// disappearing into it, AND carries real color instead of grayscale.
+/// `BUTTON_PANEL` and the bundled icons are pure opaque white (confirmed by
+/// sampling both directly) — with zero brightness difference, the braille
+/// rasterizer's per-cell adaptive luma threshold (`dots::cell_from_dots`: a
+/// dot's bit is set only if its luma is `>=` the cell's average) can't tell
+/// icon pixels from panel pixels within a mixed cell, smearing the icon's
+/// edges into the panel instead of showing a clean silhouette. This amber is
+/// deliberately darker than `PANEL_GOLD_TINT` (luma ≈85 vs ≈161) to preserve
+/// that same contrast relationship, just with real hue on both sides instead
+/// of grayscale. The whole composed result is still multiplied by the
+/// button's `ButtonState` tint afterward, so both the gold/amber relationship
+/// and the icon/panel contrast hold across Idle/Hover/Pressed.
+const ICON_AMBER_TINT: Rgba = Rgba::rgb(0x8a, 0x4a, 0x00);
 
 /// Shared render sequence for a [`ButtonCore`]-backed widget: stretch-fit
-/// `background` to `rect`, optionally composite an aspect-fit-centered
-/// `icon` on top (depth 1 over the background's depth 0, pre-darkened via
-/// `ICON_CONTRAST_TINT` so it doesn't disappear into a same-brightness
-/// panel), tint the result by `tint_color`, and blit it into `buf`. Cells
-/// outside `rect` are left untouched; a zero-area or oversized `rect` must
-/// not panic. This is the sequence [`Button`] and `FrameButton` both used to
-/// duplicate — they now differ only in whether they pass an icon and
-/// whether they draw a label afterward.
+/// `background` to `rect` (pre-tinted gold via `PANEL_GOLD_TINT`), optionally
+/// composite an aspect-fit-centered `icon` on top (depth 1 over the
+/// background's depth 0, pre-tinted amber via `ICON_AMBER_TINT` so it doesn't
+/// disappear into the gold panel), tint the result by `tint_color`, and blit
+/// it into `buf`. Cells outside `rect` are left untouched; a zero-area or
+/// oversized `rect` must not panic. This is the sequence [`Button`] and
+/// `FrameButton` both used to duplicate — they now differ only in whether
+/// they pass an icon and whether they draw a label afterward.
 fn render_tinted(
     buf: &mut Buffer,
     rect: Rect,
@@ -144,7 +153,8 @@ fn render_tinted(
         return;
     }
 
-    let bg_dots = crate::dots::sprite_to_dots(background, dot_cols as u32, dot_rows as u32);
+    let bg_dots_raw = crate::dots::sprite_to_dots(background, dot_cols as u32, dot_rows as u32);
+    let bg_dots = crate::dots::tint(&bg_dots_raw, PANEL_GOLD_TINT);
 
     let composed = match icon {
         Some(icon_img) => {
@@ -155,7 +165,7 @@ fn render_tinted(
             let icon_cols = fitted.cols() * 2;
             let icon_rows = fitted.rows() * 4;
             let icon_dots_raw = crate::dots::sprite_to_dots(icon_img, icon_cols as u32, icon_rows as u32);
-            let icon_dots = crate::dots::tint(&icon_dots_raw, ICON_CONTRAST_TINT);
+            let icon_dots = crate::dots::tint(&icon_dots_raw, ICON_AMBER_TINT);
 
             let placements = [
                 crate::composite::DotPlacement {
@@ -569,13 +579,14 @@ mod tests {
     }
 }
 
-/// Regression coverage for `ICON_CONTRAST_TINT`: `BUTTON_PANEL` and every
-/// bundled icon are pure opaque white, so without pre-darkening the icon
-/// layer, an icon's rendered color would be indistinguishable from the
-/// panel's — the exact bug that made the arrow icon unreadable once
-/// composited (confirmed by rendering real output before this fix existed).
-/// Separate module so `mod tests` above stays untouched (its own
-/// byte-for-byte constraint from the b1-t1 refactor).
+/// Regression coverage for `PANEL_GOLD_TINT`/`ICON_AMBER_TINT`: `BUTTON_PANEL`
+/// and every bundled icon are pure opaque white, so without pre-tinting both
+/// layers, an icon's rendered color would be indistinguishable from the
+/// panel's (the bug that made the arrow icon unreadable once composited) and
+/// everything would stay grayscale (the follow-up complaint that the result
+/// was "boring, no color variation"). Separate module so `mod tests` above
+/// stays untouched (its own byte-for-byte constraint from the b1-t1
+/// refactor).
 #[cfg(test)]
 mod icon_contrast_tests {
     use super::*;
@@ -593,7 +604,7 @@ mod icon_contrast_tests {
     }
 
     /// The icon (centered, aspect-fit) must render measurably darker than a
-    /// panel-only cell near the button's edge — proving `ICON_CONTRAST_TINT`
+    /// panel-only cell near the button's edge — proving `ICON_AMBER_TINT`
     /// actually creates the contrast the braille rasterizer's per-cell
     /// adaptive luma threshold needs to distinguish icon from panel.
     #[test]
@@ -614,6 +625,26 @@ mod icon_contrast_tests {
             luma(center.fg),
             luma(edge.fg)
         );
+    }
+
+    /// Both the panel and the icon must render with real hue (R/G/B channels
+    /// not all equal) — a regression guard for "boring, no color variation":
+    /// a prior version tinted the icon a flat gray, which stayed grayscale
+    /// no matter what `ButtonState` multiplied on top.
+    #[test]
+    fn panel_and_icon_have_real_hue_not_grayscale() {
+        let rect = Rect::new(0, 0, 8, 4);
+        let b = Button::new(rect, assets::ICON_ARROW_LEFT);
+        let mut buf = make_buf(8, 4);
+        b.render(&mut buf);
+
+        let is_grayscale = |c: Color| matches!(c, Color::Rgb(r, g, b) if r == g && g == b);
+
+        let center = buf.cell((4, 2)).expect("center cell must exist").fg;
+        let edge = buf.cell((0, 0)).expect("edge cell must exist").fg;
+
+        assert!(!is_grayscale(center), "icon color {center:?} must have real hue, not grayscale");
+        assert!(!is_grayscale(edge), "panel color {edge:?} must have real hue, not grayscale");
     }
 }
 
