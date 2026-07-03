@@ -1,8 +1,10 @@
 use std::cell::RefCell;
 use std::time::Duration;
 
+use ratatui::buffer::Buffer;
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use render::tween::Tween;
 use scene_core::scene_id::SceneId;
 use scene_core::Inspectable;
 use serde_json::Value as JsonValue;
@@ -28,6 +30,21 @@ pub struct RosterManager {
     /// arrows.
     #[inspect(hidden)]
     home_button: RefCell<render::Button>,
+    /// Transient scene-internal slide transition (b5-t1), armed by
+    /// `navigate()` and driven by `elapsed`. `None` when no slide is active.
+    #[inspect(hidden)]
+    slide: Option<Slide>,
+}
+
+/// Transient bookkeeping for an in-flight slide transition: the group that is
+/// leaving (`prev_index`), the direction of travel, and the `elapsed` value
+/// at which the slide started. Scene-internal only — never a field on
+/// `Creature` or any shared type.
+#[derive(Clone, Copy, Debug)]
+struct Slide {
+    prev_index: usize,
+    dir: Direction,
+    start: Duration,
 }
 
 impl RosterManager {
@@ -38,6 +55,9 @@ impl RosterManager {
     /// Width/height of the top-right home button.
     const HOME_W: u16 = 6;
     const HOME_H: u16 = 3;
+
+    /// Duration of the slide transition between roster positions.
+    const SLIDE_DUR: Duration = Duration::from_millis(300);
 
     /// Splits `area` into `(sprite_rect, name_rect, dots_rect)`: the bottom
     /// two rows are reserved for the name label and the 6-dot position
@@ -82,6 +102,7 @@ impl RosterManager {
             left_button: RefCell::new(render::Button::new(Rect::default(), render::assets::ICON_ARROW_LEFT)),
             right_button: RefCell::new(render::Button::new(Rect::default(), render::assets::ICON_ARROW_RIGHT)),
             home_button: RefCell::new(render::Button::new(Rect::default(), render::assets::ICON_HOME)),
+            slide: None,
         }
     }
 
@@ -116,13 +137,99 @@ impl RosterManager {
 
     /// Advances/retreats `current_index` with wraparound. The sole place
     /// carousel index arithmetic lives — mouse (b4-t2) and slide-direction
-    /// (b5-t1) paths must call this, never re-derive `(idx±1)%n`.
+    /// (b5-t1) paths must call this, never re-derive `(idx±1)%n`. A nav fired
+    /// while a slide is already active is ignored until it settles (b5-t1's
+    /// SCOPE_QUESTION default).
     fn navigate(&mut self, dir: Direction) {
+        if self.active_slide().is_some() {
+            return;
+        }
+        let prev_index = self.current_index;
         let n = self.creatures.len();
         self.current_index = match dir {
             Direction::Right => (self.current_index + 1) % n,
             Direction::Left => (self.current_index + n - 1) % n,
         };
+        self.slide = Some(Slide {
+            prev_index,
+            dir,
+            start: self.elapsed,
+        });
+    }
+
+    /// The currently in-flight slide, if any — `None` once `elapsed` has
+    /// reached/exceeded `SLIDE_DUR` past the slide's `start`, regardless of
+    /// whether `update()` has run the settle cleanup yet.
+    fn active_slide(&self) -> Option<&Slide> {
+        self.slide
+            .as_ref()
+            .filter(|s| self.elapsed.saturating_sub(s.start) < Self::SLIDE_DUR)
+    }
+
+    /// Column offsets `(outgoing, incoming)` for an active slide `s` at the
+    /// current `elapsed`, eased via `render::tween::Tween`/`ease_in_out`.
+    /// A right-nav exits the outgoing group LEFT and enters the incoming
+    /// group from the RIGHT; a left-nav is the mirror.
+    fn slide_offsets(&self, area: Rect, s: &Slide) -> (i32, i32) {
+        let progress = self.elapsed.saturating_sub(s.start);
+        let w = area.width as f32;
+        let (out_t, in_t) = match s.dir {
+            Direction::Right => (
+                Tween::new(0.0, -w, Self::SLIDE_DUR).at(progress),
+                Tween::new(w, 0.0, Self::SLIDE_DUR).at(progress),
+            ),
+            Direction::Left => (
+                Tween::new(0.0, w, Self::SLIDE_DUR).at(progress),
+                Tween::new(-w, 0.0, Self::SLIDE_DUR).at(progress),
+            ),
+        };
+        (out_t.round() as i32, in_t.round() as i32)
+    }
+
+    /// Renders the creature at `index`'s group (sprite + name + dot row) into
+    /// a throwaway zero-origin buffer sized like `area`, then blits every
+    /// non-space cell into `buf` shifted by `col_offset` columns — a true
+    /// screen-space translation that works with `Rect`'s unsigned `x`.
+    fn render_group(&self, buf: &mut Buffer, area: Rect, index: usize, col_offset: i32) {
+        let zero_area = Rect::new(0, 0, area.width, area.height);
+        let mut tmp = Buffer::empty(zero_area);
+        let (sprite_rect, name_rect, dots_rect) = Self::layout(zero_area);
+
+        let creature = &self.creatures[index];
+        if let Some(sprite) = creature.animation(render::AnimationKind::Idle) {
+            let grid = render::convert(sprite.frame_at(self.elapsed), sprite_rect);
+            render::draw_grid(&mut tmp, sprite_rect, &grid);
+        }
+        render::label(&mut tmp, name_rect, creature.name());
+
+        for (i, slot) in Self::dot_slots(dots_rect).iter().enumerate() {
+            let bytes = if i == index {
+                render::assets::DOT_FILLED
+            } else {
+                render::assets::DOT_UNFILLED
+            };
+            render::draw_asset(&mut tmp, *slot, bytes);
+        }
+
+        for y in 0..area.height {
+            for x in 0..area.width {
+                let cell = match tmp.cell((x, y)) {
+                    Some(c) => c,
+                    None => continue,
+                };
+                if cell.symbol() == " " {
+                    continue;
+                }
+                let dest_x = area.x as i32 + x as i32 + col_offset;
+                if dest_x < area.left() as i32 || dest_x >= area.right() as i32 {
+                    continue;
+                }
+                let dest_y = area.y + y;
+                if let Some(dest_cell) = buf.cell_mut((dest_x as u16, dest_y)) {
+                    *dest_cell = cell.clone();
+                }
+            }
+        }
     }
 }
 
@@ -149,25 +256,21 @@ impl Scene for RosterManager {
 
     fn update(&mut self, _ctx: &mut EngineCtx, dt: Duration) -> Option<Transition> {
         self.elapsed += dt;
+        if let Some(s) = &self.slide {
+            if self.elapsed.saturating_sub(s.start) >= Self::SLIDE_DUR {
+                self.slide = None;
+            }
+        }
         None
     }
 
     fn render(&self, frame: &mut Frame, area: Rect) {
-        let (sprite_rect, name_rect, dots_rect) = Self::layout(area);
-        let creature = &self.creatures[self.current_index];
-        if let Some(sprite) = creature.animation(render::AnimationKind::Idle) {
-            let grid = render::convert(sprite.frame_at(self.elapsed), sprite_rect);
-            render::draw_grid(frame.buffer_mut(), sprite_rect, &grid);
-        }
-        render::label(frame.buffer_mut(), name_rect, creature.name());
-
-        for (i, slot) in Self::dot_slots(dots_rect).iter().enumerate() {
-            let bytes = if i == self.current_index {
-                render::assets::DOT_FILLED
-            } else {
-                render::assets::DOT_UNFILLED
-            };
-            render::draw_asset(frame.buffer_mut(), *slot, bytes);
+        if let Some(slide) = self.active_slide() {
+            let (out_off, in_off) = self.slide_offsets(area, slide);
+            self.render_group(frame.buffer_mut(), area, slide.prev_index, out_off);
+            self.render_group(frame.buffer_mut(), area, self.current_index, in_off);
+        } else {
+            self.render_group(frame.buffer_mut(), area, self.current_index, 0);
         }
 
         let (left_rect, right_rect) = Self::arrow_rects(area);
@@ -764,6 +867,227 @@ mod home_button_tests {
         assert_eq!(
             scene.current_index, 2,
             "an incomplete home-button click must not change current_index"
+        );
+    }
+}
+
+/// Slide transition (b5-t1): navigating slides the outgoing creature's
+/// group off-screen in the direction of travel while the incoming
+/// creature's group slides in from the opposite edge, eased via
+/// `render::tween`. Timings below assume the blueprint's documented
+/// `SLIDE_DUR = 300ms` (research.md b5-t1): 75ms/225ms/425ms total elapsed
+/// land at ~25%/~75%/past-100% progress.
+#[cfg(test)]
+mod slide_transition_tests {
+    use super::*;
+    use crate::scene::EngineCtx;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+    use ratatui::Terminal;
+
+    fn render_to_buffer(scene: &RosterManager, w: u16, h: u16) -> Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                scene.render(f, area);
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    fn key_event(code: KeyCode) -> InputEvent {
+        InputEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    /// Row index of the first row whose text contains `needle`, if any.
+    fn row_containing(buf: &Buffer, w: u16, h: u16, needle: &str) -> Option<u16> {
+        (0..h).find(|&y| {
+            let row_text: String = (0..w)
+                .map(|x| buf.cell((x, y)).unwrap().symbol().to_string())
+                .collect();
+            row_text.contains(needle)
+        })
+    }
+
+    /// Leftmost non-space column in row `y`, if any.
+    fn leftmost_non_space_in_row(buf: &Buffer, w: u16, y: u16) -> Option<u16> {
+        (0..w).find(|&x| buf.cell((x, y)).unwrap().symbol() != " ")
+    }
+
+    /// A right-nav slides the outgoing creature's group out to the left and
+    /// the incoming creature's group in from the right, eased over time, and
+    /// settles with only the incoming creature painted at its resting column.
+    #[test]
+    fn right_nav_slide_animates_and_settles() {
+        let (w, h) = (80u16, 20u16);
+        let area = Rect::new(0, 0, w, h);
+        let (_, name_rect, _) = RosterManager::layout(area);
+        let name_y = name_rect.y;
+
+        // Resting (no-slide) column of each creature, rendered standalone.
+        let out_rest_left = {
+            let baseline = RosterManager::new(); // index 0: Ember Wolf
+            let buf = render_to_buffer(&baseline, w, h);
+            leftmost_non_space_in_row(&buf, w, name_y)
+                .expect("Ember Wolf must paint the name row at rest")
+        };
+        let in_rest_left = {
+            let mut baseline = RosterManager::new();
+            baseline.current_index = 1; // Frost Lizard
+            let buf = render_to_buffer(&baseline, w, h);
+            leftmost_non_space_in_row(&buf, w, name_y)
+                .expect("Frost Lizard must paint the name row at rest")
+        };
+
+        let mut ctx = EngineCtx;
+        let mut scene = RosterManager::new();
+        let t = scene.handle_input(key_event(KeyCode::Right));
+        assert!(t.is_none(), "arrow keys must not produce a Transition");
+        assert_eq!(
+            scene.current_index, 1,
+            "current_index must update immediately on nav (b4 contract), even though a slide starts"
+        );
+
+        // Instant of trigger (no update yet): outgoing still at rest,
+        // incoming fully off the right edge (not painted).
+        let buf0 = render_to_buffer(&scene, w, h);
+        assert_eq!(
+            leftmost_non_space_in_row(&buf0, w, name_y),
+            Some(out_rest_left),
+            "immediately after nav, the outgoing creature (Ember Wolf) must still be painted at its resting column"
+        );
+        assert!(
+            row_containing(&buf0, w, h, "Frost Lizard").is_none(),
+            "immediately after nav, the incoming creature must be fully off the right edge (not painted yet)"
+        );
+
+        // ~25% progress: outgoing has slid measurably left of rest.
+        scene.update(&mut ctx, Duration::from_millis(75));
+        let buf1 = render_to_buffer(&scene, w, h);
+        let out_mid_left = leftmost_non_space_in_row(&buf1, w, name_y)
+            .expect("outgoing creature must still be partially on-screen at ~25% progress");
+        assert!(
+            out_mid_left < out_rest_left,
+            "outgoing creature's painted column ({out_mid_left}) must have moved left of its resting column ({out_rest_left})"
+        );
+
+        // ~75% progress: incoming has slid in from the right, not yet settled.
+        scene.update(&mut ctx, Duration::from_millis(150)); // total elapsed 225ms
+        let buf2 = render_to_buffer(&scene, w, h);
+        let in_mid_left = leftmost_non_space_in_row(&buf2, w, name_y)
+            .expect("incoming creature must be partially visible at ~75% progress");
+        assert!(
+            in_mid_left > in_rest_left,
+            "incoming creature's painted column ({in_mid_left}) must still be offset right of its resting column ({in_rest_left}) mid-transition"
+        );
+
+        // Past the slide duration: only the incoming creature remains, at rest.
+        scene.update(&mut ctx, Duration::from_millis(200)); // total elapsed 425ms
+        let buf3 = render_to_buffer(&scene, w, h);
+        assert_eq!(
+            leftmost_non_space_in_row(&buf3, w, name_y),
+            Some(in_rest_left),
+            "once settled, the incoming creature must render at the exact resting column b3-t2 established"
+        );
+        assert!(
+            row_containing(&buf3, w, h, "Ember Wolf").is_none(),
+            "once settled, the outgoing creature must no longer be painted anywhere"
+        );
+    }
+
+    /// Mirror of the right-nav case: a left-nav slides the outgoing creature
+    /// out to the right and the incoming creature in from the left.
+    #[test]
+    fn left_nav_slide_animates_and_settles() {
+        let (w, h) = (80u16, 20u16);
+        let area = Rect::new(0, 0, w, h);
+        let (_, name_rect, _) = RosterManager::layout(area);
+        let name_y = name_rect.y;
+
+        let out_rest_left = {
+            let baseline = RosterManager::new(); // index 0: Ember Wolf
+            let buf = render_to_buffer(&baseline, w, h);
+            leftmost_non_space_in_row(&buf, w, name_y)
+                .expect("Ember Wolf must paint the name row at rest")
+        };
+        let in_rest_left = {
+            let mut baseline = RosterManager::new();
+            baseline.current_index = 5; // Shadow Cat (left-wrap from 0)
+            let buf = render_to_buffer(&baseline, w, h);
+            leftmost_non_space_in_row(&buf, w, name_y)
+                .expect("Shadow Cat must paint the name row at rest")
+        };
+
+        let mut ctx = EngineCtx;
+        let mut scene = RosterManager::new();
+        let t = scene.handle_input(key_event(KeyCode::Left));
+        assert!(t.is_none(), "arrow keys must not produce a Transition");
+        assert_eq!(
+            scene.current_index, 5,
+            "left nav from index 0 must wrap current_index to 5 immediately, even though a slide starts"
+        );
+
+        let buf0 = render_to_buffer(&scene, w, h);
+        assert_eq!(
+            leftmost_non_space_in_row(&buf0, w, name_y),
+            Some(out_rest_left),
+            "immediately after nav, the outgoing creature (Ember Wolf) must still be painted at its resting column"
+        );
+        assert!(
+            row_containing(&buf0, w, h, "Shadow Cat").is_none(),
+            "immediately after nav, the incoming creature must be fully off the left edge (not painted yet)"
+        );
+
+        scene.update(&mut ctx, Duration::from_millis(75));
+        let buf1 = render_to_buffer(&scene, w, h);
+        let out_mid_left = leftmost_non_space_in_row(&buf1, w, name_y)
+            .expect("outgoing creature must still be partially on-screen at ~25% progress");
+        assert!(
+            out_mid_left > out_rest_left,
+            "outgoing creature's painted column ({out_mid_left}) must have moved right of its resting column ({out_rest_left}) for a left-nav exit"
+        );
+
+        scene.update(&mut ctx, Duration::from_millis(150)); // total elapsed 225ms
+        let buf2 = render_to_buffer(&scene, w, h);
+        let in_mid_left = leftmost_non_space_in_row(&buf2, w, name_y)
+            .expect("incoming creature must be partially visible at ~75% progress");
+        assert!(
+            in_mid_left < in_rest_left,
+            "incoming creature's painted column ({in_mid_left}) must still be offset left of its resting column ({in_rest_left}) mid-transition"
+        );
+
+        scene.update(&mut ctx, Duration::from_millis(200)); // total elapsed 425ms
+        let buf3 = render_to_buffer(&scene, w, h);
+        assert_eq!(
+            leftmost_non_space_in_row(&buf3, w, name_y),
+            Some(in_rest_left),
+            "once settled, the incoming creature must render at the exact resting column b3-t2 established"
+        );
+        assert!(
+            row_containing(&buf3, w, h, "Ember Wolf").is_none(),
+            "once settled, the outgoing creature must no longer be painted anywhere"
+        );
+    }
+
+    /// A second nav fired before the first nav's slide has settled must be
+    /// ignored (research.md's SCOPE_QUESTION default) — `current_index`
+    /// reflects only the first nav.
+    #[test]
+    fn nav_ignored_during_active_slide() {
+        let mut ctx = EngineCtx;
+        let mut scene = RosterManager::new();
+        scene.handle_input(key_event(KeyCode::Right));
+        assert_eq!(scene.current_index, 1, "first nav must update current_index immediately");
+
+        // Still well within the slide's transition window.
+        scene.update(&mut ctx, Duration::from_millis(50));
+
+        scene.handle_input(key_event(KeyCode::Right));
+        assert_eq!(
+            scene.current_index, 1,
+            "a nav fired while a slide transition is active must be ignored until it settles"
         );
     }
 }
