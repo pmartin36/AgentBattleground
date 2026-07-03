@@ -227,4 +227,20 @@ mod tests {
         // the only requirement is no panic.
         draw_grid(&mut buf, Rect::new(0, 0, 3, 3), &grid);
     }
+
+    // ── Grid::set OOB contract (regression guard) ─────────────────────────────
+
+    /// `Grid::set` on an out-of-bounds `(col, row)` must panic — not silently
+    /// clip. This is intentionally asymmetric with `dots::DotBuffer::set` (see
+    /// that type's equivalent test): `Grid::set`'s only writer, `dots_to_grid`,
+    /// never legitimately goes out of bounds, so a panic here is a real-bug
+    /// safety net, not a load-bearing behavior anyone should "fix" to match
+    /// `DotBuffer`'s silent clip — see the doc comment on `Grid::set` for the
+    /// full reasoning.
+    #[test]
+    #[should_panic]
+    fn grid_set_out_of_bounds_panics_dots_to_grid_never_needs_a_silent_clip() {
+        let mut g = Grid::new(2, 2);
+        g.set(5, 0, Cell::Glyph { ch: '⣿', color: Rgba::rgb(1, 2, 3) });
+    }
 }

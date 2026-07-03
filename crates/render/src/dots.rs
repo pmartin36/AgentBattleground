@@ -406,6 +406,13 @@ mod tests {
 
     /// `set` with an out-of-bounds coordinate must be a silent no-op:
     /// no panic and the buffer is unchanged from a freshly-constructed one.
+    ///
+    /// This is a regression guard, not just a smoke test: this silent clip is
+    /// intentionally asymmetric with `Grid::set` (which panics OOB — see its
+    /// own equivalent test in `grid.rs`) and is load-bearing — `composite_dots`
+    /// relies on it to clip sprites placed partially off-screen. Don't "fix"
+    /// this to panic without first auditing every `composite_dots` caller;
+    /// see the doc comment on `DotBuffer::set` for the full reasoning.
     #[test]
     fn dotbuffer_set_out_of_bounds_is_noop() {
         let cols = 2usize;
