@@ -41,7 +41,16 @@ pub(crate) fn fill_and_label(
     name: &str,
 ) {
     render::fill(frame.buffer_mut(), area, color);
-    render::label(frame.buffer_mut(), area, name);
+    // Dark, near-black text — every current caller's fill color (e.g.
+    // Leaderboard's bright amber) is light enough that dark text reads
+    // clearly; this is a placeholder helper (see module doc), not worth a
+    // per-caller contrast computation.
+    render::label(
+        frame.buffer_mut(),
+        area,
+        name,
+        scene_core::color::Rgba::rgb(0x10, 0x10, 0x10),
+    );
 }
 
 #[cfg(test)]

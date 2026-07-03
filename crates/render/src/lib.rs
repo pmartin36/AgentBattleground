@@ -53,9 +53,16 @@ pub fn fill(buf: &mut Buffer, area: Rect, color: Rgba) {
     }
 }
 
-/// Draw `text` as a single centered line over `area` (clamped to `buf`),
-/// in the default style. Truncated to fit; no wrapping.
-pub fn label(buf: &mut Buffer, area: Rect, text: &str) {
+/// Draw `text` as a single centered line over `area` (clamped to `buf`), in
+/// `color`. Truncated to fit; no wrapping.
+///
+/// `color` is a required, explicit parameter — not a "default" style — because
+/// `Style::default()`'s unset foreground renders as `Color::Reset` (the
+/// terminal's own default), which is illegible against a caller's own tinted
+/// background more often than not (confirmed: this is exactly why the main
+/// menu's button labels were invisible). Every caller must pick a color that
+/// actually contrasts with whatever it draws underneath.
+pub fn label(buf: &mut Buffer, area: Rect, text: &str, color: Rgba) {
     let inter = area.intersection(buf.area);
     if inter.is_empty() {
         return;
@@ -64,7 +71,8 @@ pub fn label(buf: &mut Buffer, area: Rect, text: &str) {
     let y = inter.top() + inter.height / 2;
     let x = inter.left() + inter.width.saturating_sub(text_w) / 2;
     let max_width = inter.right().saturating_sub(x) as usize;
-    buf.set_stringn(x, y, text, max_width, Style::default());
+    let style = Style::default().fg(Color::Rgb(color.r, color.g, color.b));
+    buf.set_stringn(x, y, text, max_width, style);
 }
 
 /// Decode a bundled raster asset (`bytes`, e.g. `assets::DOT_FILLED`) and
@@ -192,7 +200,7 @@ mod tests {
         let mut buf = make_buf(w, h);
         let area = Rect::new(0, 0, w, h);
 
-        label(&mut buf, area, "Hi");
+        label(&mut buf, area, "Hi", Rgba::rgb(0xff, 0xff, 0xff));
 
         // Expected row: h/2 = 2; expected x start: (10 - 2) / 2 = 4
         let expected_y = h / 2;
@@ -221,7 +229,7 @@ mod tests {
         let mut buf = make_buf(5, 3);
         let area = Rect::new(0, 0, 5, 3);
         // "Hello!!" is 7 chars, wider than 5
-        label(&mut buf, area, "Hello!!");
+        label(&mut buf, area, "Hello!!", Rgba::rgb(0xff, 0xff, 0xff));
 
         // Nothing must appear at x == 5 (which would be outside the 0..5 area)
         // The buffer is only 5 wide so x=5 doesn't exist — we verify col 4 is

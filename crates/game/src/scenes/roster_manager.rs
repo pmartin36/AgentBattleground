@@ -92,7 +92,14 @@ impl RosterManager {
     /// The 6 equal-width dot slots across `row`, centered as a group.
     fn dot_slots(row: Rect) -> [Rect; 6] {
         const N: u16 = 6;
-        let slot_w = (row.width / N).max(1);
+        // 2 cells wide × the row's 1-cell height = 4×4 dots per indicator —
+        // enough resolution for a recognizable filled/unfilled circle.
+        // Dividing row.width/N instead (the old approach) gave each slot far
+        // more width than the aspect-fit circle could ever use (capped by
+        // the 4-dot height regardless), scattering the 6 dots across the
+        // full row instead of sitting compactly together.
+        const SLOT_W: u16 = 2;
+        let slot_w = SLOT_W.min(row.width.max(1));
         let group_w = slot_w * N;
         let x0 = row.x + row.width.saturating_sub(group_w) / 2;
         std::array::from_fn(|i| Rect::new(x0 + i as u16 * slot_w, row.y, slot_w, row.height))
@@ -219,7 +226,14 @@ impl RosterManager {
             let grid = render::convert(sprite.frame_at(self.elapsed), sprite_rect);
             render::draw_grid(&mut tmp, sprite_rect, &grid);
         }
-        render::label(&mut tmp, name_rect, creature.name());
+        // White — reads against the scene's dark/transparent background
+        // (there's no light panel behind this label the way FrameButton has).
+        render::label(
+            &mut tmp,
+            name_rect,
+            creature.name(),
+            scene_core::color::Rgba::rgb(0xff, 0xff, 0xff),
+        );
 
         for (i, slot) in Self::dot_slots(dots_rect).iter().enumerate() {
             let bytes = if i == index {

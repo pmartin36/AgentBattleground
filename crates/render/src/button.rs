@@ -238,12 +238,18 @@ impl FrameButton {
         }
     }
 
+    /// Near-black — reads clearly against `ButtonState`'s entire tint range
+    /// (Idle 0xc8, Hover 0xff, Pressed 0x8c gray-to-white), so the label
+    /// stays legible across every state without fighting the panel's own
+    /// tint for attention.
+    const LABEL_COLOR: Rgba = Rgba::rgb(0x10, 0x10, 0x10);
+
     /// Paint the state-tinted bordered frame plus centered label onto
     /// `self.rect` in `buf`.
     pub fn render(&self, buf: &mut Buffer) {
         let rect = self.core.rect();
         render_tinted(buf, rect, &self.frame, None, self.core.state().tint_color());
-        crate::label(buf, rect, &self.label);
+        crate::label(buf, rect, &self.label, Self::LABEL_COLOR);
     }
 }
 
