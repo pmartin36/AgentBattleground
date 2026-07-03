@@ -125,41 +125,52 @@ impl Scene for Tier3Scene {
 
     fn exit(&mut self, _ctx: &mut EngineCtx) {}
 
-    /// Multi-sprite render path:
-    ///   1. Convert each wizard's current frame to an owned `Grid`.
-    ///   2. Wrap each in a `Placement { depth = row }` (side-view ordering).
-    ///   3. Composite all into a single full-area `Grid`.
-    ///   4. Blit with `draw_grid`.
+    /// Multi-sprite render path (dot-level compositor — spec 16):
+    ///   1. Rasterize each wizard's current frame to an owned `DotBuffer`.
+    ///   2. Wrap each in a `DotPlacement { depth = row }` (side-view ordering),
+    ///      converting each wizard's cell-granularity `col`/`row` into dot
+    ///      units (1 cell = 2 dots wide × 4 dots tall).
+    ///   3. Composite all into a single full-area `DotBuffer`.
+    ///   4. Convert to a `Grid` and blit with `draw_grid`.
     fn render(&self, frame: &mut Frame, area: Rect) {
-        let cols = area.width as usize;
-        let rows = area.height as usize;
+        let dot_cols = area.width as usize * 2;
+        let dot_rows = area.height as usize * 4;
 
-        // Per-sprite convert area — smaller than the full screen so sprites
+        // Per-sprite rasterize area — smaller than the full screen so sprites
         // can be independently positioned and staggered.
-        let sprite_area = Rect::new(0, 0, SPRITE_W, SPRITE_H);
+        let sprite_dot_cols = SPRITE_W as u32 * 2;
+        let sprite_dot_rows = SPRITE_H as u32 * 4;
 
-        // Build all per-sprite Grids into an owned Vec first; Placement borrows
-        // &Grid, so the Grids must outlive the Placements.
-        let grids: Vec<render::Grid> = self
+        // Build all per-sprite DotBuffers into an owned Vec first;
+        // DotPlacement borrows &DotBuffer, so the buffers must outlive the
+        // placements.
+        let dotbufs: Vec<render::dots::DotBuffer> = self
             .wizards
             .iter()
-            .map(|w| render::convert(w.sprite.frame_at(self.elapsed + w.phase), sprite_area))
+            .map(|w| {
+                render::dots::sprite_to_dots(
+                    w.sprite.frame_at(self.elapsed + w.phase),
+                    sprite_dot_cols,
+                    sprite_dot_rows,
+                )
+            })
             .collect();
 
-        let placements: Vec<render::Placement> = self
+        let placements: Vec<render::composite::DotPlacement> = self
             .wizards
             .iter()
-            .zip(&grids)
-            .map(|(w, g)| render::Placement {
-                grid: g,
-                col: w.col,
-                row: w.row,
+            .zip(&dotbufs)
+            .map(|(w, dots)| render::composite::DotPlacement {
+                dots,
+                dot_x: w.col * 2,
+                dot_y: w.row * 4,
                 depth: w.row, // depth = row → higher row = nearer = drawn on top
             })
             .collect();
 
-        let composed = render::composite(cols, rows, &placements);
-        render::draw_grid(frame.buffer_mut(), area, &composed);
+        let composed = render::composite::composite_dots(dot_cols, dot_rows, &placements);
+        let grid = render::dots::dots_to_grid(&composed);
+        render::draw_grid(frame.buffer_mut(), area, &grid);
     }
 
     fn inspect(&mut self) -> &mut dyn scene_core::Inspectable {
