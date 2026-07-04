@@ -156,7 +156,9 @@ impl Scene for RenderMovementScene {
                 let aspect = img_w as f32 / img_h as f32;
                 let dot_rows = WIZARD_DOT_ROWS;
                 let dot_cols = (dot_rows as f32 * aspect).round() as u32;
-                engine_render::dots::sprite_to_dots(img, dot_cols, dot_rows)
+                // Routed through the sprite's own cached accessor (b6-t1)
+                // rather than a direct `sprite_to_dots` call on `img`.
+                w.sprite.dots_at(self.elapsed, dot_cols, dot_rows)
             })
             .collect();
 

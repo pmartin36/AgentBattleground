@@ -137,6 +137,17 @@ impl Scene for RenderTransformScene {
 
         // Rasterize before place — the DotPlacement borrows this buffer, so it
         // must outlive the composite call.
+        //
+        // Deliberately LEFT UNCACHED (b6-t1 audit): `transform` varies
+        // continuously every frame (rotation sweeps a full turn over
+        // ROT_PERIOD; scale pulses via a sine wave), so the rasterize-cache
+        // key (rotation_bits, scale_bits, base_dot_rows) is fresh on every
+        // single call. Routing this through the shared, never-evicted
+        // `asset_cache::rasterize` would provide zero reuse while
+        // monotonically growing the process-lifetime cache with single-use
+        // entries -- directly violating the cache's own bounded-key-space
+        // invariant. The source frame itself is already a one-off decode in
+        // `new()`, not a per-frame cost.
         let dots = engine_render::transform::rasterize(&self.img, &transform, WIZARD_DOT_ROWS);
         let placement = engine_render::transform::place(&dots, transform.translate, &self.camera);
 

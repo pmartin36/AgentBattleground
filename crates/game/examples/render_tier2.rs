@@ -36,6 +36,13 @@ const FRAME_DUR: Duration = Duration::from_millis(100);
 /// split + per-half braille assertions are unambiguous.
 const MARKER: &str = "---FRAME-BREAK---";
 
+/// Shared GIF fixture bytes. Hoisted to a single `'static` constant (rather
+/// than an inline `include_bytes!` at each call site) so the pointer passed
+/// to `AnimatedSprite::from_gif` and the pointer passed to
+/// `asset_cache::plain_cached` in `render` are identical -- required for the
+/// shared rasterize cache to key both onto the same entry.
+const WIZARD_GIF: &[u8] = include_bytes!("assets/wizard.gif");
+
 // ─── Tier2Scene ───────────────────────────────────────────────────────────────
 
 struct Tier2Scene {
@@ -47,11 +54,8 @@ struct Tier2Scene {
 impl Tier2Scene {
     fn new() -> Self {
         Tier2Scene {
-            sprite: engine_render::AnimatedSprite::from_gif(
-                include_bytes!("assets/wizard.gif"),
-                FRAME_DUR,
-            )
-            .expect("decode wizard.gif"),
+            sprite: engine_render::AnimatedSprite::from_gif(WIZARD_GIF, FRAME_DUR)
+                .expect("decode wizard.gif"),
             elapsed: Duration::ZERO,
             no_inspect: engine_core::scene::NoInspect,
         }
@@ -76,9 +80,28 @@ impl Scene for Tier2Scene {
 
     fn exit(&mut self, _ctx: &mut EngineCtx) {}
 
-    /// Real engine render path: select animated frame → convert to Grid → draw.
+    /// Real engine render path: select animated frame → convert to Grid → draw,
+    /// routed through the shared rasterize cache (b6-t1). This reassembles
+    /// `convert::convert`'s body (aspect-fit dims, then rasterize, then
+    /// `dots_to_grid`) around `asset_cache::plain_cached`, using the correct
+    /// per-frame `frame_index` rather than `asset_cache::convert`'s hard-coded
+    /// frame 0 (which would freeze the animation).
     fn render(&self, frame: &mut Frame, area: Rect) {
-        let grid = engine_render::convert(self.sprite.frame_at(self.elapsed), area);
+        let current = self.sprite.frame_at(self.elapsed);
+        let (cols, rows) = engine_render::convert::fit_dot_dims(current, area);
+        let grid = if cols == 0 || rows == 0 {
+            engine_render::Grid::new(0, 0)
+        } else {
+            let frame_index = self.sprite.frame_index_at(self.elapsed);
+            let buf = engine_render::asset_cache::plain_cached(
+                WIZARD_GIF,
+                frame_index,
+                cols * 2,
+                rows * 4,
+                || engine_render::dots::sprite_to_dots(current, cols * 2, rows * 4),
+            );
+            engine_render::dots::dots_to_grid(&buf)
+        };
         engine_render::draw_grid(frame.buffer_mut(), area, &grid);
     }
 

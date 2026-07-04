@@ -27,16 +27,17 @@ use game::scene_id::SceneId;
 
 // ─── Tier1Scene ───────────────────────────────────────────────────────────────
 
+/// Non-animated fixture sprite, routed through the shared decode+rasterize
+/// cache (b6-t1) instead of holding a manually-decoded `DynamicImage` field.
+const WIZARD_STILL: &[u8] = include_bytes!("assets/wizard_still.png");
+
 struct Tier1Scene {
-    img: image::DynamicImage,
     no_inspect: engine_core::scene::NoInspect,
 }
 
 impl Tier1Scene {
     fn new() -> Self {
         Tier1Scene {
-            img: image::load_from_memory(include_bytes!("assets/wizard_still.png"))
-                .expect("decode wizard_still.png"),
             no_inspect: engine_core::scene::NoInspect,
         }
     }
@@ -61,7 +62,7 @@ impl Scene for Tier1Scene {
 
     /// Real engine render path: convert image → Grid → draw into frame buffer.
     fn render(&self, frame: &mut Frame, area: Rect) {
-        let grid = engine_render::convert(&self.img, area);
+        let grid = engine_render::asset_cache::convert(WIZARD_STILL, area);
         engine_render::draw_grid(frame.buffer_mut(), area, &grid);
     }
 

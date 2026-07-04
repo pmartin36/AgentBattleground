@@ -149,11 +149,11 @@ impl Scene for Tier3Scene {
             .wizards
             .iter()
             .map(|w| {
-                engine_render::dots::sprite_to_dots(
-                    w.sprite.frame_at(self.elapsed + w.phase),
-                    sprite_dot_cols,
-                    sprite_dot_rows,
-                )
+                // Routed through the sprite's own cached accessor (b6-t1)
+                // rather than a direct `sprite_to_dots` call, so the 3
+                // wizards sharing one GIF pointer share one rasterization.
+                w.sprite
+                    .dots_at(self.elapsed + w.phase, sprite_dot_cols, sprite_dot_rows)
             })
             .collect();
 
