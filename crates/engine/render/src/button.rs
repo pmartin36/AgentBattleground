@@ -5,7 +5,6 @@
 
 use std::ops::{Deref, DerefMut};
 
-use image::DynamicImage;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
@@ -141,8 +140,8 @@ const ICON_AMBER_TINT: Rgba = Rgba::rgb(0x8a, 0x4a, 0x00);
 fn render_tinted(
     buf: &mut Buffer,
     rect: Rect,
-    background: &DynamicImage,
-    icon: Option<&DynamicImage>,
+    background: &'static [u8],
+    icon: Option<&'static [u8]>,
     tint_color: Rgba,
 ) {
     let dot_cols = rect.width as usize * 2;
@@ -151,18 +150,30 @@ fn render_tinted(
         return;
     }
 
-    let bg_dots_raw = crate::dots::sprite_to_dots(background, dot_cols as u32, dot_rows as u32);
+    // Test-only: `button.rs`'s own render tests run in the same lib-test
+    // binary as `asset_cache.rs`'s counter-delta tests and now route through
+    // that same shared, process-global cache -- serialize against them so an
+    // unrelated test's counter-sampling window is never polluted by a render
+    // happening concurrently on another thread. See `cache_test_lock`'s doc
+    // comment. No-op / not compiled outside test builds.
+    #[cfg(test)]
+    let _cache_test_guard = crate::asset_cache::cache_test_lock();
+
+    let bg_dots_raw = crate::asset_cache::sprite_to_dots(background, dot_cols as u32, dot_rows as u32);
     let bg_dots = crate::dots::tint(&bg_dots_raw, PANEL_GOLD_TINT);
 
     let composed = match icon {
-        Some(icon_img) => {
+        Some(icon_bytes) => {
             // Icon is aspect-fit + centered (not stretched) — reuse
             // `convert`'s fit formula to get the icon's fitted dot dims
-            // without re-deriving it.
-            let fitted = crate::convert::convert(icon_img, rect);
-            let icon_cols = fitted.cols() * 2;
-            let icon_rows = fitted.rows() * 4;
-            let icon_dots_raw = crate::dots::sprite_to_dots(icon_img, icon_cols as u32, icon_rows as u32);
+            // without re-deriving it (and without rasterizing twice: the
+            // decode-cache `Arc` clone is cheap on a hit).
+            let icon_img = crate::asset_cache::decoded(icon_bytes);
+            let (fit_cols, fit_rows) = crate::convert::fit_dot_dims(&icon_img, rect);
+            let icon_cols = (fit_cols * 2) as usize;
+            let icon_rows = (fit_rows * 4) as usize;
+            let icon_dots_raw =
+                crate::asset_cache::sprite_to_dots(icon_bytes, icon_cols as u32, icon_rows as u32);
             let icon_dots = crate::dots::tint(&icon_dots_raw, ICON_AMBER_TINT);
 
             let placements = [
@@ -195,20 +206,24 @@ fn render_tinted(
 /// mutated by feeding it mouse events.
 pub struct Button {
     core: ButtonCore,
-    panel: DynamicImage,
-    icon: DynamicImage,
+    panel: &'static [u8],
+    icon: &'static [u8],
 }
 
 impl Button {
     /// New button over `rect`, starting `Idle`. `panel` and `icon` are
-    /// caller-supplied raster bytes (e.g. `game::assets::BUTTON_PANEL` /
-    /// `game::assets::ICON_HOME`) composited together at render time —
+    /// caller-supplied `'static` raster bytes (e.g. `game::assets::BUTTON_PANEL`
+    /// / `game::assets::ICON_HOME`) composited together at render time —
     /// `engine-render` no longer owns or bundles any asset bytes itself.
-    pub fn new(rect: Rect, panel: &[u8], icon: &[u8]) -> Self {
+    /// The bytes are stored as-is (no eager decode): rasterization happens
+    /// lazily on first render, through the shared process-lifetime
+    /// `asset_cache`, so repeated/duplicate `Button`s built from the same
+    /// bytes share one rasterization instead of each decoding independently.
+    pub fn new(rect: Rect, panel: &'static [u8], icon: &'static [u8]) -> Self {
         Self {
             core: ButtonCore::new(rect),
-            panel: image::load_from_memory(panel).expect("panel bytes must decode"),
-            icon: image::load_from_memory(icon).expect("icon bytes must decode"),
+            panel,
+            icon,
         }
     }
 
@@ -221,8 +236,8 @@ impl Button {
         render_tinted(
             buf,
             self.core.rect(),
-            &self.panel,
-            Some(&self.icon),
+            self.panel,
+            Some(self.icon),
             self.core.state().tint_color(),
         );
     }
@@ -246,18 +261,21 @@ impl DerefMut for Button {
 /// way [`Button`] is.
 pub struct FrameButton {
     core: ButtonCore,
-    frame: DynamicImage,
+    frame: &'static [u8],
     label: String,
 }
 
 impl FrameButton {
     /// New frame button over `rect`, starting `Idle`, labeled with `label`.
-    /// `frame` is caller-supplied raster bytes (e.g. `game::assets::FRAME_PANEL`)
-    /// — `engine-render` no longer owns or bundles any asset bytes itself.
-    pub fn new(rect: Rect, frame: &[u8], label: impl Into<String>) -> Self {
+    /// `frame` is caller-supplied `'static` raster bytes (e.g.
+    /// `game::assets::FRAME_PANEL`) — `engine-render` no longer owns or
+    /// bundles any asset bytes itself. The bytes are stored as-is (no eager
+    /// decode); rasterization is lazy, shared via the process-lifetime
+    /// `asset_cache` on first render.
+    pub fn new(rect: Rect, frame: &'static [u8], label: impl Into<String>) -> Self {
         Self {
             core: ButtonCore::new(rect),
-            frame: image::load_from_memory(frame).expect("frame bytes must decode"),
+            frame,
             label: label.into(),
         }
     }
@@ -276,7 +294,7 @@ impl FrameButton {
     /// `self.rect` in `buf`.
     pub fn render(&self, buf: &mut Buffer) {
         let rect = self.core.rect();
-        render_tinted(buf, rect, &self.frame, None, self.core.state().tint_color());
+        render_tinted(buf, rect, self.frame, None, self.core.state().tint_color());
         crate::label(buf, rect, &self.label, Self::LABEL_COLOR);
     }
 }
@@ -388,25 +406,34 @@ fn inset_blob_png(w: u32, h: u32, inset: u32) -> Vec<u8> {
     encode_png(img)
 }
 
+/// Leak `bytes` to `'static`, giving each call a fresh, distinct pointer —
+/// `Button::new`/`FrameButton::new` now take `&'static [u8]` (asset_cache is
+/// keyed on `bytes.as_ptr()`), so every in-file test fixture call must yield
+/// its own stable address, preserving per-test cache isolation.
+#[cfg(test)]
+fn leak_png(bytes: Vec<u8>) -> &'static [u8] {
+    Box::leak(bytes.into_boxed_slice())
+}
+
 /// Synthetic stand-in for `game::assets::BUTTON_PANEL` (64x32, radius 8).
 #[cfg(test)]
-fn panel_bytes() -> Vec<u8> {
-    rounded_rect_png(64, 32, 8)
+fn panel_bytes() -> &'static [u8] {
+    leak_png(rounded_rect_png(64, 32, 8))
 }
 
 /// Synthetic stand-in for `game::assets::FRAME_PANEL` (64x32, radius 8,
 /// border 6 — same params `gen_frame_panel.rs` uses for the real asset).
 #[cfg(test)]
-fn frame_bytes() -> Vec<u8> {
-    hollow_ring_png(64, 32, 8, 6)
+fn frame_bytes() -> &'static [u8] {
+    leak_png(hollow_ring_png(64, 32, 8, 6))
 }
 
 /// Synthetic stand-in for a bundled icon (48x48, inset 12 — leaves an
 /// 8px-per-side transparent corner margin, comfortably surviving the
 /// Lanczos3 resize down to any of this file's tested rect sizes).
 #[cfg(test)]
-fn icon_bytes() -> Vec<u8> {
-    inset_blob_png(48, 48, 12)
+fn icon_bytes() -> &'static [u8] {
+    leak_png(inset_blob_png(48, 48, 12))
 }
 
 #[cfg(test)]
@@ -436,7 +463,7 @@ mod tests {
     /// `Moved` inside from `Idle` transitions to `Hover`.
     #[test]
     fn moved_inside_from_idle_transitions_to_hover() {
-        let mut b = Button::new(rect(), &panel_bytes(), &icon_bytes());
+        let mut b = Button::new(rect(), panel_bytes(), icon_bytes());
         assert_eq!(b.state(), ButtonState::Idle);
         let fired = b.handle_mouse(&ev(MouseEventKind::Moved, INSIDE.0, INSIDE.1));
         assert!(!fired);
@@ -446,7 +473,7 @@ mod tests {
     /// `Moved` outside from `Hover` reverts to `Idle`.
     #[test]
     fn moved_outside_from_hover_reverts_to_idle() {
-        let mut b = Button::new(rect(), &panel_bytes(), &icon_bytes());
+        let mut b = Button::new(rect(), panel_bytes(), icon_bytes());
         b.handle_mouse(&ev(MouseEventKind::Moved, INSIDE.0, INSIDE.1));
         assert_eq!(b.state(), ButtonState::Hover);
         let fired = b.handle_mouse(&ev(MouseEventKind::Moved, OUTSIDE.0, OUTSIDE.1));
@@ -458,7 +485,7 @@ mod tests {
     /// `Pressed` (the asymmetric exception in the transition table).
     #[test]
     fn moved_outside_while_pressed_stays_pressed() {
-        let mut b = Button::new(rect(), &panel_bytes(), &icon_bytes());
+        let mut b = Button::new(rect(), panel_bytes(), icon_bytes());
         b.handle_mouse(&ev(MouseEventKind::Moved, INSIDE.0, INSIDE.1));
         b.handle_mouse(&ev(
             MouseEventKind::Down(MouseButton::Left),
@@ -478,7 +505,7 @@ mod tests {
     /// `Down(Left)` inside from `Hover` transitions to `Pressed`.
     #[test]
     fn down_left_inside_from_hover_transitions_to_pressed() {
-        let mut b = Button::new(rect(), &panel_bytes(), &icon_bytes());
+        let mut b = Button::new(rect(), panel_bytes(), icon_bytes());
         b.handle_mouse(&ev(MouseEventKind::Moved, INSIDE.0, INSIDE.1));
         let fired = b.handle_mouse(&ev(
             MouseEventKind::Down(MouseButton::Left),
@@ -493,7 +520,7 @@ mod tests {
     /// `true` and reverts to `Hover`.
     #[test]
     fn up_left_inside_while_pressed_completes_click_and_reverts_to_hover() {
-        let mut b = Button::new(rect(), &panel_bytes(), &icon_bytes());
+        let mut b = Button::new(rect(), panel_bytes(), icon_bytes());
         b.handle_mouse(&ev(MouseEventKind::Moved, INSIDE.0, INSIDE.1));
         b.handle_mouse(&ev(
             MouseEventKind::Down(MouseButton::Left),
@@ -514,7 +541,7 @@ mod tests {
     /// outside).
     #[test]
     fn up_left_outside_while_pressed_cancels_click_and_reverts_to_idle() {
-        let mut b = Button::new(rect(), &panel_bytes(), &icon_bytes());
+        let mut b = Button::new(rect(), panel_bytes(), icon_bytes());
         b.handle_mouse(&ev(MouseEventKind::Moved, INSIDE.0, INSIDE.1));
         b.handle_mouse(&ev(
             MouseEventKind::Down(MouseButton::Left),
@@ -537,7 +564,7 @@ mod tests {
     /// button — state and return value unchanged.
     #[test]
     fn down_right_inside_is_ignored() {
-        let mut b = Button::new(rect(), &panel_bytes(), &icon_bytes());
+        let mut b = Button::new(rect(), panel_bytes(), icon_bytes());
         b.handle_mouse(&ev(MouseEventKind::Moved, INSIDE.0, INSIDE.1));
         assert_eq!(b.state(), ButtonState::Hover);
         let fired = b.handle_mouse(&ev(
@@ -552,7 +579,7 @@ mod tests {
     /// `Drag` events are ignored entirely — state unchanged, never fires.
     #[test]
     fn drag_is_ignored() {
-        let mut b = Button::new(rect(), &panel_bytes(), &icon_bytes());
+        let mut b = Button::new(rect(), panel_bytes(), icon_bytes());
         b.handle_mouse(&ev(MouseEventKind::Moved, INSIDE.0, INSIDE.1));
         b.handle_mouse(&ev(
             MouseEventKind::Down(MouseButton::Left),
@@ -585,7 +612,7 @@ mod tests {
     /// `set_rect` updates the hit-test area used by subsequent events.
     #[test]
     fn set_rect_updates_hit_test_area() {
-        let mut b = Button::new(Rect::new(0, 0, 1, 1), &panel_bytes(), &icon_bytes());
+        let mut b = Button::new(Rect::new(0, 0, 1, 1), panel_bytes(), icon_bytes());
         b.set_rect(rect());
         let fired = b.handle_mouse(&ev(MouseEventKind::Moved, INSIDE.0, INSIDE.1));
         assert!(!fired);
@@ -614,7 +641,7 @@ mod tests {
     /// every state).
     fn render_center_fg(state: ButtonState) -> Color {
         let rect = render_rect();
-        let mut b = Button::new(rect, &panel_bytes(), &icon_bytes());
+        let mut b = Button::new(rect, panel_bytes(), icon_bytes());
         let inside = (rect.x + 1, rect.y + 1);
         match state {
             ButtonState::Idle => {}
@@ -669,7 +696,7 @@ mod tests {
     #[test]
     fn render_paints_only_within_rect_and_no_panic() {
         let rect = render_rect();
-        let b = Button::new(rect, &panel_bytes(), &icon_bytes());
+        let b = Button::new(rect, panel_bytes(), icon_bytes());
         let mut buf = make_buf(16, 8);
         b.render(&mut buf);
 
@@ -682,11 +709,11 @@ mod tests {
             "cell well outside the button rect must be untouched"
         );
 
-        let zero = Button::new(Rect::new(0, 0, 0, 0), &panel_bytes(), &icon_bytes());
+        let zero = Button::new(Rect::new(0, 0, 0, 0), panel_bytes(), icon_bytes());
         let mut buf_zero = make_buf(4, 4);
         zero.render(&mut buf_zero); // must not panic
 
-        let oversized = Button::new(Rect::new(0, 0, 50, 50), &panel_bytes(), &icon_bytes());
+        let oversized = Button::new(Rect::new(0, 0, 50, 50), panel_bytes(), icon_bytes());
         let mut buf_small = make_buf(5, 5);
         oversized.render(&mut buf_small); // must not panic
     }
@@ -723,7 +750,7 @@ mod icon_contrast_tests {
     #[test]
     fn icon_is_darker_than_panel_only_cell() {
         let rect = Rect::new(0, 0, 8, 4);
-        let b = Button::new(rect, &panel_bytes(), &icon_bytes());
+        let b = Button::new(rect, panel_bytes(), icon_bytes());
         let mut buf = make_buf(8, 4);
         b.render(&mut buf);
 
@@ -747,7 +774,7 @@ mod icon_contrast_tests {
     #[test]
     fn panel_and_icon_have_real_hue_not_grayscale() {
         let rect = Rect::new(0, 0, 8, 4);
-        let b = Button::new(rect, &panel_bytes(), &icon_bytes());
+        let b = Button::new(rect, panel_bytes(), icon_bytes());
         let mut buf = make_buf(8, 4);
         b.render(&mut buf);
 
@@ -792,7 +819,7 @@ mod frame_button_tests {
     /// the label's center row).
     fn render_top_border_fg(state: ButtonState) -> Color {
         let rect = frame_rect();
-        let mut b = FrameButton::new(rect, &frame_bytes(), "Go");
+        let mut b = FrameButton::new(rect, frame_bytes(), "Go");
         let inside = (rect.x + 1, rect.y + 1);
         match state {
             ButtonState::Idle => {}
@@ -845,7 +872,7 @@ mod frame_button_tests {
     #[test]
     fn frame_button_render_draws_centered_label() {
         let rect = frame_rect();
-        let b = FrameButton::new(rect, &frame_bytes(), "Go");
+        let b = FrameButton::new(rect, frame_bytes(), "Go");
         let mut buf = make_buf(16, 8);
         b.render(&mut buf);
 
@@ -875,7 +902,7 @@ mod frame_button_tests {
     fn frame_button_handle_mouse_completes_click() {
         let rect = frame_rect();
         let inside = (rect.x + 1, rect.y + 1);
-        let mut b = FrameButton::new(rect, &frame_bytes(), "Go");
+        let mut b = FrameButton::new(rect, frame_bytes(), "Go");
 
         b.handle_mouse(&ev(MouseEventKind::Moved, inside.0, inside.1));
         b.handle_mouse(&ev(MouseEventKind::Down(MouseButton::Left), inside.0, inside.1));
@@ -976,15 +1003,15 @@ mod glyph_mask_invariance_tests {
         let rect = button_rect();
         let cells = all_cells(rect);
 
-        let mut idle = Button::new(rect, &panel_bytes(), &icon_bytes());
+        let mut idle = Button::new(rect, panel_bytes(), icon_bytes());
         set_state(&mut idle, ButtonState::Idle);
         let idle_cells = render_and_sample(|buf| idle.render(buf), rect, &cells);
 
-        let mut hover = Button::new(rect, &panel_bytes(), &icon_bytes());
+        let mut hover = Button::new(rect, panel_bytes(), icon_bytes());
         set_state(&mut hover, ButtonState::Hover);
         let hover_cells = render_and_sample(|buf| hover.render(buf), rect, &cells);
 
-        let mut pressed = Button::new(rect, &panel_bytes(), &icon_bytes());
+        let mut pressed = Button::new(rect, panel_bytes(), icon_bytes());
         set_state(&mut pressed, ButtonState::Pressed);
         let pressed_cells = render_and_sample(|buf| pressed.render(buf), rect, &cells);
 
@@ -1053,15 +1080,15 @@ mod glyph_mask_invariance_tests {
         let rect = frame_rect();
         let cells = border_cells(rect);
 
-        let mut idle = FrameButton::new(rect, &frame_bytes(), "Go");
+        let mut idle = FrameButton::new(rect, frame_bytes(), "Go");
         set_state(&mut idle, ButtonState::Idle);
         let idle_cells = render_and_sample(|buf| idle.render(buf), rect, &cells);
 
-        let mut hover = FrameButton::new(rect, &frame_bytes(), "Go");
+        let mut hover = FrameButton::new(rect, frame_bytes(), "Go");
         set_state(&mut hover, ButtonState::Hover);
         let hover_cells = render_and_sample(|buf| hover.render(buf), rect, &cells);
 
-        let mut pressed = FrameButton::new(rect, &frame_bytes(), "Go");
+        let mut pressed = FrameButton::new(rect, frame_bytes(), "Go");
         set_state(&mut pressed, ButtonState::Pressed);
         let pressed_cells = render_and_sample(|buf| pressed.render(buf), rect, &cells);
 

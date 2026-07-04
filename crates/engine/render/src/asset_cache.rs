@@ -217,32 +217,42 @@ pub fn rasterize_recompute_count() -> u64 {
     RASTER_RECOMPUTES.load(Ordering::Relaxed)
 }
 
+/// Test-only, crate-visible lock serializing every `#[cfg(test)]` code path
+/// in THIS crate's lib-test binary (`cargo test -p engine-render --lib`)
+/// that either samples `decode_recompute_count()`/`rasterize_recompute_count()`
+/// as a delta, or performs a cache miss that would inflate such a delta.
+/// `cargo test --lib` links every `src/*.rs` module's `#[cfg(test)]` code
+/// into ONE binary sharing these process-global counters, and libtest runs
+/// `#[test]` fns across multiple OS threads by default -- so, e.g.,
+/// `button.rs`'s render tests (which route through this module's shared
+/// `sprite_to_dots`/`decoded`) must not run concurrently with this module's
+/// own counter-delta tests, or the delta a counter test observes gets
+/// polluted by an unrelated test's cache miss. Integration tests (each
+/// `tests/*.rs` file compiles to its own separate binary/process with its
+/// own copy of these statics, e.g. `tests/button_shared_cache.rs`,
+/// `tests/anim_shared_cache.rs`) never need this -- only in-lib-binary
+/// `#[cfg(test)]` code does.
+#[cfg(test)]
+pub(crate) fn cache_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    // Tolerates poison: b1-t2's not-yet-implemented cached entry points used
+    // to deliberately panic (`unimplemented!()`) while holding this guard;
+    // a plain `.expect(..)` would cascade every subsequent test sharing this
+    // lock into a false "lock poisoned" failure. This lock only ever
+    // serializes a counter-sampling/render window -- it protects no
+    // invariant a partial/aborted critical section could corrupt.
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Serializes each test's full before/decode/after sampling window.
-    /// `DECODE_RECOMPUTES`/`RASTER_RECOMPUTES` are single process-global
-    /// counters shared by every sibling test in this module; libtest runs
-    /// `#[test]` fns across multiple OS threads by default, so without this
-    /// guard one test's `decoded()`/`sprite_to_dots()`/etc. calls can land
-    /// inside another concurrently-running test's `[before, after]` window
-    /// and inflate its observed delta. Holding this lock for a test body's
-    /// entire measurement window makes the delta reads race-free regardless
-    /// of thread scheduling.
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
-
-    /// Acquire `TEST_LOCK`, tolerating poison. b1-t2's not-yet-implemented
-    /// cached entry points deliberately panic (`unimplemented!()`) while
-    /// holding this guard, which poisons the `Mutex` for the rest of the
-    /// process; a plain `.expect(..)` would then cascade every subsequent
-    /// test in this module (including unrelated, already-passing b1-t1
-    /// tests) into a false "test lock poisoned" failure. Recovering the
-    /// inner guard on poison keeps that isolation intact -- this lock only
-    /// ever serializes a counter-sampling window, it protects no invariant
-    /// that a partial/aborted critical section could corrupt.
+    /// Serializes each test's full before/decode/after sampling window
+    /// against every other cache-touching `#[cfg(test)]` code path in this
+    /// lib-test binary (see [`cache_test_lock`]'s doc comment).
     fn test_lock() -> std::sync::MutexGuard<'static, ()> {
-        TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        cache_test_lock()
     }
 
     /// Encode a small solid-color PNG and leak it to `'static`. Each call
