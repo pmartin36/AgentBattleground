@@ -733,24 +733,27 @@ mod render_timing_tests {
     use crate::scenes::test_util::render_to_buffer;
     use std::time::Instant;
 
-    /// Spec 30 done-criterion: re-measure `MainHub::render()` after the
-    /// decode-caching fix (b1-t1/b2-t1) and confirm it is a small fraction of
-    /// the 33ms (30fps) frame budget. Ignored by default (it is a measurement,
-    /// run explicitly and recorded as evidence; it also keeps the debug gate
-    /// fast).
+    /// Spec 30 done-criterion, closed by spec 32: re-measure `MainHub::render()`
+    /// after the rasterize-cache fix (b3-t1/b4-t1/b6-t1) and confirm it is a
+    /// small fraction of the 33ms (30fps) frame budget, in BOTH profiles.
+    /// Ignored by default (it is a measurement, run explicitly and recorded as
+    /// evidence; it also keeps the debug gate fast).
     ///
-    /// Measured (2026-07-03, this machine): release avg ~2.5ms (the "small
-    /// fraction" of the budget), debug avg ~161ms. Debug is dominated by
-    /// `engine_render::convert()` re-rasterizing `logo.png` every frame
-    /// (rasterization caching = spec 27, OUT OF SCOPE here; debug perf is
-    /// explicitly deferred by spec 30). So the budget bound is asserted only
-    /// in release, where the fix's target actually holds.
+    /// Measured (2026-07-04, this machine): release avg ~0.26-2.5ms, debug avg
+    /// ~4.0ms — both a small fraction of the budget. Pre-spec-32, debug avg was
+    /// ~161ms (`engine_render::convert()` re-rasterizing `logo.png` every
+    /// frame); spec 32's shared rasterize cache (`asset_cache`) closed that
+    /// gap, so the debug bound is now asserted too.
     #[test]
-    #[ignore = "timing measurement; run explicitly (see spec 30 done-criterion)"]
+    #[ignore = "timing measurement; run explicitly (see spec 30/32 done-criterion)"]
     fn main_hub_render_is_a_small_fraction_of_frame_budget() {
         const N: u32 = 50;
         /// Flake-resistant ceiling well under 33ms; measured release avg ~2.5ms.
         const RELEASE_BUDGET_MS: f64 = 10.0;
+        /// Full 30fps frame budget; ~8x headroom over the measured ~4ms debug
+        /// avg, but still catches a regression back toward the pre-spec-32
+        /// ~161ms (uncached re-rasterization).
+        const DEBUG_BUDGET_MS: f64 = 33.0;
 
         let scene = MainHub::default();
         for _ in 0..3 {
@@ -765,7 +768,14 @@ mod render_timing_tests {
         let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
         println!("MainHub::render() avg = {avg_ms:.3} ms over {N} ({profile})");
 
-        if !cfg!(debug_assertions) {
+        if cfg!(debug_assertions) {
+            assert!(
+                avg_ms < DEBUG_BUDGET_MS,
+                "debug MainHub::render() avg {avg_ms:.3}ms must be a small fraction \
+                 of the 33ms frame budget (ceiling {DEBUG_BUDGET_MS}ms; pre-spec-32 \
+                 this was ~161ms uncached)"
+            );
+        } else {
             assert!(
                 avg_ms < RELEASE_BUDGET_MS,
                 "release MainHub::render() avg {avg_ms:.3}ms must be a small fraction \
