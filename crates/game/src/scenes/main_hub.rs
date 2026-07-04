@@ -31,21 +31,6 @@ pub struct MainHub {
     /// not editable state.
     #[inspect(hidden)]
     quit_requested: bool,
-
-    /// Decoded once at construction — the title box's frame panel, painted
-    /// per frame by `draw_title_frame` without re-decoding.
-    #[inspect(hidden)]
-    title_frame: image::DynamicImage,
-
-    /// Decoded once at construction — the title box's logo, painted per
-    /// frame by `render()` without re-decoding.
-    #[inspect(hidden)]
-    logo: image::DynamicImage,
-
-    /// Decoded once at construction — the selection-cursor arrow, painted
-    /// per frame by `render()` without re-decoding.
-    #[inspect(hidden)]
-    cursor_icon: image::DynamicImage,
 }
 
 impl Default for MainHub {
@@ -58,12 +43,6 @@ impl Default for MainHub {
             ],
             cursor_index: 0,
             quit_requested: false,
-            title_frame: image::load_from_memory(crate::assets::FRAME_PANEL)
-                .expect("FRAME_PANEL must decode — bundled first-party asset"),
-            logo: image::load_from_memory(crate::assets::LOGO)
-                .expect("LOGO must decode — bundled first-party asset"),
-            cursor_icon: image::load_from_memory(crate::assets::ICON_ARROW_RIGHT)
-                .expect("ICON_ARROW_RIGHT must decode — bundled first-party asset"),
         }
     }
 }
@@ -165,8 +144,11 @@ impl MainHub {
             return;
         }
 
-        let frame = &self.title_frame;
-        let dots = engine_render::dots::sprite_to_dots(frame, dot_cols as u32, dot_rows as u32);
+        let dots = engine_render::asset_cache::sprite_to_dots(
+            crate::assets::FRAME_PANEL,
+            dot_cols as u32,
+            dot_rows as u32,
+        );
         let grid = engine_render::dots::dots_to_grid(&dots);
         engine_render::draw_grid(buf, rect, &grid);
     }
@@ -228,7 +210,7 @@ impl Scene for MainHub {
         let title = Self::title_rect(area);
         self.draw_title_frame(buf, title);
         let interior = Self::title_interior(title);
-        let grid = engine_render::convert(&self.logo, interior);
+        let grid = engine_render::asset_cache::convert(crate::assets::LOGO, interior);
         engine_render::draw_grid(buf, interior, &grid);
 
         let rects = Self::button_rects(area);
@@ -239,7 +221,7 @@ impl Scene for MainHub {
         }
 
         let cursor_rect = Self::cursor_rect(rects[self.cursor_index]);
-        let grid = engine_render::convert(&self.cursor_icon, cursor_rect);
+        let grid = engine_render::asset_cache::convert(crate::assets::ICON_ARROW_RIGHT, cursor_rect);
         engine_render::draw_grid(buf, cursor_rect, &grid);
     }
 

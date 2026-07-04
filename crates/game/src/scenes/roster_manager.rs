@@ -19,13 +19,6 @@ pub struct RosterManager {
     creatures: Vec<engine_render::Creature>,
     #[inspect(hidden)]
     elapsed: Duration,
-    /// Decoded once at construction (b2-t2) — `render_group` reads these
-    /// instead of decoding `crate::assets::DOT_FILLED`/`DOT_UNFILLED` from
-    /// raw bytes on every call.
-    #[inspect(hidden)]
-    dot_filled: image::DynamicImage,
-    #[inspect(hidden)]
-    dot_unfilled: image::DynamicImage,
     /// Mouse-driven navigation buttons beside the sprite (b4-t2). `RefCell`
     /// because `render(&self, ..)` must mutate their rect/state from an
     /// immutable receiver (see research.md b4-t2 blueprint point 1).
@@ -118,10 +111,6 @@ impl RosterManager {
             current_index: 0,
             creatures: crate::creatures::all(),
             elapsed: Duration::ZERO,
-            dot_filled: image::load_from_memory(crate::assets::DOT_FILLED)
-                .expect("DOT_FILLED must decode — bundled first-party asset"),
-            dot_unfilled: image::load_from_memory(crate::assets::DOT_UNFILLED)
-                .expect("DOT_UNFILLED must decode — bundled first-party asset"),
             left_button: RefCell::new(engine_render::Button::new(
                 Rect::default(),
                 crate::assets::BUTTON_PANEL,
@@ -264,8 +253,8 @@ impl RosterManager {
         );
 
         for (i, slot) in Self::dot_slots(dots_rect).iter().enumerate() {
-            let img = if i == index { &self.dot_filled } else { &self.dot_unfilled };
-            let grid = engine_render::convert(img, *slot);
+            let bytes = if i == index { crate::assets::DOT_FILLED } else { crate::assets::DOT_UNFILLED };
+            let grid = engine_render::asset_cache::convert(bytes, *slot);
             engine_render::draw_grid(&mut tmp, *slot, &grid);
         }
 
