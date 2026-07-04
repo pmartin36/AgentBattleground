@@ -40,9 +40,9 @@ fn make_gif(frame_count: u32) -> Vec<u8> {
 /// `from_gif` on a 3-frame GIF must return `Ok` with `frame_count() == 3`.
 #[test]
 fn from_gif_ok_frame_count() {
-    let gif_bytes = make_gif(3);
+    let gif_bytes: &'static [u8] = Box::leak(make_gif(3).into_boxed_slice());
     let dur = Duration::from_millis(100);
-    let sprite = AnimatedSprite::from_gif(&gif_bytes, dur)
+    let sprite = AnimatedSprite::from_gif(gif_bytes, dur)
         .expect("valid GIF must decode to Ok");
     assert_eq!(sprite.frame_count(), 3, "from_gif must yield 3 frames for a 3-frame GIF");
 }
@@ -51,9 +51,9 @@ fn from_gif_ok_frame_count() {
 /// delays are not consulted (spec: uniform rate, delays ignored).
 #[test]
 fn from_gif_frame_dur_round_trips() {
-    let gif_bytes = make_gif(2);
+    let gif_bytes: &'static [u8] = Box::leak(make_gif(2).into_boxed_slice());
     let dur = Duration::from_millis(250);
-    let sprite = AnimatedSprite::from_gif(&gif_bytes, dur)
+    let sprite = AnimatedSprite::from_gif(gif_bytes, dur)
         .expect("valid GIF must decode to Ok");
     assert_eq!(
         sprite.frame_dur(),
@@ -66,8 +66,8 @@ fn from_gif_frame_dur_round_trips() {
 /// the blueprint (alpha preserved, not flattened to RGB).
 #[test]
 fn from_gif_frames_are_rgba8() {
-    let gif_bytes = make_gif(2);
-    let sprite = AnimatedSprite::from_gif(&gif_bytes, Duration::from_millis(100))
+    let gif_bytes: &'static [u8] = Box::leak(make_gif(2).into_boxed_slice());
+    let sprite = AnimatedSprite::from_gif(gif_bytes, Duration::from_millis(100))
         .expect("valid GIF must decode to Ok");
     let frame = sprite.frame_at(Duration::ZERO);
     assert!(
@@ -115,8 +115,9 @@ fn from_gif_alpha_preserved_for_transparent_pixels() {
         img.put_pixel(1, 1, PixelRgba([0, 0, 0, 0]));     // fully transparent
         encoder.encode_frame(Frame::new(img)).unwrap();
     }
+    let buf: &'static [u8] = Box::leak(buf.into_boxed_slice());
 
-    let sprite = AnimatedSprite::from_gif(&buf, Duration::from_millis(100))
+    let sprite = AnimatedSprite::from_gif(buf, Duration::from_millis(100))
         .expect("valid GIF must decode to Ok");
     let frame = sprite.frame_at(Duration::ZERO);
     let transparent_pixel = frame.get_pixel(1, 0);

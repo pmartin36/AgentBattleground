@@ -23,11 +23,12 @@ use std::time::Duration;
 // ── shared setup ─────────────────────────────────────────────────────────────
 
 fn load_sprite() -> AnimatedSprite {
-    let fixture_bytes = std::fs::read(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/anim.gif"),
-    )
-    .expect("anim.gif fixture must exist (run b2-t1 / gen_fixture first)");
-    AnimatedSprite::from_gif(&fixture_bytes, Duration::from_millis(100))
+    let fixture_bytes: &'static [u8] = Box::leak(
+        std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/anim.gif"))
+            .expect("anim.gif fixture must exist (run b2-t1 / gen_fixture first)")
+            .into_boxed_slice(),
+    );
+    AnimatedSprite::from_gif(fixture_bytes, Duration::from_millis(100))
         .expect("anim.gif must decode without error")
 }
 

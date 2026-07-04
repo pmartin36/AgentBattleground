@@ -6,6 +6,7 @@
 //! retrieve the active frame. No clock reads or mutation occur inside this
 //! type.
 
+use crate::asset_cache;
 use crate::dots::{sprite_to_dots, DotBuffer};
 use crate::transform::{rasterize, Transform};
 use image::codecs::gif::GifDecoder;
@@ -91,8 +92,22 @@ pub struct AnimatedSprite {
     speed: f32,
     /// Per-instance rasterization cache, keyed by frame/dot-size or
     /// frame/transform. Interior-mutable so read-only render calls can
-    /// populate it without requiring `&mut self`.
+    /// populate it without requiring `&mut self`. Used ONLY when
+    /// `source_bytes` is `None` (bytes-unknown / `new`-constructed sprites) —
+    /// see `source_bytes`'s doc comment.
     cache: RefCell<RasterCache>,
+    /// The `'static` source GIF bytes this sprite was decoded from, when
+    /// known (`from_gif`), else `None` (`new`-constructed sprites, e.g. from
+    /// synthetic in-memory frames, have no sound `'static` identity to key a
+    /// shared cache on).
+    ///
+    /// When `Some`, `dots_at`/`rasterize_at` route through the process-global
+    /// `asset_cache::plain_cached`/`transform_cached` (keyed on
+    /// `bytes.as_ptr()`), so two sprites decoded from the SAME `'static` bytes
+    /// share one rasterization instead of each maintaining a private,
+    /// duplicate cache. When `None`, the per-instance `cache` field above is
+    /// used exactly as before.
+    source_bytes: Option<&'static [u8]>,
 }
 
 impl AnimatedSprite {
@@ -106,6 +121,7 @@ impl AnimatedSprite {
             frame_dur,
             speed: 1.0,
             cache: RefCell::new(RasterCache::default()),
+            source_bytes: None,
         }
     }
 
@@ -170,7 +186,7 @@ impl AnimatedSprite {
     /// Decode a GIF from `bytes` into an animated sprite played at the uniform
     /// `frame_dur`. The GIF's own per-frame delays are intentionally ignored.
     /// Returns `Err` (never panics) on malformed input.
-    pub fn from_gif(bytes: &[u8], frame_dur: Duration) -> Result<Self, image::ImageError> {
+    pub fn from_gif(bytes: &'static [u8], frame_dur: Duration) -> Result<Self, image::ImageError> {
         let decoder = GifDecoder::new(Cursor::new(bytes))?;
         let frames = decoder
             .into_frames()
@@ -178,7 +194,9 @@ impl AnimatedSprite {
             .into_iter()
             .map(|f| DynamicImage::ImageRgba8(f.into_buffer()))
             .collect();
-        Ok(Self::new(frames, frame_dur))
+        let mut sprite = Self::new(frames, frame_dur);
+        sprite.source_bytes = Some(bytes);
+        Ok(sprite)
     }
 
     /// Rasterize the frame active at `elapsed` to `dot_cols × dot_rows` dots,
@@ -188,15 +206,22 @@ impl AnimatedSprite {
     /// dot_rows)`.
     pub fn dots_at(&self, elapsed: Duration, dot_cols: u32, dot_rows: u32) -> DotBuffer {
         let frame_index = self.frame_index_at(elapsed);
-        let key = PlainKey::new(frame_index, dot_cols, dot_rows);
-        let mut cache = self.cache.borrow_mut();
-        if let Some(buf) = cache.plain.get(&key) {
-            return buf.clone();
+        match self.source_bytes {
+            Some(bytes) => asset_cache::plain_cached(bytes, frame_index, dot_cols, dot_rows, || {
+                sprite_to_dots(&self.frames[frame_index], dot_cols, dot_rows)
+            }),
+            None => {
+                let key = PlainKey::new(frame_index, dot_cols, dot_rows);
+                let mut cache = self.cache.borrow_mut();
+                if let Some(buf) = cache.plain.get(&key) {
+                    return buf.clone();
+                }
+                let buf = sprite_to_dots(&self.frames[frame_index], dot_cols, dot_rows);
+                cache.recomputes += 1;
+                cache.plain.insert(key, buf.clone());
+                buf
+            }
         }
-        let buf = sprite_to_dots(&self.frames[frame_index], dot_cols, dot_rows);
-        cache.recomputes += 1;
-        cache.plain.insert(key, buf.clone());
-        buf
     }
 
     /// Rasterize the frame active at `elapsed` under `transform` at
@@ -207,15 +232,22 @@ impl AnimatedSprite {
     /// transform, base_dot_rows)`.
     pub fn rasterize_at(&self, elapsed: Duration, transform: &Transform, base_dot_rows: u32) -> DotBuffer {
         let frame_index = self.frame_index_at(elapsed);
-        let key = TransformKey::new(frame_index, transform, base_dot_rows);
-        let mut cache = self.cache.borrow_mut();
-        if let Some(buf) = cache.transform.get(&key) {
-            return buf.clone();
+        match self.source_bytes {
+            Some(bytes) => asset_cache::transform_cached(bytes, frame_index, transform, base_dot_rows, || {
+                rasterize(&self.frames[frame_index], transform, base_dot_rows)
+            }),
+            None => {
+                let key = TransformKey::new(frame_index, transform, base_dot_rows);
+                let mut cache = self.cache.borrow_mut();
+                if let Some(buf) = cache.transform.get(&key) {
+                    return buf.clone();
+                }
+                let buf = rasterize(&self.frames[frame_index], transform, base_dot_rows);
+                cache.recomputes += 1;
+                cache.transform.insert(key, buf.clone());
+                buf
+            }
         }
-        let buf = rasterize(&self.frames[frame_index], transform, base_dot_rows);
-        cache.recomputes += 1;
-        cache.transform.insert(key, buf.clone());
-        buf
     }
 
     /// Test-only: number of real `sprite_to_dots` recomputes (cache misses)
