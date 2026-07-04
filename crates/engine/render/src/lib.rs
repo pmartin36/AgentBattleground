@@ -75,15 +75,14 @@ pub fn label(buf: &mut Buffer, area: Rect, text: &str, color: Rgba) {
     buf.set_stringn(x, y, text, max_width, style);
 }
 
-/// Decode a bundled raster asset (`bytes`, e.g. `game::assets::DOT_FILLED`) and
-/// paint it aspect-fit + centered into `area` via `convert` → `draw_grid`.
-/// Zero-area `area` paints nothing. Panics only if `bytes` is not a
-/// decodable image (callers pass first-party bundled assets — invariant, as
-/// in `Button::new`).
-pub fn draw_asset(buf: &mut Buffer, area: Rect, bytes: &[u8]) {
-    let img = image::load_from_memory(bytes)
-        .expect("bundled first-party asset must decode");
-    let grid = convert(&img, area);
+/// Paint a bundled raster asset (`bytes`, e.g. `game::assets::DOT_FILLED`)
+/// aspect-fit + centered into `area`, routed through the shared
+/// process-lifetime decode/rasterize cache (`asset_cache::convert`). Zero-area
+/// `area` paints nothing. Panics only if `bytes` is not a decodable image
+/// (callers pass first-party bundled assets — invariant, as in
+/// `Button::new`).
+pub fn draw_asset(buf: &mut Buffer, area: Rect, bytes: &'static [u8]) {
+    let grid = asset_cache::convert(bytes, area);
     draw_grid(buf, area, &grid);
 }
 
@@ -261,14 +260,16 @@ mod draw_asset_tests {
     /// Synthetic stand-in for a bundled dot/icon asset (b1-t2: `crate::assets`
     /// no longer exists in `engine-render` — moved to `game::assets`).
     /// `draw_asset` is content-agnostic, so any decodable opaque-body PNG
-    /// bytes exercise the same contract the real asset did.
-    fn synthetic_dot_png() -> Vec<u8> {
+    /// bytes exercise the same contract the real asset did. Leaked to
+    /// `'static` (b5-t1: `draw_asset` keys the shared cache off the bytes'
+    /// own pointer, which is only sound for bytes that outlive the process).
+    fn synthetic_dot_png() -> &'static [u8] {
         let img = image::RgbaImage::from_pixel(8, 8, image::Rgba([255, 255, 255, 255]));
         let mut buf = Vec::new();
         image::DynamicImage::ImageRgba8(img)
             .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
             .expect("synthetic test fixture must encode to PNG");
-        buf
+        Box::leak(buf.into_boxed_slice())
     }
 
     /// `draw_asset` of an opaque synthetic dot icon into a non-zero area
@@ -276,9 +277,10 @@ mod draw_asset_tests {
     /// the 6 position-indicator dots).
     #[test]
     fn draw_asset_paints_non_space_cell() {
+        let _guard = crate::asset_cache::cache_test_lock();
         let mut buf = make_buf(4, 2);
         let area = Rect::new(0, 0, 4, 2);
-        draw_asset(&mut buf, area, &synthetic_dot_png());
+        draw_asset(&mut buf, area, synthetic_dot_png());
 
         let painted = (0..2u16)
             .any(|y| (0..4u16).any(|x| buf.cell((x, y)).unwrap().symbol() != " "));
@@ -288,9 +290,10 @@ mod draw_asset_tests {
     /// A zero-area rect must paint nothing and must not panic.
     #[test]
     fn draw_asset_zero_area_paints_nothing() {
+        let _guard = crate::asset_cache::cache_test_lock();
         let mut buf = make_buf(4, 2);
         let area = Rect::new(0, 0, 0, 2);
-        draw_asset(&mut buf, area, &synthetic_dot_png());
+        draw_asset(&mut buf, area, synthetic_dot_png());
 
         for y in 0..2u16 {
             for x in 0..4u16 {
@@ -301,5 +304,38 @@ mod draw_asset_tests {
                 );
             }
         }
+    }
+
+    /// b5-t1: two `draw_asset` calls with the SAME `'static` bytes at the
+    /// SAME `area` must perform exactly one real rasterization (the second
+    /// call is a shared-cache hit), and the painted output must still match
+    /// what the pre-existing uncached decode+convert+draw_grid path would
+    /// have produced.
+    #[test]
+    fn draw_asset_repeat_same_bytes_area_is_one_rasterization() {
+        let _guard = crate::asset_cache::cache_test_lock();
+        let bytes = synthetic_dot_png();
+        let area = Rect::new(0, 0, 4, 2);
+        let before = crate::asset_cache::rasterize_recompute_count();
+
+        let mut buf_first = make_buf(4, 2);
+        draw_asset(&mut buf_first, area, bytes);
+        let mut buf_second = make_buf(4, 2);
+        draw_asset(&mut buf_second, area, bytes);
+
+        let delta = crate::asset_cache::rasterize_recompute_count() - before;
+        assert_eq!(
+            delta, 1,
+            "second draw_asset call with the same (bytes, area) must be a cache hit"
+        );
+
+        let img = image::load_from_memory(bytes).expect("fixture must decode");
+        let expected_grid = convert(&img, area);
+        let mut buf_expected = make_buf(4, 2);
+        draw_grid(&mut buf_expected, area, &expected_grid);
+        assert_eq!(
+            buf_first, buf_expected,
+            "cached draw_asset output must match the uncached decode+convert+draw_grid path"
+        );
     }
 }
