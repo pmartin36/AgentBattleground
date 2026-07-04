@@ -1,6 +1,6 @@
 # Typed Mutation for Engine-Owned Props (e.g. Transform)
 
-> **Status: DRAFT — more investigation needed / not yet acted on.** Research is largely done (see below); this is captured here rather than executed because the project owner wants to circle back after resolving the mouse-hover regression first. Preserved across a reboot/session loss per the project owner's explicit request (2026-07-04).
+> **Status: RESEARCHED, awaiting go-ahead — not yet acted on.** ("Draft" is reserved elsewhere in `specs/` for a fully-specified, ready-to-implement spec — this hasn't been promoted to that yet, hence `specs/needs-research/`.) Research is largely done (see below); this is captured here rather than executed because the project owner wants to circle back after resolving the mouse-hover regression first. Preserved across a reboot/session loss per the project owner's explicit request (2026-07-04).
 
 ## The original question
 Project owner's framing: in **game** code, setting something like `pieces[0].transform.translate.x = 5` should be the norm — not a stringly-typed `apply_patch("pieces[0].transform.translate.x", json!(5.0))` call. Not asking for this on every prop, specifically "engine-y" props like `Transform`. The inspector (a genuinely separate, cross-process tool) can keep doing whatever it needs to (string paths are basically unavoidable there, since it works from a runtime-discovered `FieldSchema`, not compile-time Rust types).

@@ -1,6 +1,6 @@
 # Move Scene-Rendering Compositing Into the Engine
 
-> **Status: DRAFT — more investigation needed before this becomes a real spec.** Research is substantially done (see below) but no spec has been written or executed. Preserved across a reboot/session loss per the project owner's explicit request (2026-07-04).
+> **Status: RESEARCHED, not yet promoted to a real spec.** ("Draft" is reserved elsewhere in `specs/` for a fully-specified, ready-to-implement spec — this hasn't been written up to that level yet, hence `specs/needs-research/`.) Research is substantially done (see below) but no spec has been written or executed. Preserved across a reboot/session loss per the project owner's explicit request (2026-07-04).
 
 ## The original question
 Project owner's framing: a scene shouldn't have to hand-orchestrate rasterize → place → composite → tint → draw for its own objects — it should be able to just "submit the things you want to render" and have the engine take care of the rest. Same underlying principle as the `CLAUDE.md` engine/game-boundary rule we already wrote: cross-cutting rendering mechanics belong in `crates/engine/`, automatic for any caller, not hand-rolled per scene.

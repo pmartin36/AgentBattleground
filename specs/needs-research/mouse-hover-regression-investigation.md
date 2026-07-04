@@ -1,6 +1,6 @@
 # Mouse Hover Regression — Investigation
 
-> **Status: DRAFT — more investigation needed. Not a spec yet, no fix designed.** This document exists to preserve investigation context across a reboot/session loss, per the project owner's explicit request (2026-07-04). Continue from "Next steps" below.
+> **Status: NEEDS RESEARCH. Not a spec yet, no fix designed.** ("Draft" is reserved elsewhere in `specs/` for a fully-specified, ready-to-implement spec that just hasn't been built yet — this is earlier-stage than that, hence living in `specs/needs-research/` instead.) This document exists to preserve investigation context across a reboot/session loss, per the project owner's explicit request (2026-07-04). Continue from "Next steps" below.
 
 ## Symptom (as reported by the project owner)
 - Button hover highlighting (the `ButtonState::Idle` → `Hover` color/tint change) stopped working.
