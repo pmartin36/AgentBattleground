@@ -74,4 +74,4 @@ High-level design specs for each segment of the game live in `/specs`:
 | 28 | [Anchor Margin Support](specs/completed/28-anchor-margin-support.md) ✅ |
 | 29 | [Tint Shape Invariance](specs/completed/29-tint-shape-invariance.md) ✅ |
 | 30 | [Asset Decode Caching](specs/completed/30-asset-decode-caching.md) ✅ |
-| 31 | [Engine / Game Crate Split](specs/31-engine-game-crate-split.md) |
+| 31 | [Engine / Game Crate Split](specs/completed/31-engine-game-crate-split.md) ✅ |
