@@ -41,6 +41,10 @@ name = "mkslash2"
 path = "src/mkslash2.rs"
 
 [[bin]]
+name = "mkslash3"
+path = "src/mkslash3.rs"
+
+[[bin]]
 name = "combat"
 path = "src/combat.rs"
 

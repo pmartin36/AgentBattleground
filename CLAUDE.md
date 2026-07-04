@@ -34,6 +34,7 @@ This is a two-product workspace (see `specs/completed/31-engine-game-crate-split
 - **This applies to cross-cutting mechanisms, not just content.** A mechanism every scene — or every future game built on this engine — would otherwise have to reinvent for itself belongs in `crates/engine/`, built so any caller inherits it automatically, including one that doesn't know the mechanism exists. It does not belong as opt-in code each `crates/game/` scene wires up for itself. (Precedent: `32-static-asset-rasterization-caching`.)
 - **Hard invariants**: no crate under `crates/engine/` contains `include_bytes!`-bundled game art, a closed enum of concrete scenes/creatures/pieces, or a path dependency on `crates/game`.
 - **When it's unclear which crate something belongs in, ask the project owner — do not guess and place it wherever compiles.**
+- **In-process code mutates engine-owned types (`Transform`, etc.) via direct typed field access — never construct an `apply_patch` string path for something reachable by assignment.** `apply_patch` is reserved for the wire/inspector protocol (`SceneManager`'s `ApplyState` handler) and tests of that protocol itself.
 
 ## Key Design Decisions Made
 

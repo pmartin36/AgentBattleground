@@ -1,6 +1,12 @@
 //! Depth-sorted compositor: blits multiple positioned `DotBuffer`s into one.
 
-use crate::dots::{Dot, DotBuffer};
+use crate::anim::AnimatedSprite;
+use crate::camera::{Camera, WorldPos};
+use crate::dots::{dots_to_grid_tinted, tint, Dot, DotBuffer};
+use crate::grid::Grid;
+use crate::transform::{place, Transform};
+use engine_core::color::Rgba;
+use std::time::Duration;
 
 /// A dot-buffer positioned at `(dot_x, dot_y)` in the destination, with a
 /// depth-sort key. Negative offsets are allowed (dots that fall outside the
@@ -49,14 +55,93 @@ pub fn composite_dots(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// composite_scene (b1-t1, spec 33)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The rasterizable content of one [`SpriteDraw`]. Today always `Animated`
+/// (mirrors `piece_shape_and_color`'s inputs: sprite + elapsed + transform +
+/// base_dot_rows).
+///
+/// Extension point (documented, NOT built): a future `Prerasterized(&'a
+/// DotBuffer)` variant is additive — existing `Animated` construction sites
+/// do not change when it is added.
+pub enum SpriteContent<'a> {
+    Animated {
+        sprite: &'a AnimatedSprite,
+        elapsed: Duration,
+        transform: &'a Transform,
+        base_dot_rows: u32,
+    },
+}
+
+/// One sprite to composite: what to rasterize (`content`), where to place it
+/// (`translate`, a world position — depth is derived from
+/// `camera.depth_key(translate)` inside `composite_scene`, not stored here),
+/// and an optional multiply-blend tint (`None` reuses the raw buffer for both
+/// the shape and color composite passes).
+pub struct SpriteDraw<'a> {
+    pub content: SpriteContent<'a>,
+    pub translate: WorldPos,
+    pub tint: Option<Rgba>,
+}
+
+/// Composite every `draws` entry into one `dot_cols`×`dot_rows` [`Grid`],
+/// back-to-front by `camera.depth_key(translate)`.
+///
+/// For each draw: rasterize per `content`; if `tint` is `Some(c)`, produce a
+/// separate tinted color buffer via [`crate::dots::tint`], else reuse the raw
+/// buffer for both the shape and color composite passes (the glyph mask is
+/// always decided from the untinted/shape buffer — tint never changes which
+/// dots are lit, only their RGB). Placement borrows [`place`], so depth comes
+/// from the shared `camera`, not an explicit field.
+pub fn composite_scene<C: Camera>(
+    dot_cols: usize,
+    dot_rows: usize,
+    camera: &C,
+    draws: &[SpriteDraw],
+) -> Grid {
+    let mut raws: Vec<DotBuffer> = Vec::with_capacity(draws.len());
+    let mut tints: Vec<Option<DotBuffer>> = Vec::with_capacity(draws.len());
+    for d in draws {
+        let raw = match &d.content {
+            SpriteContent::Animated {
+                sprite,
+                elapsed,
+                transform,
+                base_dot_rows,
+            } => sprite.rasterize_at(*elapsed, transform, *base_dot_rows),
+        };
+        let tinted = d.tint.map(|c| tint(&raw, c));
+        raws.push(raw);
+        tints.push(tinted);
+    }
+
+    let mut shape_p = Vec::with_capacity(draws.len());
+    let mut color_p = Vec::with_capacity(draws.len());
+    for (i, d) in draws.iter().enumerate() {
+        let raw = &raws[i];
+        let color_buf = tints[i].as_ref().unwrap_or(raw);
+        shape_p.push(place(raw, d.translate, camera));
+        color_p.push(place(color_buf, d.translate, camera));
+    }
+
+    let shape = composite_dots(dot_cols, dot_rows, &shape_p);
+    let color = composite_dots(dot_cols, dot_rows, &color_p);
+    dots_to_grid_tinted(&shape, &color)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dots::{Dot, DotBuffer};
+    use crate::camera::SideView;
+    use crate::dots::{dots_to_grid, Dot, DotBuffer};
+    use crate::grid::Cell;
     use engine_core::color::Rgba;
+    use image::{DynamicImage, Rgba as PixelRgba, RgbaImage};
 
     // ── composite_dots tests ──────────────────────────────────────────────────
 
@@ -210,5 +295,292 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── composite_scene tests (b1-t1, spec 33) ────────────────────────────────
+
+    /// Build a uniform RGBA image where every pixel is `(r, g, b, a)`.
+    fn solid_image(w: u32, h: u32, r: u8, g: u8, b: u8, a: u8) -> DynamicImage {
+        let mut raw = RgbaImage::new(w, h);
+        for p in raw.pixels_mut() {
+            *p = PixelRgba([r, g, b, a]);
+        }
+        DynamicImage::from(raw)
+    }
+
+    /// An image opaque on the left half, fully transparent on the right half.
+    /// Source width == `dot_cols` so the resize is an identity (mirrors
+    /// `transform.rs`'s test helper of the same name).
+    fn half_opaque_image(dot_cols: u32, dot_rows: u32, r: u8, g: u8, b: u8) -> DynamicImage {
+        let mut raw = RgbaImage::new(dot_cols, dot_rows);
+        for y in 0..dot_rows {
+            for x in 0..dot_cols {
+                let a = if x < dot_cols / 2 { 255u8 } else { 0u8 };
+                raw.put_pixel(x, y, PixelRgba([r, g, b, a]));
+            }
+        }
+        DynamicImage::from(raw)
+    }
+
+    /// Hand multiply-blend one channel, matching `dots::tint`'s formula:
+    /// `floor(src * c / 255)`.
+    fn mul(src: u8, c: u8) -> u8 {
+        ((src as u16 * c as u16) / 255) as u8
+    }
+
+    /// Test-only camera that decouples `project` (fixed) from `depth_key`
+    /// (`pos.x`) — needed to place two draws at the *same* screen position
+    /// with *different* depths, which `SideView` cannot do (it couples both
+    /// to `pos.y`).
+    struct FixedProjectCamera {
+        project: (i32, i32),
+    }
+
+    impl Camera for FixedProjectCamera {
+        fn project(&self, _pos: WorldPos) -> (i32, i32) {
+            self.project
+        }
+        fn depth_key(&self, pos: WorldPos) -> i32 {
+            pos.x as i32
+        }
+    }
+
+    /// Extract `(ch-agnostic) color` from a `Cell::Glyph`, panicking with a
+    /// clear message if the cell is unexpectedly `Transparent`.
+    fn glyph_color(cell: Cell) -> Rgba {
+        match cell {
+            Cell::Glyph { color, .. } => color,
+            Cell::Transparent => panic!("expected Cell::Glyph, got Cell::Transparent"),
+        }
+    }
+
+    /// Two overlapping `Animated` draws at distinct depths (via
+    /// `FixedProjectCamera`, so both project to the identical screen dot)
+    /// must composite nearer-wins: the higher-depth (blue) draw must be what
+    /// ends up in the output, matching `composite_dots_near_lit_over_far_wins`
+    /// at the `composite_scene` level.
+    #[test]
+    fn composite_scene_depth_orders_back_to_front() {
+        let far_sprite =
+            AnimatedSprite::new(vec![solid_image(2, 4, 255, 0, 0, 255)], Duration::from_millis(100));
+        let near_sprite =
+            AnimatedSprite::new(vec![solid_image(2, 4, 0, 0, 255, 255)], Duration::from_millis(100));
+        let transform = Transform::default();
+        let camera = FixedProjectCamera { project: (1, 2) };
+
+        let draws = [
+            SpriteDraw {
+                content: SpriteContent::Animated {
+                    sprite: &far_sprite,
+                    elapsed: Duration::ZERO,
+                    transform: &transform,
+                    base_dot_rows: 4,
+                },
+                translate: WorldPos::new(0.0, 0.0), // depth 0 (far)
+                tint: None,
+            },
+            SpriteDraw {
+                content: SpriteContent::Animated {
+                    sprite: &near_sprite,
+                    elapsed: Duration::ZERO,
+                    transform: &transform,
+                    base_dot_rows: 4,
+                },
+                translate: WorldPos::new(5.0, 0.0), // depth 5 (near)
+                tint: None,
+            },
+        ];
+
+        let grid = composite_scene(2, 4, &camera, &draws);
+
+        assert_eq!(
+            glyph_color(grid.get(0, 0)),
+            Rgba::rgb(0, 0, 255),
+            "nearer (depth=5, blue) draw must win over farther (depth=0, red) draw"
+        );
+    }
+
+    /// A `tint: Some(c)` draw over a uniform fully-opaque gray (200,200,200)
+    /// source must multiply-blend every lit cell's color to the hand-derived
+    /// value, and produce the identical (fully-lit) glyph topology for two
+    /// different tint colors — the mask never depends on the tint value.
+    /// Ports `piece_dots_tints_each_team_distinctly_via_multiply_blend` +
+    /// `piece_shape_and_color_untinted_carries_raw_source_rgb`.
+    #[test]
+    fn composite_scene_tint_multiplies_and_mask_invariant() {
+        let sprite =
+            AnimatedSprite::new(vec![solid_image(4, 8, 200, 200, 200, 255)], Duration::from_millis(100));
+        let transform = Transform::default();
+        let camera = FixedProjectCamera { project: (2, 4) };
+
+        let tint_a = Rgba::rgb(255, 232, 176);
+        let expected_a = Rgba::rgb(mul(200, 255), mul(200, 232), mul(200, 176));
+        let tint_b = Rgba::rgb(176, 255, 224);
+        let expected_b = Rgba::rgb(mul(200, 176), mul(200, 255), mul(200, 224));
+        assert_ne!(expected_a, expected_b, "sanity: the two hand-derived tints must differ");
+
+        for (c, expected) in [(tint_a, expected_a), (tint_b, expected_b)] {
+            let draws = [SpriteDraw {
+                content: SpriteContent::Animated {
+                    sprite: &sprite,
+                    elapsed: Duration::ZERO,
+                    transform: &transform,
+                    base_dot_rows: 8,
+                },
+                translate: WorldPos::new(0.0, 0.0),
+                tint: Some(c),
+            }];
+            let grid = composite_scene(4, 8, &camera, &draws);
+
+            assert_eq!(grid.cols(), 2, "canvas 4 dots wide -> 2 cell columns");
+            assert_eq!(grid.rows(), 2, "canvas 8 dots tall -> 2 cell rows");
+            for row in 0..grid.rows() {
+                for col in 0..grid.cols() {
+                    assert_eq!(
+                        glyph_color(grid.get(col, row)),
+                        expected,
+                        "cell ({col},{row}) must equal the multiply-blend of (200,200,200) with tint {c:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// For a `tint: Some(c)` draw over a half-opaque/half-transparent source,
+    /// the resulting glyph topology (which cells are `Glyph` vs
+    /// `Transparent`) must be identical for two different tint values — tint
+    /// changes color only, never which dots the shape buffer marks lit.
+    /// Ports `piece_shape_and_color_topology_parity`.
+    #[test]
+    fn composite_scene_shape_color_topology_parity() {
+        let camera = FixedProjectCamera { project: (2, 4) };
+        let transform = Transform::default();
+
+        let mut topologies = Vec::new();
+        for c in [Rgba::rgb(255, 232, 176), Rgba::rgb(176, 255, 224)] {
+            let sprite = AnimatedSprite::new(
+                vec![half_opaque_image(4, 8, 10, 20, 30)],
+                Duration::from_millis(100),
+            );
+            let draws = [SpriteDraw {
+                content: SpriteContent::Animated {
+                    sprite: &sprite,
+                    elapsed: Duration::ZERO,
+                    transform: &transform,
+                    base_dot_rows: 8,
+                },
+                translate: WorldPos::new(0.0, 0.0),
+                tint: Some(c),
+            }];
+            let grid = composite_scene(4, 8, &camera, &draws);
+
+            let topology: Vec<bool> = (0..grid.rows())
+                .flat_map(|row| (0..grid.cols()).map(move |col| (col, row)))
+                .map(|(col, row)| grid.get(col, row) != Cell::Transparent)
+                .collect();
+            topologies.push(topology);
+        }
+
+        assert_eq!(
+            topologies[0], topologies[1],
+            "glyph Transparent/Glyph topology must be identical across different tint values"
+        );
+        // Left column (source opaque half) must be Glyph; right column
+        // (source transparent half) must stay Transparent.
+        assert!(topologies[0][0], "cell (0,0) over the opaque half must be Glyph");
+        assert!(!topologies[0][1], "cell (1,0) over the transparent half must be Transparent");
+    }
+
+    /// Two non-overlapping draws sharing the same `content` but different
+    /// per-draw `tint` values must each carry their own tinted color in their
+    /// own output region — the tint is read from `SpriteDraw::tint`, not a
+    /// shared/cached default. Adapts `piece_dots_reads_piece_color_field_not_team_default`'s
+    /// intent (no `Piece`/`piece.color` at this layer).
+    #[test]
+    fn composite_scene_reads_per_draw_tint_not_shared() {
+        let sprite =
+            AnimatedSprite::new(vec![solid_image(4, 8, 200, 200, 200, 255)], Duration::from_millis(100));
+        let transform = Transform::default();
+        let camera = SideView::new(1.0);
+
+        let tint_a = Rgba::rgb(255, 232, 176);
+        let expected_a = Rgba::rgb(mul(200, 255), mul(200, 232), mul(200, 176));
+        let tint_b = Rgba::rgb(176, 255, 224);
+        let expected_b = Rgba::rgb(mul(200, 176), mul(200, 255), mul(200, 224));
+
+        let draws = [
+            SpriteDraw {
+                content: SpriteContent::Animated {
+                    sprite: &sprite,
+                    elapsed: Duration::ZERO,
+                    transform: &transform,
+                    base_dot_rows: 8,
+                },
+                translate: WorldPos::new(4.0, 8.0), // buffer occupies dot cols [2,6) rows [4,12)
+                tint: Some(tint_a),
+            },
+            SpriteDraw {
+                content: SpriteContent::Animated {
+                    sprite: &sprite,
+                    elapsed: Duration::ZERO,
+                    transform: &transform,
+                    base_dot_rows: 8,
+                },
+                translate: WorldPos::new(24.0, 8.0), // buffer occupies dot cols [22,26) rows [4,12)
+                tint: Some(tint_b),
+            },
+        ];
+
+        let grid = composite_scene(32, 16, &camera, &draws);
+
+        // Interior dot (3,6) of draw A's region -> cell (1,1).
+        assert_eq!(
+            glyph_color(grid.get(1, 1)),
+            expected_a,
+            "draw A's region must carry draw A's own tint, not draw B's"
+        );
+        // Interior dot (23,6) of draw B's region -> cell (11,1).
+        assert_eq!(
+            glyph_color(grid.get(11, 1)),
+            expected_b,
+            "draw B's region must carry draw B's own tint, not draw A's"
+        );
+    }
+
+    /// A `tint: None` draw must composite the identical raw buffer into both
+    /// the shape and color passes — i.e. `composite_scene`'s output for a
+    /// single untinted draw must equal manually compositing that one raw
+    /// buffer and converting via `dots_to_grid` (no separate/divergent
+    /// untinted computation). Ports
+    /// `piece_shape_and_color_tinted_matches_piece_dots`'s delegation-pin intent.
+    #[test]
+    fn composite_scene_untinted_uses_same_buffer_for_shape_and_color() {
+        let sprite =
+            AnimatedSprite::new(vec![solid_image(4, 8, 200, 150, 100, 255)], Duration::from_millis(100));
+        let transform = Transform::default();
+        let camera = FixedProjectCamera { project: (2, 4) };
+        let translate = WorldPos::new(0.0, 0.0);
+
+        let raw = sprite.rasterize_at(Duration::ZERO, &transform, 8);
+        let placement = place(&raw, translate, &camera);
+        let composited = composite_dots(4, 8, &[placement]);
+        let expected = dots_to_grid(&composited);
+
+        let draws = [SpriteDraw {
+            content: SpriteContent::Animated {
+                sprite: &sprite,
+                elapsed: Duration::ZERO,
+                transform: &transform,
+                base_dot_rows: 8,
+            },
+            translate,
+            tint: None,
+        }];
+        let actual = composite_scene(4, 8, &camera, &draws);
+
+        assert_eq!(
+            actual, expected,
+            "untinted composite_scene output must match manually compositing the raw buffer into both shape and color"
+        );
     }
 }
