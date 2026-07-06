@@ -19,9 +19,9 @@ use crate::scene_id::SceneId;
 
 /// Single source of truth for the board's column count. Every downstream
 /// consumer must reference this constant, never a bare literal `8`.
-pub const BOARD_COLS: u16 = 8;
+pub const BOARD_COLS: u16 = 7;
 /// Single source of truth for the board's row count.
-pub const BOARD_ROWS: u16 = 8;
+pub const BOARD_ROWS: u16 = 7;
 
 /// Shared per-frame board/camera geometry, derived once from the render
 /// `area` and consumed identically by board-line rendering and piece
@@ -72,7 +72,7 @@ pub fn board_geometry(area: Rect) -> BoardGeometry {
 /// boundary (dx=0 within its terminal cell) and one dot-row per horizontal
 /// boundary (dy=0 within its terminal cell), converts via `dots_to_grid`, and
 /// blits via `draw_grid` — junctions emerge purely as the bitwise union of
-/// overlapping lit dots, no special-cased glyph table. Point-8 fencepost: the
+/// overlapping lit dots, no special-cased glyph table. Point-7 fencepost: the
 /// outermost right/bottom boundary would land one dot past the last valid dot
 /// index, so it is clamped to the last valid dot (one dot short) instead.
 /// Cell interiors are left `Transparent` (lines only). Clips instead of
@@ -510,22 +510,24 @@ mod board_geometry_tests {
     use engine_render::{draw_grid, Cell, Grid};
     use engine_core::color::Rgba;
 
-    /// Exact-fit area: 128x64 fits exactly 8 cells of 16x8 dots each.
+    /// Exact-fit area: 128x64 against a 7x7 grid — 126x63 is the largest
+    /// board that nearly fills the area (128x64 is not an exact fit for 7
+    /// cells; see the point-7 rounding in `board_geometry`).
     #[test]
     fn exact_fit_area() {
         let g = board_geometry(Rect::new(0, 0, 128, 64));
-        assert_eq!(g.cell_height_rows, 8);
-        assert_eq!(g.cell_width_cols, 16);
-        assert_eq!(g.board_rect, Rect::new(0, 0, 128, 64));
-        assert_eq!(g.camera.scale_dots, 32.0);
+        assert_eq!(g.cell_height_rows, 9);
+        assert_eq!(g.cell_width_cols, 18);
+        assert_eq!(g.board_rect, Rect::new(1, 0, 126, 63));
+        assert_eq!(g.camera.scale_dots, 36.0);
     }
 
     /// Oversized area: geometry is centered within the larger area.
     #[test]
     fn oversized_area_is_centered() {
         let g = board_geometry(Rect::new(5, 5, 200, 100));
-        assert_eq!(g.cell_height_rows, 12);
-        assert_eq!(g.board_rect, Rect::new(9, 7, 192, 96));
+        assert_eq!(g.cell_height_rows, 14);
+        assert_eq!(g.board_rect, Rect::new(7, 6, 196, 98));
     }
 
     /// Height-constrained area: height is the limiting dimension.
@@ -533,7 +535,7 @@ mod board_geometry_tests {
     fn height_constrained_area() {
         let g = board_geometry(Rect::new(0, 0, 300, 40));
         assert_eq!(g.cell_height_rows, 5);
-        assert_eq!(g.board_rect, Rect::new(110, 0, 80, 40));
+        assert_eq!(g.board_rect, Rect::new(115, 2, 70, 35));
     }
 
     /// Width-constrained area: width is the limiting dimension.
@@ -541,7 +543,7 @@ mod board_geometry_tests {
     fn width_constrained_area() {
         let g = board_geometry(Rect::new(0, 0, 50, 300));
         assert_eq!(g.cell_height_rows, 3);
-        assert_eq!(g.board_rect, Rect::new(1, 138, 48, 24));
+        assert_eq!(g.board_rect, Rect::new(4, 139, 42, 21));
     }
 
     /// Tiny area clamps to cell_height_rows == 1 and does not panic.
@@ -572,12 +574,12 @@ mod board_geometry_tests {
         }
     }
 
-    /// The board-size constants are exactly 8x8 and must be referenced (not
+    /// The board-size constants are exactly 7x7 and must be referenced (not
     /// re-hardcoded) by every downstream consumer.
     #[test]
-    fn board_size_constants_are_8x8() {
-        assert_eq!(BOARD_COLS, 8);
-        assert_eq!(BOARD_ROWS, 8);
+    fn board_size_constants_are_7x7() {
+        assert_eq!(BOARD_COLS, 7);
+        assert_eq!(BOARD_ROWS, 7);
     }
 
     /// Cross-check: board_geometry's centering derivation must land at the
@@ -625,20 +627,22 @@ mod draw_board_lines_tests {
     use ratatui::style::Color;
 
     /// Hand-picked geometry used by every case below: board_rect origin
-    /// (2,1), cell_width_cols=4, cell_height_rows=2, in a 40x20 buffer.
-    /// DotBuffer is board_rect.width*2 x board_rect.height*4 = 64x64 dots
-    /// (8x8 dots per board cell). Vertical boundaries i=0..=8 land at
-    /// terminal x in {2,6,10,14,18,22,26,30, 33(clamped)}; horizontal
-    /// boundaries j=0..=8 land at terminal y in
-    /// {1,3,5,7,9,11,13,15, 16(clamped)}. For every i<8/j<8 the boundary's
-    /// dot sits at dx=0/dy=0 within its terminal cell (exact, no clamp); only
-    /// the outermost i==8/j==8 boundary clamps to the LAST valid dot index
+    /// (2,1), cell_width_cols=4, cell_height_rows=2, sized for a 7x7 grid
+    /// (board_rect 28x14) in a 40x20 buffer. DotBuffer is
+    /// board_rect.width*2 x board_rect.height*4 = 56x56 dots (8x8 dots per
+    /// board cell, 7 cells per side — `draw_board_lines` iterates
+    /// `0..=BOARD_COLS`/`0..=BOARD_ROWS`, both 7). Vertical boundaries
+    /// i=0..=7 land at terminal x in {2,6,10,14,18,22,26, 29(clamped)};
+    /// horizontal boundaries j=0..=7 land at terminal y in
+    /// {1,3,5,7,9,11,13, 14(clamped)}. For every i<7/j<7 the boundary's dot
+    /// sits at dx=0/dy=0 within its terminal cell (exact, no clamp); only the
+    /// outermost i==7/j==7 boundary clamps to the LAST valid dot index
     /// (dx=1/dy=3 — one dot short of board_rect.right()/bottom()).
     fn geom() -> BoardGeometry {
         BoardGeometry {
             cell_width_cols: 4,
             cell_height_rows: 2,
-            board_rect: Rect::new(2, 1, 32, 16),
+            board_rect: Rect::new(2, 1, 28, 14),
             camera: SideView::new(8.0),
         }
     }
@@ -722,26 +726,27 @@ mod draw_board_lines_tests {
         assert_eq!(buf.cell((4, 2)).unwrap().symbol(), "X");
     }
 
-    /// Point-8 fencepost resolution (chosen: clamp to the last valid dot
-    /// index, one dot short): board_rect=(2,1,32,16) -> right()=34, so the
-    /// outermost vertical boundary (i=8) cannot sit at dot_x=64 (one past the
-    /// last valid dot 63); it clamps to dot_x=63, landing in the RIGHT
-    /// dot-column (dx=1) of the LAST valid cell (terminal x=33), not at x=34.
-    /// That cell's top-right corner: right dot-column full height (mask 0xB8)
-    /// union top dot-row full width (mask 0x09) = mask 0xB9 -> '\u{28B9}'.
-    /// Nothing is drawn at the naive unclamped position x=34.
+    /// Point-7 fencepost resolution (chosen: clamp to the last valid dot
+    /// index, one dot short): board_rect=(2,1,28,14) -> right()=30, so the
+    /// outermost vertical boundary (i=7, since `draw_board_lines` iterates
+    /// `0..=BOARD_COLS` and `BOARD_COLS==7`) cannot sit at dot_x=56 (one past
+    /// the last valid dot 55); it clamps to dot_x=55, landing in the RIGHT
+    /// dot-column (dx=1) of the LAST valid cell (terminal x=29), not at
+    /// x=30. That cell's top-right corner: right dot-column full height
+    /// (mask 0xB8) union top dot-row full width (mask 0x09) = mask 0xB9 ->
+    /// '\u{28B9}'. Nothing is drawn at the naive unclamped position x=30.
     #[test]
     fn far_boundary_is_clamped_one_dot_short_not_out_of_bounds() {
         let g = geom();
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 20));
         draw_board_lines(&mut buf, &g);
 
-        let clamped = buf.cell((33, 1)).unwrap();
+        let clamped = buf.cell((29, 1)).unwrap();
         assert_eq!(clamped.symbol(), "\u{28B9}");
         assert_eq!(clamped.fg, grid_fg());
 
         assert_eq!(
-            buf.cell((34, 1)).unwrap().symbol(),
+            buf.cell((30, 1)).unwrap().symbol(),
             " ",
             "nothing must be drawn one dot past board_rect's right edge"
         );
@@ -808,17 +813,21 @@ mod piece_layout_tests {
     use super::*;
     use std::collections::HashSet;
 
-    /// 12 pieces total: 6 Team A on row 0, 6 Team B on row BOARD_ROWS-1, each
-    /// team's columns exactly {1,2,3,4,5,6}, no duplicates.
+    /// CURRENT (pre-b3-t1) transitional layout over the 7x7 board: the
+    /// unchanged `1..(BOARD_COLS - 1)`-per-edge-row formula now yields 5 per
+    /// team / 10 total, not the old 8x8 board's 6 per team / 12 total, and
+    /// not yet b3-t1's designed 3-active+1-bench/8-total layout. This test
+    /// pins today's actual `pieces()` output so the gate stays green until
+    /// b3-t1 rewrites `pieces()` (and this test) for the final layout.
     #[test]
-    fn pieces_are_6v6_on_the_edge_rows() {
+    fn pieces_are_5v5_on_the_edge_rows() {
         let ps = pieces();
-        assert_eq!(ps.len(), 12, "expected exactly 12 pieces");
+        assert_eq!(ps.len(), 10, "expected exactly 10 pieces");
 
         let team_a: Vec<&Piece> = ps.iter().filter(|p| p.team == Team::A).collect();
         let team_b: Vec<&Piece> = ps.iter().filter(|p| p.team == Team::B).collect();
-        assert_eq!(team_a.len(), 6, "expected 6 Team A pieces");
-        assert_eq!(team_b.len(), 6, "expected 6 Team B pieces");
+        assert_eq!(team_a.len(), 5, "expected 5 Team A pieces");
+        assert_eq!(team_b.len(), 5, "expected 5 Team B pieces");
 
         assert!(
             team_a.iter().all(|p| p.row == 0),
@@ -829,27 +838,28 @@ mod piece_layout_tests {
             "all Team B pieces must be on row BOARD_ROWS - 1"
         );
 
-        let expected_cols: HashSet<u16> = (1..=6).collect();
+        let expected_cols: HashSet<u16> = (1..=5).collect();
         let a_cols: HashSet<u16> = team_a.iter().map(|p| p.col).collect();
         let b_cols: HashSet<u16> = team_b.iter().map(|p| p.col).collect();
-        assert_eq!(a_cols, expected_cols, "Team A columns must be {{1..6}}");
-        assert_eq!(b_cols, expected_cols, "Team B columns must be {{1..6}}");
+        assert_eq!(a_cols, expected_cols, "Team A columns must be {{1..5}}");
+        assert_eq!(b_cols, expected_cols, "Team B columns must be {{1..5}}");
 
         let unique: HashSet<(bool, u16, u16)> = ps
             .iter()
             .map(|p| (p.team == Team::A, p.col, p.row))
             .collect();
-        assert_eq!(unique.len(), 12, "no duplicate (team, col, row) entries");
+        assert_eq!(unique.len(), 10, "no duplicate (team, col, row) entries");
     }
 
-    /// Piece indices form the stable set 0..12, with no gaps or duplicates —
+    /// Piece indices form the stable set 0..10 (transitional 10-piece
+    /// layout; b3-t1 will re-pin this to 0..8), with no gaps or duplicates —
     /// b4-t3's phase-stagger depends on this.
     #[test]
-    fn piece_indices_are_stable_0_to_11() {
+    fn piece_indices_are_stable_0_to_9() {
         let ps = pieces();
         let mut indices: Vec<usize> = ps.iter().map(|p| p.index).collect();
         indices.sort_unstable();
-        assert_eq!(indices, (0..12).collect::<Vec<_>>());
+        assert_eq!(indices, (0..10).collect::<Vec<_>>());
     }
 
     /// world_pos_for_cell must return the cell CENTER, not the corner — pins
@@ -1557,7 +1567,7 @@ mod overlapping_events_tests {
         );
         assert_eq!(
             (scene.pieces[6].col, scene.pieces[6].row),
-            (1, TEAM_B_ROW),
+            (2, TEAM_B_ROW),
             "the Die piece's col/row must be untouched by the simultaneously-active Move event"
         );
         assert_eq!(
@@ -1615,12 +1625,16 @@ mod battle_viewer_scene_wiring_tests {
 
     /// DELIVERABLE (2)+(3): sprite glyph cells are present in both the top
     /// half (Team A) and bottom half (Team B) of the board, and the two
-    /// halves' sets of glyph colors are disjoint — proving the two teams
-    /// render with genuinely distinct (multiply-blend-tinted) palettes rather
-    /// than the same untinted sprite in both places. Does not assert exact
-    /// RGB values, since multiply-blend against the real (non-uniform) wizard
-    /// sprite doesn't average to a single flat color the way a full
-    /// color-replace would have.
+    /// halves' sets of glyph colors are disjoint (aside from pure black),
+    /// proving the two teams render with genuinely distinct
+    /// (multiply-blend-tinted) palettes rather than the same untinted sprite
+    /// in both places. Does not assert exact RGB values, since multiply-blend
+    /// against the real (non-uniform) wizard sprite doesn't average to a
+    /// single flat color the way a full color-replace would have. Pure black
+    /// `(0,0,0)` is excluded from the disjointness check: `mul(src, c) =
+    /// floor(src*c/255)` (composite.rs) means a black outline/shadow source
+    /// pixel stays `(0,0,0)` under ANY tint, so it is legitimately shared by
+    /// both teams, not evidence of untinted bleed.
     #[test]
     fn team_tinted_cells_present_and_banded_by_team() {
         use std::collections::HashSet;
@@ -1646,6 +1660,9 @@ mod battle_viewer_scene_wiring_tests {
                     continue; // board grid-line glyph, not piece tint
                 }
                 if let Color::Rgb(r, g, b) = cell.fg {
+                    if (r, g, b) == (0, 0, 0) {
+                        continue; // tint-invariant black outline/shadow, shared by design
+                    }
                     if y < mid_y {
                         top_colors.insert((r, g, b));
                     } else {
@@ -1951,11 +1968,12 @@ mod battle_viewer_scene_wiring_tests {
 
     /// b3-t1 DELIVERABLE: `BattleViewer::default().pieces` is seeded from the
     /// same layout logic as the free `pieces()` function — a real, owned
-    /// field, not a divergent copy or an empty placeholder.
+    /// field, not a divergent copy or an empty placeholder. Count is the
+    /// CURRENT transitional 10-piece layout (b3-t1 will re-pin to 8).
     #[test]
-    fn default_seeds_twelve_pieces_from_layout() {
+    fn default_seeds_ten_pieces_from_layout() {
         let scene = BattleViewer::default();
-        assert_eq!(scene.pieces.len(), 12, "expected 12 seeded pieces");
+        assert_eq!(scene.pieces.len(), 10, "expected 10 seeded pieces");
         assert_eq!(
             scene.pieces,
             pieces(),
@@ -2103,11 +2121,12 @@ mod inspectable_tests {
         );
     }
 
-    /// DELIVERABLE: the fixed 12-piece layout (b4-t2) round-trips through
-    /// `snapshot()` as a `pieces` array of exactly 12 Piece-shaped objects,
-    /// and the hidden `sprite` field never appears in the snapshot either.
+    /// DELIVERABLE: the CURRENT transitional 10-piece layout round-trips
+    /// through `snapshot()` as a `pieces` array of exactly 10 Piece-shaped
+    /// objects, and the hidden `sprite` field never appears in the snapshot
+    /// either. b3-t1 will re-pin this to 8 once it rewrites `pieces()`.
     #[test]
-    fn battle_viewer_default_snapshot_has_twelve_piece_shaped_elements_and_hides_sprite() {
+    fn battle_viewer_default_snapshot_has_ten_piece_shaped_elements_and_hides_sprite() {
         let scene = BattleViewer::default();
         let snap = scene.snapshot();
         let obj = snap.as_object().expect("BattleViewer snapshot must be a JSON object");
@@ -2122,7 +2141,7 @@ mod inspectable_tests {
             .expect("pieces key must be present")
             .as_array()
             .expect("pieces snapshot must be an array");
-        assert_eq!(pieces.len(), 12, "expected 12 seeded pieces in the snapshot");
+        assert_eq!(pieces.len(), 10, "expected 10 seeded pieces in the snapshot");
         for p in pieces {
             let p = p.as_object().expect("each piece snapshot must be an object");
             for key in ["col", "row", "team", "index", "transform", "color"] {
