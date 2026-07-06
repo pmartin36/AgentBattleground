@@ -1,0 +1,52 @@
+[package]
+name = "roster_name_banner"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "roster_name_banner"
+path = "src/main.rs"
+
+[dependencies]
+engine-core = { version = "0.1.0", path = "../../crates/engine/core" }
+engine-render = { version = "0.1.0", path = "../../crates/engine/render" }
+ratatui = "0.29"
+ratatui-core = "0.1.2"
+tui-big-text = "0.8.8"
+
+[[bin]]
+name = "bigtext_check"
+path = "src/bigtext_check.rs"
+
+[[bin]]
+name = "braille_name"
+path = "src/braille_name.rs"
+
+[[bin]]
+name = "braille_name_bold"
+path = "src/braille_name_bold.rs"
+
+[[bin]]
+name = "braille_name_italic"
+path = "src/braille_name_italic.rs"
+
+[[bin]]
+name = "braille_name_sgr_style"
+path = "src/braille_name_sgr_style.rs"
+
+[[bin]]
+name = "braille_name_bold_italic"
+path = "src/braille_name_bold_italic.rs"
+
+[[bin]]
+name = "braille_alphabet"
+path = "src/braille_alphabet.rs"
+
+[[bin]]
+name = "braille_q_variants"
+path = "src/braille_q_variants.rs"
+
+[lib]
+name = "roster_name_banner"
+path = "src/lib.rs"
+

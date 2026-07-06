@@ -48,6 +48,29 @@ struct Slide {
     start: Duration,
 }
 
+/// The 7 named panel rects `layout()` splits `area` into (b1-t3,
+/// research.md). `name`/`sprite`/`dot_row` are the pre-existing bands;
+/// `level`/`stat_bar`/`exhaustion`/`ability_list` are new — b2 tasks render
+/// into them. Only `sprite` is offset during a slide; every other rect is
+/// drawn statically at the resting column regardless of `col_offset`.
+#[derive(Clone, Copy, Debug)]
+struct RosterLayout {
+    name: Rect,
+    // Rendered starting b2-t2..t5 (level bar, stat bar, exhaustion meter,
+    // ability list); unread this task by design — keep the fields, not the
+    // lint suppression, once those tasks land.
+    #[allow(dead_code)]
+    level: Rect,
+    #[allow(dead_code)]
+    stat_bar: Rect,
+    #[allow(dead_code)]
+    exhaustion: Rect,
+    #[allow(dead_code)]
+    ability_list: Rect,
+    sprite: Rect,
+    dot_row: Rect,
+}
+
 impl RosterManager {
     /// Width/height of the left/right arrow buttons flanking the sprite.
     const ARROW_W: u16 = 6;
@@ -64,30 +87,70 @@ impl RosterManager {
     /// Duration of the slide transition between roster positions.
     const SLIDE_DUR: Duration = Duration::from_millis(300);
 
-    /// Splits `area` into `(sprite_rect, name_rect, dots_rect)`: the bottom
-    /// two rows are reserved for the name label and the 6-dot position
-    /// indicator row, with the sprite occupying the remaining region above,
-    /// inset horizontally by `ARROW_W` on each side to make room for the
-    /// left/right arrow buttons (b4-t2). Sprite centering is delegated to
-    /// `draw_grid`; name centering to `label`; dot-row slotting to
-    /// `dot_slots`.
-    fn layout(area: Rect) -> (Rect, Rect, Rect) {
-        let reserved = 2.min(area.height);
-        let sprite_h = area.height - reserved;
-        let sprite_rect = Rect::new(
+    /// Height (in rows) of the `name` band at the top of the frame.
+    const NAME_H: u16 = 3;
+    /// Height of the `level` band directly below `name`.
+    const LEVEL_H: u16 = 1;
+    /// Height of the `stat_bar`/`exhaustion` panel row below `level`.
+    const PANEL_H: u16 = 5;
+    /// Height of the `dot_row` band at the bottom of the frame.
+    const DOT_H: u16 = 2;
+
+    /// Splits `area` into the 7 named panel rects (b1-t3, research.md
+    /// blueprint), top to bottom: `name`, `level`, the `stat_bar`/
+    /// `exhaustion` panel row (split left/right), `sprite` (center band —
+    /// the only region that still slides), `dot_row`. `ability_list` sits
+    /// below `exhaustion`, sharing its column. Uses saturating arithmetic
+    /// throughout so small `area`s degrade to zero-height rects instead of
+    /// panicking.
+    fn layout(area: Rect) -> RosterLayout {
+        let name_h = Self::NAME_H.min(area.height);
+        let level_h = Self::LEVEL_H.min(area.height.saturating_sub(name_h));
+        let panel_h = Self::PANEL_H.min(area.height.saturating_sub(name_h + level_h));
+        let dot_h = Self::DOT_H.min(area.height.saturating_sub(name_h + level_h + panel_h));
+        let sprite_h = area
+            .height
+            .saturating_sub(name_h + level_h + panel_h + dot_h);
+
+        let name = Rect::new(area.x, area.y, area.width, name_h);
+        let level = Rect::new(area.x, area.y + name_h, area.width, level_h);
+
+        let panel_y = area.y + name_h + level_h;
+        let stat_bar_w = area.width / 2;
+        let stat_bar = Rect::new(area.x, panel_y, stat_bar_w, panel_h);
+        let exhaustion = Rect::new(
+            area.x + stat_bar_w,
+            panel_y,
+            area.width.saturating_sub(stat_bar_w),
+            panel_h,
+        );
+
+        let sprite_y = panel_y + panel_h;
+        let sprite = Rect::new(
             area.x + Self::ARROW_W,
-            area.y,
+            sprite_y,
             area.width.saturating_sub(2 * Self::ARROW_W),
             sprite_h,
         );
-        let name_rect = Rect::new(area.x, area.y + sprite_h, area.width, reserved.min(1));
-        let dots_rect = Rect::new(
-            area.x,
-            area.y + sprite_h + reserved.min(1),
-            area.width,
-            reserved.saturating_sub(1),
+
+        let ability_list = Rect::new(
+            exhaustion.x,
+            exhaustion.y + panel_h,
+            exhaustion.width,
+            sprite_h,
         );
-        (sprite_rect, name_rect, dots_rect)
+
+        let dot_row = Rect::new(area.x, sprite_y + sprite_h, area.width, dot_h);
+
+        RosterLayout {
+            name,
+            level,
+            stat_bar,
+            exhaustion,
+            ability_list,
+            sprite,
+            dot_row,
+        }
     }
 
     /// The 6 equal-width dot slots across `row`, centered as a group.
@@ -109,7 +172,7 @@ impl RosterManager {
     pub fn new() -> Self {
         Self {
             current_index: 0,
-            creatures: crate::creatures::all(),
+            creatures: crate::creatures::demo_roster(),
             elapsed: Duration::ZERO,
             left_button: RefCell::new(engine_render::Button::new(
                 Rect::default(),
@@ -135,7 +198,7 @@ impl RosterManager {
     /// and tests both call this rather than re-deriving it. Both rects are
     /// vertically centered on the sprite band established by `layout()`.
     fn arrow_rects(area: Rect) -> (Rect, Rect) {
-        let (sprite_rect, _, _) = Self::layout(area);
+        let sprite_rect = Self::layout(area).sprite;
         let band = Rect::new(area.x, sprite_rect.y, area.width, sprite_rect.height);
         // `layout()` reserves exactly `ARROW_W` columns beside the sprite on
         // each side, flush against it. Insetting a full-`ARROW_W`-wide button
@@ -225,14 +288,15 @@ impl RosterManager {
         (out_t.round() as i32, in_t.round() as i32)
     }
 
-    /// Renders the creature at `index`'s group (sprite + name + dot row) into
-    /// a throwaway zero-origin buffer sized like `area`, then blits every
-    /// non-space cell into `buf` shifted by `col_offset` columns — a true
-    /// screen-space translation that works with `Rect`'s unsigned `x`.
-    fn render_group(&self, buf: &mut Buffer, area: Rect, index: usize, col_offset: i32) {
+    /// Renders the creature at `index`'s SPRITE ONLY (b1-t3: name and dot row
+    /// are static panels drawn separately, never offset) into a throwaway
+    /// zero-origin buffer sized like `area`, then blits every non-space cell
+    /// into `buf` shifted by `col_offset` columns — a true screen-space
+    /// translation that works with `Rect`'s unsigned `x`.
+    fn render_sprite(&self, buf: &mut Buffer, area: Rect, index: usize, col_offset: i32) {
         let zero_area = Rect::new(0, 0, area.width, area.height);
         let mut tmp = Buffer::empty(zero_area);
-        let (sprite_rect, name_rect, dots_rect) = Self::layout(zero_area);
+        let sprite_rect = Self::layout(zero_area).sprite;
 
         let creature = &self.creatures[index];
         if let Some(sprite) = creature.animation(crate::creatures::AnimationKind::Idle) {
@@ -242,20 +306,6 @@ impl RosterManager {
                 let grid = engine_render::dots::dots_to_grid(&buf);
                 engine_render::draw_grid(&mut tmp, sprite_rect, &grid);
             }
-        }
-        // White — reads against the scene's dark/transparent background
-        // (there's no light panel behind this label the way FrameButton has).
-        engine_render::label(
-            &mut tmp,
-            name_rect,
-            creature.name(),
-            engine_core::color::Rgba::rgb(0xff, 0xff, 0xff),
-        );
-
-        for (i, slot) in Self::dot_slots(dots_rect).iter().enumerate() {
-            let bytes = if i == index { crate::assets::DOT_FILLED } else { crate::assets::DOT_UNFILLED };
-            let grid = engine_render::asset_cache::convert(bytes, *slot);
-            engine_render::draw_grid(&mut tmp, *slot, &grid);
         }
 
         for y in 0..area.height {
@@ -276,6 +326,37 @@ impl RosterManager {
                     *dest_cell = cell.clone();
                 }
             }
+        }
+    }
+
+    /// Draws `creatures[index]`'s name statically into `name_rect` — no
+    /// `col_offset`, so it never travels with an in-flight sprite slide
+    /// (b1-t3: name updates immediately with `current_index` regardless of
+    /// slide state).
+    fn render_name(&self, buf: &mut Buffer, name_rect: Rect, index: usize) {
+        let creature = &self.creatures[index];
+        // White — reads against the scene's dark/transparent background
+        // (there's no light panel behind this label the way FrameButton has).
+        engine_render::label(
+            buf,
+            name_rect,
+            creature.name(),
+            engine_core::color::Rgba::rgb(0xff, 0xff, 0xff),
+        );
+    }
+
+    /// Draws the 6-slot dot row statically into `dot_row_rect`, filled at
+    /// `self.current_index` — no `col_offset`, so it never travels with an
+    /// in-flight sprite slide (b1-t3).
+    fn render_dot_row(&self, buf: &mut Buffer, dot_row_rect: Rect) {
+        for (i, slot) in Self::dot_slots(dot_row_rect).iter().enumerate() {
+            let bytes = if i == self.current_index {
+                crate::assets::DOT_FILLED
+            } else {
+                crate::assets::DOT_UNFILLED
+            };
+            let grid = engine_render::asset_cache::convert(bytes, *slot);
+            engine_render::draw_grid(buf, *slot, &grid);
         }
     }
 }
@@ -312,13 +393,19 @@ impl Scene for RosterManager {
     }
 
     fn render(&self, frame: &mut Frame, area: Rect) {
+        let l = Self::layout(area);
+
         if let Some(slide) = self.active_slide() {
             let (out_off, in_off) = self.slide_offsets(area, slide);
-            self.render_group(frame.buffer_mut(), area, slide.prev_index, out_off);
-            self.render_group(frame.buffer_mut(), area, self.current_index, in_off);
+            self.render_sprite(frame.buffer_mut(), area, slide.prev_index, out_off);
+            self.render_sprite(frame.buffer_mut(), area, self.current_index, in_off);
         } else {
-            self.render_group(frame.buffer_mut(), area, self.current_index, 0);
+            self.render_sprite(frame.buffer_mut(), area, self.current_index, 0);
         }
+        // Static panels — no col_offset, so they never travel with an
+        // in-flight sprite slide (b1-t3).
+        self.render_name(frame.buffer_mut(), l.name, self.current_index);
+        self.render_dot_row(frame.buffer_mut(), l.dot_row);
 
         let (left_rect, right_rect) = Self::arrow_rects(area);
         {
@@ -387,11 +474,54 @@ mod tests {
         assert_eq!(
             rm.creatures.len(),
             6,
-            "RosterManager::new() must seed all 6 creatures from crate::creatures::all()"
+            "RosterManager::new() must seed all 6 creatures from crate::creatures::demo_roster()"
         );
         assert_eq!(rm.creatures[0].name(), "Ember Wolf");
         assert_eq!(rm.current_index, 0);
         assert_eq!(rm.elapsed, Duration::ZERO);
+    }
+
+    /// `RosterManager::new()` must source its roster from
+    /// `crate::creatures::demo_roster()`, not `crate::creatures::all()` — the
+    /// per-creature RPG fields (stats/level/abilities/exhaustion) must match
+    /// `demo_roster()` element-for-element, not `Creature::new`'s defaults
+    /// (level 1, `Stats::default()`, empty abilities).
+    #[test]
+    fn new_sources_rpg_fields_from_demo_roster() {
+        let rm = RosterManager::new();
+        let demo = crate::creatures::demo_roster();
+
+        for i in [0usize, 2usize] {
+            assert_eq!(
+                rm.creatures[i].level(),
+                demo[i].level(),
+                "creature {i} level must match demo_roster()"
+            );
+            assert_eq!(
+                rm.creatures[i].stats(),
+                demo[i].stats(),
+                "creature {i} stats must match demo_roster()"
+            );
+            assert_eq!(
+                rm.creatures[i].abilities(),
+                demo[i].abilities(),
+                "creature {i} abilities must match demo_roster()"
+            );
+            assert_eq!(
+                rm.creatures[i].exhaustion(),
+                demo[i].exhaustion(),
+                "creature {i} exhaustion must match demo_roster()"
+            );
+        }
+
+        // Guard against a missed swap: `all()`'s defaults would leave Ember
+        // Wolf at level 1, which demo_roster() overrides to level 5. This is
+        // the assertion that actually fails if `new()` still calls `all()`.
+        assert_ne!(
+            rm.creatures[0].level(),
+            1,
+            "RosterManager::new() must use demo_roster(), not all() (which defaults to level 1)"
+        );
     }
 
     #[test]
@@ -409,29 +539,69 @@ mod tests {
     }
 }
 
+/// b1-t3: `layout()`'s expanded 7-rect contract — the shared layout every
+/// b2 rendering task renders into.
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    /// `layout(area)` must order its bands top-to-bottom: name < level <
+    /// stat_bar/exhaustion row < sprite < dot_row, with `exhaustion` above
+    /// `ability_list`, and `stat_bar`/`exhaustion` must not horizontally
+    /// overlap (they share the same row, split left/right).
+    #[test]
+    fn layout_rects_ordered_top_to_bottom() {
+        let area = Rect::new(0, 0, 80, 30);
+        let l = RosterManager::layout(area);
+
+        assert!(l.name.y < l.level.y, "name.y ({}) must be above level.y ({})", l.name.y, l.level.y);
+        assert!(l.level.y < l.stat_bar.y, "level.y ({}) must be above stat_bar.y ({})", l.level.y, l.stat_bar.y);
+        assert_eq!(l.stat_bar.y, l.exhaustion.y, "stat_bar and exhaustion must share the same row (y={} vs y={})", l.stat_bar.y, l.exhaustion.y);
+        assert!(l.exhaustion.y < l.ability_list.y, "exhaustion.y ({}) must be above ability_list.y ({})", l.exhaustion.y, l.ability_list.y);
+        assert!(l.stat_bar.y < l.sprite.y, "stat_bar/exhaustion row ({}) must be above sprite.y ({})", l.stat_bar.y, l.sprite.y);
+        assert!(l.sprite.y < l.dot_row.y, "sprite.y ({}) must be above dot_row.y ({})", l.sprite.y, l.dot_row.y);
+
+        assert!(
+            l.stat_bar.right() <= l.exhaustion.left() || l.exhaustion.right() <= l.stat_bar.left(),
+            "stat_bar ({:?}) and exhaustion ({:?}) must not horizontally overlap",
+            l.stat_bar, l.exhaustion
+        );
+    }
+}
+
 #[cfg(test)]
 mod sprite_and_name_render_tests {
     use super::*;
     use engine_core::scene::EngineCtx;
     use crate::scenes::test_util::{render_to_buffer, row_containing};
 
-    /// A fresh `RosterManager::new()` (current_index == 0) renders the Ember
-    /// Wolf idle sprite centered above a name row that reads "Ember Wolf".
+    /// A fresh `RosterManager::new()` (current_index == 0) renders the "Ember
+    /// Wolf" name row at the TOP of the frame (b1-t3 layout inversion from
+    /// `24`, where the name sat below the sprite), with the sprite painting
+    /// non-space cells inside `layout().sprite` — the band below the name.
     #[test]
-    fn renders_index0_sprite_and_name() {
+    fn renders_index0_name_top_and_sprite_below() {
         let scene = RosterManager::new();
         let (w, h) = (40u16, 20u16);
         let buf = render_to_buffer(&scene, w, h);
 
+        let area = Rect::new(0, 0, w, h);
+        let sprite_rect = RosterManager::layout(area).sprite;
+
         let name_row = row_containing(&buf, w, h, "Ember Wolf")
             .expect("render must place the current creature's name ('Ember Wolf') somewhere on screen");
+        assert!(
+            name_row < sprite_rect.y,
+            "name row ({name_row}) must be above the sprite rect (starting at y={}) — name sits at the TOP band per b1-t3",
+            sprite_rect.y
+        );
 
-        let sprite_has_non_space = (0..name_row).any(|y| {
+        let sprite_has_non_space = (sprite_rect.top()..sprite_rect.bottom()).any(|y| {
             (0..w).any(|x| buf.cell((x, y)).unwrap().symbol() != " ")
         });
         assert!(
             sprite_has_non_space,
-            "render must paint at least one non-space cell in the sprite region above the name row"
+            "render must paint at least one non-space cell inside the sprite rect"
         );
     }
 
@@ -512,7 +682,7 @@ mod dot_row_render_tests {
         let buf = render_to_buffer(&scene, w, h);
 
         let area = Rect::new(0, 0, w, h);
-        let (_, _, dots_rect) = RosterManager::layout(area);
+        let dots_rect = RosterManager::layout(area).dot_row;
         let slots = RosterManager::dot_slots(dots_rect);
 
         let fgs: Vec<Color> = slots
@@ -542,7 +712,7 @@ mod dot_row_render_tests {
         let buf = render_to_buffer(&scene, w, h);
 
         let area = Rect::new(0, 0, w, h);
-        let (_, _, dots_rect) = RosterManager::layout(area);
+        let dots_rect = RosterManager::layout(area).dot_row;
         let slots = RosterManager::dot_slots(dots_rect);
 
         let fg0 = sample_fg(&buf, slots[0]).expect("slot 0 must paint at least one non-space cell");
@@ -631,7 +801,7 @@ mod arrow_button_tests {
 
         let area = Rect::new(0, 0, w, h);
         let (left_rect, _) = RosterManager::arrow_rects(area);
-        let (sprite_rect, _, _) = RosterManager::layout(area);
+        let sprite_rect = RosterManager::layout(area).sprite;
 
         assert!(
             has_non_space(&buf, left_rect),
@@ -662,7 +832,7 @@ mod arrow_button_tests {
 
         let area = Rect::new(0, 0, w, h);
         let (_, right_rect) = RosterManager::arrow_rects(area);
-        let (sprite_rect, _, _) = RosterManager::layout(area);
+        let sprite_rect = RosterManager::layout(area).sprite;
 
         assert!(
             has_non_space(&buf, right_rect),
@@ -853,38 +1023,46 @@ mod home_button_tests {
 mod slide_transition_tests {
     use super::*;
     use engine_core::scene::EngineCtx;
-    use crate::scenes::test_util::{key_event, render_to_buffer, row_containing};
+    use crate::scenes::test_util::{key_event, render_to_buffer};
     use crossterm::event::KeyCode;
     use ratatui::buffer::Buffer;
 
-    /// Leftmost non-space column in row `y`, if any.
-    fn leftmost_non_space_in_row(buf: &Buffer, w: u16, y: u16) -> Option<u16> {
-        (0..w).find(|&x| buf.cell((x, y)).unwrap().symbol() != " ")
+    /// Leftmost non-space column across every row of `rect`, if any. Used to
+    /// track the SPRITE region's slide position (b1-t3: only the sprite is
+    /// offset during a slide; name/dot-row are static and no longer a valid
+    /// signal for slide progress).
+    fn leftmost_non_space_in_rect(buf: &Buffer, rect: Rect) -> Option<u16> {
+        (rect.left()..rect.right()).find(|&x| {
+            (rect.top()..rect.bottom()).any(|y| buf.cell((x, y)).unwrap().symbol() != " ")
+        })
     }
 
-    /// A right-nav slides the outgoing creature's group out to the left and
-    /// the incoming creature's group in from the right, eased over time, and
-    /// settles with only the incoming creature painted at its resting column.
+    /// A right-nav slides the outgoing creature's SPRITE out to the left and
+    /// the incoming creature's SPRITE in from the right, eased over time, and
+    /// settles with only the incoming creature's sprite painted at its
+    /// resting column. Per b1-t3, name/dot-row no longer travel with the
+    /// slide (they update immediately with `current_index`, unchanged
+    /// columns throughout) — only the sprite region is exercised here.
     #[test]
     fn right_nav_slide_animates_and_settles() {
         let (w, h) = (80u16, 20u16);
         let area = Rect::new(0, 0, w, h);
-        let (_, name_rect, _) = RosterManager::layout(area);
-        let name_y = name_rect.y;
+        let sprite_rect = RosterManager::layout(area).sprite;
 
-        // Resting (no-slide) column of each creature, rendered standalone.
+        // Resting (no-slide) column of each creature's sprite, rendered
+        // standalone.
         let out_rest_left = {
             let baseline = RosterManager::new(); // index 0: Ember Wolf
             let buf = render_to_buffer(&baseline, w, h);
-            leftmost_non_space_in_row(&buf, w, name_y)
-                .expect("Ember Wolf must paint the name row at rest")
+            leftmost_non_space_in_rect(&buf, sprite_rect)
+                .expect("Ember Wolf's sprite must paint at rest")
         };
         let in_rest_left = {
             let mut baseline = RosterManager::new();
             baseline.current_index = 1; // Frost Lizard
             let buf = render_to_buffer(&baseline, w, h);
-            leftmost_non_space_in_row(&buf, w, name_y)
-                .expect("Frost Lizard must paint the name row at rest")
+            leftmost_non_space_in_rect(&buf, sprite_rect)
+                .expect("Frost Lizard's sprite must paint at rest")
         };
 
         let mut ctx = EngineCtx;
@@ -896,74 +1074,65 @@ mod slide_transition_tests {
             "current_index must update immediately on nav (b4 contract), even though a slide starts"
         );
 
-        // Instant of trigger (no update yet): outgoing still at rest,
-        // incoming fully off the right edge (not painted).
+        // Instant of trigger (no update yet): outgoing sprite still at rest.
         let buf0 = render_to_buffer(&scene, w, h);
         assert_eq!(
-            leftmost_non_space_in_row(&buf0, w, name_y),
+            leftmost_non_space_in_rect(&buf0, sprite_rect),
             Some(out_rest_left),
-            "immediately after nav, the outgoing creature (Ember Wolf) must still be painted at its resting column"
-        );
-        assert!(
-            row_containing(&buf0, w, h, "Frost Lizard").is_none(),
-            "immediately after nav, the incoming creature must be fully off the right edge (not painted yet)"
+            "immediately after nav, the outgoing creature's sprite (Ember Wolf) must still be painted at its resting column"
         );
 
-        // ~25% progress: outgoing has slid measurably left of rest.
+        // ~25% progress: outgoing sprite has slid measurably left of rest.
         scene.update(&mut ctx, Duration::from_millis(75));
         let buf1 = render_to_buffer(&scene, w, h);
-        let out_mid_left = leftmost_non_space_in_row(&buf1, w, name_y)
-            .expect("outgoing creature must still be partially on-screen at ~25% progress");
+        let out_mid_left = leftmost_non_space_in_rect(&buf1, sprite_rect)
+            .expect("outgoing sprite must still be partially on-screen at ~25% progress");
         assert!(
             out_mid_left < out_rest_left,
-            "outgoing creature's painted column ({out_mid_left}) must have moved left of its resting column ({out_rest_left})"
+            "outgoing sprite's painted column ({out_mid_left}) must have moved left of its resting column ({out_rest_left})"
         );
 
-        // ~75% progress: incoming has slid in from the right, not yet settled.
+        // ~75% progress: incoming sprite has slid in from the right, not yet settled.
         scene.update(&mut ctx, Duration::from_millis(150)); // total elapsed 225ms
         let buf2 = render_to_buffer(&scene, w, h);
-        let in_mid_left = leftmost_non_space_in_row(&buf2, w, name_y)
-            .expect("incoming creature must be partially visible at ~75% progress");
+        let in_mid_left = leftmost_non_space_in_rect(&buf2, sprite_rect)
+            .expect("incoming sprite must be partially visible at ~75% progress");
         assert!(
             in_mid_left > in_rest_left,
-            "incoming creature's painted column ({in_mid_left}) must still be offset right of its resting column ({in_rest_left}) mid-transition"
+            "incoming sprite's painted column ({in_mid_left}) must still be offset right of its resting column ({in_rest_left}) mid-transition"
         );
 
-        // Past the slide duration: only the incoming creature remains, at rest.
+        // Past the slide duration: only the incoming sprite remains, at rest.
         scene.update(&mut ctx, Duration::from_millis(200)); // total elapsed 425ms
         let buf3 = render_to_buffer(&scene, w, h);
         assert_eq!(
-            leftmost_non_space_in_row(&buf3, w, name_y),
+            leftmost_non_space_in_rect(&buf3, sprite_rect),
             Some(in_rest_left),
-            "once settled, the incoming creature must render at the exact resting column b3-t2 established"
-        );
-        assert!(
-            row_containing(&buf3, w, h, "Ember Wolf").is_none(),
-            "once settled, the outgoing creature must no longer be painted anywhere"
+            "once settled, the incoming sprite must render at its exact resting column"
         );
     }
 
-    /// Mirror of the right-nav case: a left-nav slides the outgoing creature
-    /// out to the right and the incoming creature in from the left.
+    /// Mirror of the right-nav case: a left-nav slides the outgoing
+    /// creature's sprite out to the right and the incoming creature's sprite
+    /// in from the left.
     #[test]
     fn left_nav_slide_animates_and_settles() {
         let (w, h) = (80u16, 20u16);
         let area = Rect::new(0, 0, w, h);
-        let (_, name_rect, _) = RosterManager::layout(area);
-        let name_y = name_rect.y;
+        let sprite_rect = RosterManager::layout(area).sprite;
 
         let out_rest_left = {
             let baseline = RosterManager::new(); // index 0: Ember Wolf
             let buf = render_to_buffer(&baseline, w, h);
-            leftmost_non_space_in_row(&buf, w, name_y)
-                .expect("Ember Wolf must paint the name row at rest")
+            leftmost_non_space_in_rect(&buf, sprite_rect)
+                .expect("Ember Wolf's sprite must paint at rest")
         };
         let in_rest_left = {
             let mut baseline = RosterManager::new();
             baseline.current_index = 5; // Shadow Cat (left-wrap from 0)
             let buf = render_to_buffer(&baseline, w, h);
-            leftmost_non_space_in_row(&buf, w, name_y)
-                .expect("Shadow Cat must paint the name row at rest")
+            leftmost_non_space_in_rect(&buf, sprite_rect)
+                .expect("Shadow Cat's sprite must paint at rest")
         };
 
         let mut ctx = EngineCtx;
@@ -977,43 +1146,84 @@ mod slide_transition_tests {
 
         let buf0 = render_to_buffer(&scene, w, h);
         assert_eq!(
-            leftmost_non_space_in_row(&buf0, w, name_y),
+            leftmost_non_space_in_rect(&buf0, sprite_rect),
             Some(out_rest_left),
-            "immediately after nav, the outgoing creature (Ember Wolf) must still be painted at its resting column"
-        );
-        assert!(
-            row_containing(&buf0, w, h, "Shadow Cat").is_none(),
-            "immediately after nav, the incoming creature must be fully off the left edge (not painted yet)"
+            "immediately after nav, the outgoing creature's sprite (Ember Wolf) must still be painted at its resting column"
         );
 
         scene.update(&mut ctx, Duration::from_millis(75));
         let buf1 = render_to_buffer(&scene, w, h);
-        let out_mid_left = leftmost_non_space_in_row(&buf1, w, name_y)
-            .expect("outgoing creature must still be partially on-screen at ~25% progress");
+        let out_mid_left = leftmost_non_space_in_rect(&buf1, sprite_rect)
+            .expect("outgoing sprite must still be partially on-screen at ~25% progress");
         assert!(
             out_mid_left > out_rest_left,
-            "outgoing creature's painted column ({out_mid_left}) must have moved right of its resting column ({out_rest_left}) for a left-nav exit"
+            "outgoing sprite's painted column ({out_mid_left}) must have moved right of its resting column ({out_rest_left}) for a left-nav exit"
         );
 
         scene.update(&mut ctx, Duration::from_millis(150)); // total elapsed 225ms
         let buf2 = render_to_buffer(&scene, w, h);
-        let in_mid_left = leftmost_non_space_in_row(&buf2, w, name_y)
-            .expect("incoming creature must be partially visible at ~75% progress");
+        let in_mid_left = leftmost_non_space_in_rect(&buf2, sprite_rect)
+            .expect("incoming sprite must be partially visible at ~75% progress");
         assert!(
             in_mid_left < in_rest_left,
-            "incoming creature's painted column ({in_mid_left}) must still be offset left of its resting column ({in_rest_left}) mid-transition"
+            "incoming sprite's painted column ({in_mid_left}) must still be offset left of its resting column ({in_rest_left}) mid-transition"
         );
 
         scene.update(&mut ctx, Duration::from_millis(200)); // total elapsed 425ms
         let buf3 = render_to_buffer(&scene, w, h);
         assert_eq!(
-            leftmost_non_space_in_row(&buf3, w, name_y),
+            leftmost_non_space_in_rect(&buf3, sprite_rect),
             Some(in_rest_left),
-            "once settled, the incoming creature must render at the exact resting column b3-t2 established"
+            "once settled, the incoming sprite must render at its exact resting column"
         );
-        assert!(
-            row_containing(&buf3, w, h, "Ember Wolf").is_none(),
-            "once settled, the outgoing creature must no longer be painted anywhere"
+    }
+
+    /// Per b1-t3: during an active slide, at the SAME `current_index`, the
+    /// name rect and dot-row rect paint identical columns whether or not a
+    /// slide is active — only the sprite region's painted columns differ
+    /// (still slides). This is the shared layout contract every b2 rendering
+    /// task depends on.
+    #[test]
+    fn name_and_dot_row_do_not_slide_but_sprite_does() {
+        fn painted_columns(buf: &Buffer, rect: Rect) -> std::collections::BTreeSet<u16> {
+            (rect.left()..rect.right())
+                .filter(|&x| {
+                    (rect.top()..rect.bottom()).any(|y| buf.cell((x, y)).unwrap().symbol() != " ")
+                })
+                .collect()
+        }
+
+        let (w, h) = (80u16, 20u16);
+        let area = Rect::new(0, 0, w, h);
+        let l = RosterManager::layout(area);
+        let mut ctx = EngineCtx;
+
+        // Mid-slide render: nav right from index 0 -> 1, sample at ~50%.
+        let mut mid_slide_scene = RosterManager::new();
+        mid_slide_scene.handle_input(key_event(KeyCode::Right));
+        mid_slide_scene.update(&mut ctx, Duration::from_millis(150));
+        let mid_slide_buf = render_to_buffer(&mid_slide_scene, w, h);
+        assert_eq!(mid_slide_scene.current_index, 1, "slide must not change current_index a second time");
+
+        // No-slide render at the SAME resting current_index (1).
+        let mut rest_scene = RosterManager::new();
+        rest_scene.current_index = 1;
+        let rest_buf = render_to_buffer(&rest_scene, w, h);
+
+        assert_eq!(
+            painted_columns(&mid_slide_buf, l.name),
+            painted_columns(&rest_buf, l.name),
+            "name rect's painted columns must be identical during an active slide vs. at rest — name no longer travels with col_offset"
+        );
+        assert_eq!(
+            painted_columns(&mid_slide_buf, l.dot_row),
+            painted_columns(&rest_buf, l.dot_row),
+            "dot-row rect's painted columns must be identical during an active slide vs. at rest — dots no longer travel with col_offset"
+        );
+        assert_ne!(
+            painted_columns(&mid_slide_buf, l.sprite),
+            painted_columns(&rest_buf, l.sprite),
+            "sprite rect's painted columns must differ during an active slide vs. at rest — the sprite is the only region that still slides"
         );
     }
 

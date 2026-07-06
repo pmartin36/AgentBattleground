@@ -1,6 +1,7 @@
 pub mod ability;
 pub mod app;
 pub mod assets;
+pub mod braille_name;
 pub mod creatures;
 pub mod exhaustion;
 pub mod scene_id;
