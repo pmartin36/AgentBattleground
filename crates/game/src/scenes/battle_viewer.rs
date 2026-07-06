@@ -1370,6 +1370,78 @@ mod event_playback_wiring_tests {
             scene.event_from_values
         );
     }
+
+    /// b4-t1 regression guard: every `demo_events()` `piece_index` must
+    /// resolve to a real `Piece` under `pieces()`'s current numbering — a
+    /// future roster resize must not silently strand a demo event pointing
+    /// at a piece that no longer exists. Uses the module's `.find`/`.any(|p|
+    /// p.index == ..)` resolution idiom (never positional `pieces[i]`
+    /// indexing, per the module doc's stable-index convention).
+    #[test]
+    fn default_events_piece_indices_resolve_to_real_pieces() {
+        let ps = pieces();
+        let scene = BattleViewer::default();
+        for e in &scene.events {
+            let pi = match e.kind {
+                EventKind::Move { piece_index, .. } => piece_index,
+                EventKind::Die { piece_index } => piece_index,
+            };
+            assert!(
+                ps.iter().any(|p| p.index == pi),
+                "event {:?} references piece_index {pi}, which does not resolve to any \
+                 Piece in pieces() (valid indices: {:?})",
+                e,
+                ps.iter().map(|p| p.index).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// b4-t1: pins the demo's intended semantics — the authored Move targets
+    /// a Team A piece, the authored Die targets a Team B piece — derived from
+    /// `pieces()`, not bare literals.
+    #[test]
+    fn default_events_move_targets_team_a_and_die_targets_team_b() {
+        let ps = pieces();
+        let scene = BattleViewer::default();
+        let move_index = scene
+            .events
+            .iter()
+            .find_map(|e| match e.kind {
+                EventKind::Move { piece_index, .. } => Some(piece_index),
+                _ => None,
+            })
+            .expect("a Move event must be present");
+        let die_index = scene
+            .events
+            .iter()
+            .find_map(|e| match e.kind {
+                EventKind::Die { piece_index } => Some(piece_index),
+                _ => None,
+            })
+            .expect("a Die event must be present");
+
+        let move_piece = ps
+            .iter()
+            .find(|p| p.index == move_index)
+            .expect("Move's piece_index must resolve to a real piece");
+        let die_piece = ps
+            .iter()
+            .find(|p| p.index == die_index)
+            .expect("Die's piece_index must resolve to a real piece");
+
+        assert_eq!(
+            move_piece.team,
+            Team::A,
+            "authored Move should target a Team A piece, got {:?}",
+            move_piece.team
+        );
+        assert_eq!(
+            die_piece.team,
+            Team::B,
+            "authored Die should target a Team B piece, got {:?}",
+            die_piece.team
+        );
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
