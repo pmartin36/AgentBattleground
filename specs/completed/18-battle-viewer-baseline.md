@@ -3,6 +3,8 @@
 # Battle Viewer — Baseline
 
 > **Status: implemented.** Stage 1 of `05-battle-viewer`'s staged build approach: the static battlefield — an 8×8 board with a fixed 6v6 layout of idle-animating placeholder pieces, camera-framed, built and validated before any battle-simulation rules exist. Stages 2 (replay-driven playback) and 3 (live sim) remain pending in `05`.
+>
+> **Superseded (board shape & camera):** the squad redesign drops this board's 8×8/6v6 layout to 7×7 with 3v3 + 1 bench per side (`36-battle-viewer-squad-layout`), and its single fixed camera is replaced by three player-switchable views (`37-battle-viewer-dynamic-camera`). Everything else here — the `BoardGeometry` mechanism, per-piece owned `Transform`/`color` state, idle-animation staggering, placeholder-art approach — is unaffected and still current.
 
 ## Purpose
 The presentation-only foundation the rest of the Battle Viewer builds on: a board that actually renders, with pieces actually placed on it and actually animating, using the real render pipeline (world space, camera, dot compositor) rather than a placeholder fill.

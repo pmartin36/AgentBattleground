@@ -20,6 +20,7 @@ When you win, you have an opportunity to upgrade one of your pieces. The upgrade
 - The upgrade involves some LLM-driven "magic" — customizing the piece's visuals, expanding its abilities, giving it more personality
 - The specific details of what upgrades can do are TBD, but the intent is that each upgrade makes a piece more unique and more powerful
 - Over time, pieces should feel like they have a history
+- "Expanding its abilities" now has a concrete shape to expand into: `34-creature-attributes-data-model`'s up-to-4 ability slots (each with up to 4 modifier tags) and stat growth. `34` also adds a `level` field to every piece (shown on the roster screen) with no leveling/XP mechanic behind it yet — that mechanic is intended to live here, still undesigned (see Open Questions)
 
 ### Loss: Debrief
 No upgrade, but the player gets a debrief — a summary of what happened in the battle. The intent is to help the player think about how to adjust their skills. (The real learning happens by watching the replay in the Battle Viewer.)
@@ -33,8 +34,10 @@ After every battle, the replay is saved locally and uploaded to the server in co
 - Who or what generates the upgrade content? (local LLM? server-side?)
 - Is there a draw state, and if so, does it yield an upgrade?
 - How many upgrades can a piece receive in total?
+- The level/XP mechanic itself: how much a win is worth, whether losses grant partial progress, what a level-up actually changes about a piece's stats — entirely undesigned; `34` only adds the `level` field for the roster screen to display.
 
 ## Dependencies
+- `34-creature-attributes-data-model` — the stats/level/ability/modifier shape this spec's upgrade flow and future leveling mechanic act on.
 - `05-battle-viewer` — player often comes here directly after watching the battle
 - `03-army-skill-editing` — post-upgrade, player returns here to adjust skills
 - `11-server-backend` — replay upload

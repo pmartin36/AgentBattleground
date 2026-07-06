@@ -13,7 +13,7 @@ The resting state of the game. Everything the player needs to understand their c
 ## Key Details
 
 ### Army Status Overview
-A glanceable summary of your 6 pieces — names, visuals, and high-level health/readiness. Not the full detail view (that's Army Management).
+A glanceable summary of your 6 pieces — names, visuals, and high-level health/readiness. "Readiness" now has a concrete meaning: whether a creature is available (active/bench) or injured and recovering (`34-creature-attributes-data-model`'s exhaustion/injury state) — this overview is a summary, not the full per-creature exhaustion/ability detail (that's the Roster screen, `35-roster-screen-stats-abilities-squad`).
 
 ### Daily Battle Gate
 One initiated battle per day. The hub makes the current status obvious: available, or time until reset. This is the primary pacing mechanic.
@@ -36,6 +36,7 @@ The hub is the root of the navigation tree. All other scenes are reachable from 
 - Is there an "offline mode" where the hub functions without server connectivity?
 
 ## Dependencies
+- `34-creature-attributes-data-model` — the exhaustion/injury state the Army Status Overview summarizes.
 - `11-server-backend` — replay downloads and notification data come from server on connect
 - `03-army-skill-editing` — navigates to army management
 - `04-matchmaking-battle-initiation` — navigates to battle initiation

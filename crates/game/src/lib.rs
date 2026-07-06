@@ -2,6 +2,7 @@ pub mod ability;
 pub mod app;
 pub mod assets;
 pub mod creatures;
+pub mod exhaustion;
 pub mod scene_id;
 pub mod scenes;
 pub mod squad_role;

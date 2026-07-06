@@ -14,7 +14,6 @@ pub mod button;
 pub mod camera;
 pub mod composite;
 pub mod convert;
-pub mod creature;
 pub mod dots;
 pub mod grid;
 pub mod screen_layout;
@@ -23,7 +22,6 @@ pub mod tween;
 pub use anim::AnimatedSprite;
 pub use button::{Button, ButtonCore, ButtonState, FrameButton};
 pub use convert::convert;
-pub use creature::{AnimationKind, Creature};
 pub use grid::{draw_grid, Cell, Grid};
 pub use screen_layout::{anchor, anchor_with_margin, stack, Anchor, RectTween, StackAxis};
 

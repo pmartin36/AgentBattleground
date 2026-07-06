@@ -16,7 +16,7 @@ use crate::scene_id::SceneId;
 pub struct RosterManager {
     current_index: usize,
     #[inspect(hidden)]
-    creatures: Vec<engine_render::Creature>,
+    creatures: Vec<crate::creatures::Creature>,
     #[inspect(hidden)]
     elapsed: Duration,
     /// Mouse-driven navigation buttons beside the sprite (b4-t2). `RefCell`
@@ -235,7 +235,7 @@ impl RosterManager {
         let (sprite_rect, name_rect, dots_rect) = Self::layout(zero_area);
 
         let creature = &self.creatures[index];
-        if let Some(sprite) = creature.animation(engine_render::AnimationKind::Idle) {
+        if let Some(sprite) = creature.animation(crate::creatures::AnimationKind::Idle) {
             let (cols, rows) = engine_render::convert::fit_dot_dims(sprite.frame_at(self.elapsed), sprite_rect);
             if cols > 0 && rows > 0 {
                 let buf = sprite.dots_at(self.elapsed, cols * 2, rows * 4);

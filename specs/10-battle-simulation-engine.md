@@ -16,7 +16,7 @@ The engine runs entirely locally. It loads:
 - The player's 6 pieces and their skill files
 - The opponent's 6 pieces and their skill files (downloaded from server)
 
-For each turn, the LLM is invoked to decide what each piece does, based on its skills, the current board state, and the opponent's visible state. The engine enforces rules — a piece can't act outside what its skills allow.
+For each turn, the LLM is invoked to decide what each *active* piece does, based on its skills, the current board state, and the opponent's visible state. The engine enforces rules — a piece can't act outside what its skills allow.
 
 ### Turn Structure
 TBD in detail, but at a high level:
@@ -24,6 +24,9 @@ TBD in detail, but at a high level:
 - Order of action (initiative, speed, etc.) is TBD
 - The engine validates LLM outputs and rejects illegal moves
 - A battle ends when one side has no remaining pieces, or a turn cap is reached
+- Only the 3 *active* creatures per side fight (`34-creature-attributes-data-model`'s squad model, board-rendered per `36-battle-viewer-squad-layout`); the bench creature can be swapped in mid-battle, driven by the skill system rather than the player — no design exists yet for when/how that trigger fires
+- Each acting creature's available actions are its up to 4 equipped abilities (each carrying up to 4 modifier tags, `34`) — this engine is what will eventually give those modifiers concrete mechanical effect, which `34` deliberately leaves undefined
+- Using an ability and taking damage both accrue exhaustion (`34`); when a creature's exhaustion maxes out it becomes "injured" and is pulled to reserve for a recovery period — this engine is what will eventually implement that accrual and trigger the reserve reassignment during a live battle (`34` only defines the data shape and a testable pure transition, not a live trigger)
 
 ### Replay Artifact
 After each turn, the engine records the state delta — what happened, who acted, what skills fired, resulting state. This sequence becomes the replay file, which the viewer consumes and the server stores.
@@ -53,6 +56,8 @@ Bots use the same engine as human opponents, with server-authored skill files. B
 
 ## Dependencies
 - `03-army-skill-editing` — skill files are the engine's primary input
+- `34-creature-attributes-data-model` — stats, abilities/modifiers, and exhaustion are the data this engine's combat math and turn resolution act on; this engine is where their mechanical effects finally get defined
+- `36-battle-viewer-squad-layout` — the 3v3 + bench squad structure this engine's turn/action model must respect
 - `04-matchmaking-battle-initiation` — triggers the engine with downloaded opponent data
 - `05-battle-viewer` — consumes the engine's turn output (live or via replay file)
 - `09-settings-model-config` — determines which LLM the engine uses

@@ -51,7 +51,7 @@ On a player's first battle watch, a tutorial overlay explains what they're seein
 Players watch other people's battles specifically to gather intelligence on what's working. The viewer should support this use case: it should be easy to read what happened and why. Clear skill/action annotations on each turn are important.
 
 ## Open Questions / TBDs
-- **Cutaway / cinematic animations.** Battles may want dramatic close-up moments (a creature's special-move animation takes over the screen, camera cuts away from the board and back) — unconfirmed, but plausible enough to flag before building further on the current model. `20-battle-viewer-event-playback`'s `Event`/`EventKind` shape is purely board-relative (world-space positions on the one fixed `SideView` camera) and has no concept of cutting to a different view or a non-board-relative animation. If cutaways turn out to be real, they're likely a distinct presentation mode (a second camera or overlay), not an `EventKind` variant — don't build playback controls or extend the event vocabulary further until this has more clarity, to avoid designing around a shape that gets partially obsoleted.
+- **Cutaway / cinematic animations.** Battles may want dramatic close-up moments (a creature's special-move animation takes over the screen, camera cuts away from the board and back) — unconfirmed, but plausible enough to flag before building further on the current model. `20-battle-viewer-event-playback`'s `Event`/`EventKind` shape is purely board-relative world-space positions and has no concept of cutting to a non-board-relative animation. `37-battle-viewer-dynamic-camera` adds *player-selectable* views (over-the-shoulder/sideline/top-down) over the same world positions, which is a different thing from an *automatic* cutaway during playback — it does not resolve this question. If cutaways turn out to be real, they're likely a distinct presentation mode (a fourth camera or overlay), not an `EventKind` variant — don't build playback controls or extend the event vocabulary further until this has more clarity, to avoid designing around a shape that gets partially obsoleted.
 - Whether **bands** (background / battlefield / foreground) are needed for terrain/obstacles that pieces must visually interleave with — spec'd in `16` but not yet implemented (the current board is a flat background layer, sufficient while there's no terrain).
 - Replay file format (the universal-events schema for the replay-driven stage).
 - How many turns does a typical battle last?
@@ -60,13 +60,16 @@ Players watch other people's battles specifically to gather intelligence on what
 - Sound? (probably no, terminal game)
 - Can you share a timestamp/turn link for discussion?
 
-Resolved (moved out): camera angle, 6v6 board layout, terrain/cell rendering, idle-animation behavior → all decided and built in `18-battle-viewer-baseline`.
+Resolved (moved out): terrain/cell rendering, idle-animation behavior → decided and built in `18-battle-viewer-baseline`. Camera angle and 6v6 board layout, originally resolved there too, have since been **reopened**: the squad redesign drops board composition to 3v3 + 1 bench per side (`36-battle-viewer-squad-layout`) and camera angle is no longer a single fixed choice — the player now switches between three views (`37-battle-viewer-dynamic-camera`).
 
 ## Dependencies
 - `13-rendering` ✅ — the braille renderer the battlefield draws through.
 - `16-world-space-and-camera` ✅ — world position, camera (projection + `depth_key`), and the sprite `Transform`/tween that place and move pieces.
-- `18-battle-viewer-baseline` ✅ — the static board + 6v6 placeholder layout stages 2/3 render on top of.
+- `18-battle-viewer-baseline` ✅ — the static board + placeholder layout stages 2/3 render on top of; its original 6v6/single-camera decisions are superseded by `36`/`37` below.
 - `20-battle-viewer-event-playback` — the move/death event-playback slice of stage 2 (stage 2 also needs attack/take-damage events and a real replay file format, both still pending).
+- `36-battle-viewer-squad-layout` — supersedes `18`'s 6v6 layout with the 3v3 + 1-bench-per-side squad composition.
+- `37-battle-viewer-dynamic-camera` — supersedes `18`'s single fixed camera with three player-switchable views; also removes the global digit-key scene-switcher.
+- `34-creature-attributes-data-model` — stats/abilities/exhaustion/squad-role data that `36`'s layout and any future combat-facing turn content will draw on.
 - `10-battle-simulation-engine` — produces the turn sequence that the viewer consumes
 - `07-replay-browser` — launches viewer in replay mode
 - `04-matchmaking-battle-initiation` — launches viewer in live mode

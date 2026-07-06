@@ -101,7 +101,7 @@ Built: `WorldPos`, the `Camera` trait + `SideView`, the dot pipeline (`sprite_to
 ## Open Questions / TBDs
 - The world unit for the battle game (ties to the grid-vs-free-form decision in `05`).
 - A height / 3rd axis (jumping, flying) — a vertical visual offset distinct from depth; deferred.
-- Camera angle for the battle game (side / iso / 3-4) — configuration, not yet chosen.
+- ~~Camera angle for the battle game (side / iso / 3-4) — configuration, not yet chosen.~~ **Resolved**: the battle game now supports three player-switchable angles (sideline, over-the-shoulder, top-down) as separate `Camera` impls exactly as this spec anticipated — see `37-battle-viewer-dynamic-camera`.
 - Sub-cell **RGBA / translucency** blending remains separate and deferred (this spec's dot compositing is binary cutout).
 
 ## Dependencies

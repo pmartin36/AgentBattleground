@@ -96,9 +96,10 @@ crates/
     render/                       package: engine-render (lib)
       src/
         dots.rs, grid.rs, composite.rs, convert.rs, camera.rs,
-        transform.rs, tween.rs, screen_layout.rs, button.rs, anim.rs, creature.rs
-                                   (creature.rs keeps only Creature/AnimationKind/
-                                    AnimatedSprite types — no bundled/ submodule)    [from render/*, minus bundled assets]
+        transform.rs, tween.rs, screen_layout.rs, button.rs, anim.rs
+                                   (anim.rs is the sole home of AnimatedSprite;
+                                    Creature/AnimationKind later moved to
+                                    `game::creatures`, see `34-creature-attributes-data-model`) [from render/*, minus bundled assets]
     derive/                       package: engine-derive (proc-macro)               [renamed from scene-core-derive]
     inspector/                    package: inspector (bin), depends on engine-core  [relocated, import paths only]
   game/                           package: game (bin)
@@ -106,7 +107,7 @@ crates/
       scene_id.rs                 concrete SceneId enum + From<SceneId> for SceneKey [from scene-core/scene_id.rs, now game-owned]
       registry.rs                 SceneCatalog impl for GameCatalog                  [from game/registry.rs, retargeted]
       scenes/                     MainHub, BattleViewer, RosterManager, Leaderboard, … [unchanged]
-      creatures.rs / creatures/   6 bundled creature ctors + GIFs                    [from render/creature/bundled.rs + assets/creatures/*]
+      creatures.rs / creatures/   Creature/AnimationKind types + 6 bundled ctors + GIFs [from render/creature/bundled.rs + assets/creatures/*]
       assets.rs                   logo/panel/icon PNGs + dimension tests             [from render/assets.rs]
       app.rs                      terminal loop, digit-hotkey table, TerminalGuard   [from game/app.rs, gains digit-hotkey dispatch]
       cli.rs, main.rs             [unchanged]
@@ -141,7 +142,7 @@ Each phase is an independent, compiling, fully-tested checkpoint — `cargo buil
 - Update root `Cargo.toml` workspace `members` and every path dependency across the workspace to the new locations/names.
 
 **Phase D — Strip game content out of `engine-render`.**
-- Move `creature/bundled.rs` + `assets/creatures/*.gif` out of `engine-render`'s `creature` module into `game` (as `game::creatures`), keeping `Creature`/`AnimationKind`/`AnimatedSprite` in `engine-render`.
+- Move `creature/bundled.rs` + `assets/creatures/*.gif` out of `engine-render`'s `creature` module into `game` (as `game::creatures`), keeping `AnimatedSprite` in `engine-render`. (`Creature`/`AnimationKind` themselves later moved to `game::creatures` too — see `34-creature-attributes-data-model`.)
 - Move `engine-render`'s `assets` module (logo/panel/icon PNGs + their dimension-pinned tests) into `game::assets`.
 - Update `Button`/`FrameButton` (and any other call site that referenced `crate::assets::*` constants directly) to take asset byte slices as constructor parameters; `game` passes its own bundled bytes in.
 - Confirm via `grep -rn "include_bytes!" crates/engine/` that no crate under `crates/engine/` has any remaining bundled binary content.

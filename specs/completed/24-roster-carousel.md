@@ -3,6 +3,8 @@
 # Roster — Carousel
 
 > **Status: implemented.** Replaces the abandoned "six slots side by side" design originally sketched for this scene (a simultaneous 6-column grid, all reusing the placeholder wizard sprite). The real design: one creature shown at a time, sliding left/right through the roster, with 6 distinct pieces of real art. `SceneId::ArmyEditor` is fully renamed to `SceneId::RosterManager` as part of this build. Depends on `21-mouse-hover-input`, `22-braille-ui-chrome`, and `23-piece-identity-data-model` — build/confirm those first.
+>
+> **Extended by `35-roster-screen-stats-abilities-squad`**, which adds the stats/abilities/exhaustion/squad-role display and the select-and-swap interaction this spec's Scope explicitly deferred ("Real piece data beyond name + idle sprite... spec 03's fuller vision, entirely pending"). This spec's carousel/slide/dot-row/arrows/home-button mechanics remain the foundation `35` builds on, unchanged.
 
 ## Purpose
 Give the player's army a real, distinct-feeling home: page through your 6 pieces one at a time, each with its own name and art, navigable by mouse or keyboard, with a clear way back to the hub.

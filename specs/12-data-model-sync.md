@@ -14,7 +14,7 @@ Defines what data exists, where it lives, and how it moves between client and se
 
 ### Local Data (Player's Machine)
 - **Player profile**: username, account credentials (token), model config
-- **Army**: 6 pieces, each with name, visual definition, skill files, upgrade history
+- **Army**: 6 pieces, each with name, visual definition, skill files, upgrade history, and — per `34-creature-attributes-data-model` — stats (STR/DEX/INT/VIT), level, up to 4 abilities (each with up to 4 modifier tags), an exhaustion/injury state, and its active/bench/reserve squad position (purely positional in the roster ordering, not a separate stored field)
 - **Skill files**: human-readable files on disk, one per piece (or set per piece — TBD)
 - **Battle history**: downloaded replays, stored locally after server pushes them
 - **Shared replays**: locally cached copies of shared replays downloaded from server
@@ -43,7 +43,7 @@ Whatever this format ends up being (binary/text, see Open Questions), it must be
 
 ### Opponent Data Package
 What gets downloaded from the server before a battle:
-- Opponent's 6 pieces: names, visuals, skill files
+- Opponent's 6 pieces: names, visuals, skill files, and the same stats/level/abilities/modifiers/exhaustion/squad-position fields the Army bullet above lists (`34-creature-attributes-data-model`) — the local sim needs the opponent's full piece data to run them, not just the player's own
 - This is the ONLY data the local simulation engine needs to run the opponent
 
 **Security**: opponent skill files are untrusted input. Before they are passed to the LLM, the engine must validate and sanitize them. See `10-battle-simulation-engine` for sandboxing details.
