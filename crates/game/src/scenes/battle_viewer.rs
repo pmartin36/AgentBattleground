@@ -137,7 +137,7 @@ pub const ACTIVE_COLS: [u16; 3] = [COL_MARGIN, COL_MARGIN + 1, COL_MARGIN + 2];
 /// `BOARD_COLS = 7`: `3`.
 pub const BENCH_COL: u16 = ACTIVE_COLS[1];
 
-/// One placed piece. `index` is a stable 0..12 ordinal (column-ascending
+/// One placed piece. `index` is a stable 0..8 ordinal (column-ascending
 /// within a team, Team A before Team B) used later by b4-t3's phase-stagger.
 /// `transform`/`color` are owned, seeded once at construction by `Piece::new`
 /// (b2-t1) — no `Eq`/`Hash`, since `Transform` has `f32` fields.
@@ -274,7 +274,7 @@ impl Team {
     }
 }
 
-/// Per-index animation offset so the 12 idle loops don't play in lockstep:
+/// Per-index animation offset so the 8 idle loops don't play in lockstep:
 /// `elapsed + PIECE_STAGGER * index`.
 pub fn piece_elapsed(elapsed: Duration, index: usize) -> Duration {
     elapsed + PIECE_STAGGER * index as u32
