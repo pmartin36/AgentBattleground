@@ -4,6 +4,10 @@
 //! 6 near-identical files (name, GIF path, and function identifier are the
 //! only things that ever differed between them).
 
+use crate::ability::{Ability, Modifier};
+use crate::exhaustion::Exhaustion;
+use crate::squad_role::{squad_role, SquadRole, ACTIVE_SLOTS, BENCH_SLOTS};
+use crate::stats::Stats;
 use engine_render::AnimatedSprite;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -88,6 +92,162 @@ pub fn all() -> Vec<Creature> {
         storm_hawk(),
         verdant_treant(),
         shadow_cat(),
+    ]
+}
+
+/// Max abilities a roster entry may carry (spec `Decisions (v1)`: the same
+/// `len() <= 4` convention as `Ability::modifiers`, applied one level up).
+pub const MAX_ABILITIES: usize = 4;
+
+/// A [`Creature`] (identity + animation catalog) paired with this game's
+/// RPG data: stats, level, abilities, and an exhaustion meter. Fields are
+/// private; the `abilities.len() <= MAX_ABILITIES` invariant is guaranteed
+/// only via [`RosterEntry::new`]. Not `Clone`/`Debug` — `Creature` isn't.
+pub struct RosterEntry {
+    creature: Creature,
+    stats: Stats,
+    level: u32,
+    abilities: Vec<Ability>,
+    exhaustion: Exhaustion,
+}
+
+impl RosterEntry {
+    /// Must debug-assert `abilities.len() <= MAX_ABILITIES` with a message
+    /// containing "at most" (mirrors `Ability::new`'s invariant message
+    /// pattern, one composition level up), then construct.
+    pub fn new(
+        creature: Creature,
+        stats: Stats,
+        level: u32,
+        abilities: Vec<Ability>,
+        exhaustion: Exhaustion,
+    ) -> Self {
+        debug_assert!(
+            abilities.len() <= MAX_ABILITIES,
+            "RosterEntry may hold at most {MAX_ABILITIES} abilities, got {}",
+            abilities.len()
+        );
+        Self {
+            creature,
+            stats,
+            level,
+            abilities,
+            exhaustion,
+        }
+    }
+
+    pub fn creature(&self) -> &Creature {
+        &self.creature
+    }
+
+    pub fn stats(&self) -> &Stats {
+        &self.stats
+    }
+
+    pub fn level(&self) -> u32 {
+        self.level
+    }
+
+    pub fn abilities(&self) -> &[Ability] {
+        &self.abilities
+    }
+
+    pub fn exhaustion(&self) -> &Exhaustion {
+        &self.exhaustion
+    }
+}
+
+/// Placeholder injury reassignment (spec `34` gives only "drops to reserve",
+/// no concrete policy). Swaps the entry at `injured_index` with the first
+/// reserve slot so `squad_role(new_index)` reports `Reserve`; the previously-
+/// reserve entry fills the vacated active/bench slot. No-op if the index is
+/// out of range, the entry is not injured, the entry is already in reserve,
+/// or the target reserve slot does not exist. Non-canonical, exercised only
+/// by unit tests this round — TODO(code-writer): implement.
+pub fn reassign_injured_to_reserve(roster: &mut [RosterEntry], injured_index: usize) {
+    if injured_index >= roster.len() {
+        return;
+    }
+    if !roster[injured_index].exhaustion().is_injured() {
+        return;
+    }
+    if squad_role(injured_index) == SquadRole::Reserve {
+        return;
+    }
+    let target = ACTIVE_SLOTS + BENCH_SLOTS; // first reserve slot
+    if target >= roster.len() {
+        return;
+    }
+    roster.swap(injured_index, target);
+}
+
+/// Wraps each of the 6 bundled creatures in a [`RosterEntry`] with
+/// illustrative, distinguishing placeholder `Stats`/`level`/`abilities` and a
+/// default (rested, non-injured) `Exhaustion`, in `all()`'s order. Values are
+/// non-canonical placeholders (spec `34-creature-attributes-data-model.md`
+/// `Decisions (v1)`) — TODO(code-writer): implement.
+pub fn demo_roster() -> Vec<RosterEntry> {
+    let entry = |creature: Creature,
+                 stats: Stats,
+                 level: u32,
+                 abilities: Vec<Ability>|
+     -> RosterEntry { RosterEntry::new(creature, stats, level, abilities, Exhaustion::default()) };
+
+    vec![
+        entry(
+            ember_wolf(),
+            Stats { strength: 30, dexterity: 28, intelligence: 12, vitality: 15 },
+            5,
+            vec![Ability::new(
+                "Placeholder ability 1",
+                vec![Modifier { name: "Modifier A".to_string(), requires: None }],
+            )],
+        ),
+        entry(
+            frost_lizard(),
+            Stats { strength: 14, dexterity: 18, intelligence: 26, vitality: 22 },
+            4,
+            vec![Ability::new(
+                "Placeholder ability 1",
+                vec![Modifier { name: "Modifier A".to_string(), requires: None }],
+            )],
+        ),
+        entry(
+            stone_golem(),
+            Stats { strength: 22, dexterity: 8, intelligence: 10, vitality: 34 },
+            6,
+            vec![Ability::new(
+                "Placeholder ability 1",
+                vec![Modifier { name: "Modifier A".to_string(), requires: None }],
+            )],
+        ),
+        entry(
+            storm_hawk(),
+            Stats { strength: 12, dexterity: 32, intelligence: 24, vitality: 12 },
+            4,
+            vec![Ability::new(
+                "Placeholder ability 1",
+                vec![Modifier { name: "Modifier A".to_string(), requires: None }],
+            )],
+        ),
+        entry(
+            verdant_treant(),
+            Stats { strength: 20, dexterity: 10, intelligence: 22, vitality: 30 },
+            7,
+            vec![Ability::new(
+                "Placeholder ability 1",
+                vec![Modifier { name: "Modifier A".to_string(), requires: None }],
+            )],
+        ),
+        entry(
+            shadow_cat(),
+            Stats { strength: 16, dexterity: 34, intelligence: 18, vitality: 12 },
+            3,
+            vec![Ability::new(
+                "Placeholder ability 1",
+                vec![Modifier { name: "Modifier A".to_string(), requires: None }],
+            )],
+        ),
     ]
 }
 
@@ -198,6 +358,184 @@ mod tests {
                 c.animation(AnimationKind::Idle).is_some(),
                 "{} must have an Idle animation registered",
                 c.name()
+            );
+        }
+    }
+
+    fn dummy_abilities(n: usize) -> Vec<Ability> {
+        (0..n).map(|i| Ability::new(format!("Ability {i}"), vec![])).collect()
+    }
+
+    /// Constructing with `MAX_ABILITIES` abilities succeeds, and every field
+    /// (including a non-default level/stats/exhaustion so a hardcoded-default
+    /// getter can't silently pass) round-trips through its accessor.
+    #[test]
+    fn new_round_trips_all_fields() {
+        let creature = Creature::new("Test");
+        let stats = Stats { strength: 5, dexterity: 6, intelligence: 7, vitality: 8 };
+        let level = 3u32;
+        let abilities = dummy_abilities(MAX_ABILITIES);
+        let exhaustion = Exhaustion::default().apply_damage_exhaustion(15);
+
+        let entry = RosterEntry::new(creature, stats, level, abilities.clone(), exhaustion);
+
+        assert_eq!(entry.creature().name(), "Test");
+        assert_eq!(*entry.stats(), stats);
+        assert_eq!(entry.level(), level);
+        assert_eq!(entry.abilities(), abilities.as_slice());
+        assert_eq!(entry.exhaustion(), &exhaustion);
+    }
+
+    /// Constructing with more than `MAX_ABILITIES` abilities panics under
+    /// debug assertions (the profile `cargo test` uses by default) — same
+    /// invariant-enforcement pattern as `Ability::new`, one level up. The
+    /// panic message must mention "at most" so this can't be satisfied by an
+    /// unrelated panic.
+    #[test]
+    #[should_panic(expected = "at most")]
+    fn new_with_more_than_max_abilities_panics() {
+        let creature = Creature::new("Test");
+        let stats = Stats::default();
+        let exhaustion = Exhaustion::default();
+        RosterEntry::new(creature, stats, 1, dummy_abilities(MAX_ABILITIES + 1), exhaustion);
+    }
+
+    /// A full `ROSTER_SIZE` roster of distinctly-named entries, all rested
+    /// except `injured_index` (if `Some`), which is pushed to `Exhaustion`'s
+    /// injured state via 100 damage-exhaustion.
+    fn build_roster(injured_index: Option<usize>) -> Vec<RosterEntry> {
+        (0..crate::squad_role::ROSTER_SIZE)
+            .map(|i| {
+                let exhaustion = if Some(i) == injured_index {
+                    Exhaustion::default().apply_damage_exhaustion(100)
+                } else {
+                    Exhaustion::default()
+                };
+                RosterEntry::new(
+                    Creature::new(format!("Entry {i}")),
+                    Stats::default(),
+                    1,
+                    vec![],
+                    exhaustion,
+                )
+            })
+            .collect()
+    }
+
+    fn names(roster: &[RosterEntry]) -> Vec<String> {
+        roster.iter().map(|e| e.creature().name().to_string()).collect()
+    }
+
+    /// An injured entry in an active slot is swapped into the first reserve
+    /// slot: `squad_role(new_index)` reports `Reserve` for the injured
+    /// entry's new position, and the entry that occupied that reserve slot
+    /// now sits at the vacated active index — proving a real swap, not a
+    /// no-op.
+    #[test]
+    fn reassign_moves_injured_active_entry_into_reserve() {
+        let mut roster = build_roster(Some(0));
+        let before = names(&roster);
+        let first_reserve = ACTIVE_SLOTS + BENCH_SLOTS;
+
+        reassign_injured_to_reserve(&mut roster, 0);
+
+        let new_index = names(&roster)
+            .iter()
+            .position(|n| n == "Entry 0")
+            .expect("injured entry must still be present");
+        assert_eq!(
+            squad_role(new_index),
+            SquadRole::Reserve,
+            "injured entry's new position {new_index} must be a reserve slot"
+        );
+        assert_eq!(
+            roster[0].creature().name(),
+            before[first_reserve],
+            "the entry previously in the first reserve slot must now occupy the vacated active slot"
+        );
+    }
+
+    /// A not-injured entry in an active slot is left untouched — the roster
+    /// order is unchanged.
+    #[test]
+    fn reassign_is_noop_when_entry_not_injured() {
+        let mut roster = build_roster(None);
+        let before = names(&roster);
+
+        reassign_injured_to_reserve(&mut roster, 0);
+
+        assert_eq!(names(&roster), before);
+    }
+
+    /// An injured entry already occupying a reserve slot is left untouched —
+    /// no swap needed since it already satisfies the reserve invariant.
+    #[test]
+    fn reassign_is_noop_when_already_reserve() {
+        let reserve_index = ACTIVE_SLOTS + BENCH_SLOTS;
+        let mut roster = build_roster(Some(reserve_index));
+        let before = names(&roster);
+
+        reassign_injured_to_reserve(&mut roster, reserve_index);
+
+        assert_eq!(names(&roster), before);
+    }
+
+    /// `demo_roster()` returns exactly `ROSTER_SIZE` entries — one per
+    /// bundled creature, no dropped/duplicated entry.
+    #[test]
+    fn demo_roster_returns_six_entries() {
+        let roster = demo_roster();
+        assert_eq!(roster.len(), crate::squad_role::ROSTER_SIZE);
+    }
+
+    /// Names are the 6 bundled creatures, in `all()`'s order — guards
+    /// against a dropped/duplicated/reordered entry.
+    #[test]
+    fn demo_roster_names_match_bundled_order() {
+        let roster = demo_roster();
+        let expected = [
+            "Ember Wolf",
+            "Frost Lizard",
+            "Stone Golem",
+            "Storm Hawk",
+            "Verdant Treant",
+            "Shadow Cat",
+        ];
+        let actual: Vec<&str> = roster.iter().map(|e| e.creature().name()).collect();
+        assert_eq!(actual, expected);
+    }
+
+    /// Ember Wolf and Stone Golem must have genuinely different `Stats`
+    /// profiles — proves the "distinguishing" requirement is real, not
+    /// 6 copy-pasted identical placeholder structs.
+    #[test]
+    fn demo_roster_two_creatures_have_distinct_stats() {
+        let roster = demo_roster();
+        let ember_wolf = roster
+            .iter()
+            .find(|e| e.creature().name() == "Ember Wolf")
+            .expect("Ember Wolf must be in demo_roster");
+        let stone_golem = roster
+            .iter()
+            .find(|e| e.creature().name() == "Stone Golem")
+            .expect("Stone Golem must be in demo_roster");
+        assert_ne!(
+            ember_wolf.stats(),
+            stone_golem.stats(),
+            "Ember Wolf and Stone Golem must have distinguishing (non-identical) placeholder stats"
+        );
+    }
+
+    /// Every demo entry starts rested (not injured) — a sane default for
+    /// placeholder data with no live combat trigger this round.
+    #[test]
+    fn demo_roster_entries_start_rested() {
+        let roster = demo_roster();
+        for entry in &roster {
+            assert!(
+                !entry.exhaustion().is_injured(),
+                "{} must start rested, not injured",
+                entry.creature().name()
             );
         }
     }
