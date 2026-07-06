@@ -179,20 +179,25 @@ impl Piece {
     }
 }
 
-/// Transitional 10-piece 5v5 layout: parks pieces on each team's BENCH row
-/// (`TEAM_A_BENCH_ROW`/`TEAM_B_BENCH_ROW`), both on columns
-/// `1..(BOARD_COLS - 1)` (cols 0 and the last column left empty).
-/// Deterministic order: Team A cols asc, then Team B cols asc. This is a
-/// scaffold — b3-t1 replaces it with the real 3-active+1-bench-per-side
-/// layout on the active rows (`TEAM_A_ROW`/`TEAM_B_ROW`).
+/// The 3-active+1-bench-per-side layout (8 pieces total). Each team gets 3
+/// active pieces on its active row (`TEAM_A_ROW`/`TEAM_B_ROW`) across the
+/// centered `ACTIVE_COLS` (ascending), plus 1 bench piece on its bench row
+/// (`TEAM_A_BENCH_ROW`/`TEAM_B_BENCH_ROW`) at `BENCH_COL`. Deterministic
+/// order: Team A active (ascending col), Team A bench, Team B active
+/// (ascending col), Team B bench — indices 0..8 contiguous.
 pub fn pieces() -> Vec<Piece> {
-    let mut out = Vec::with_capacity(2 * (BOARD_COLS - 2) as usize);
+    let mut out = Vec::with_capacity(8);
     let mut index = 0;
-    for (team, row) in [(Team::A, TEAM_A_BENCH_ROW), (Team::B, TEAM_B_BENCH_ROW)] {
-        for col in 1..(BOARD_COLS - 1) {
-            out.push(Piece::new(col, row, team, index));
+    for (team, active_row, bench_row) in [
+        (Team::A, TEAM_A_ROW, TEAM_A_BENCH_ROW),
+        (Team::B, TEAM_B_ROW, TEAM_B_BENCH_ROW),
+    ] {
+        for col in ACTIVE_COLS {
+            out.push(Piece::new(col, active_row, team, index));
             index += 1;
         }
+        out.push(Piece::new(BENCH_COL, bench_row, team, index));
+        index += 1;
     }
     out
 }
@@ -891,53 +896,104 @@ mod piece_layout_tests {
     use super::*;
     use std::collections::HashSet;
 
-    /// CURRENT (pre-b3-t1) transitional layout over the 7x7 board: the
-    /// unchanged `1..(BOARD_COLS - 1)`-per-edge-row formula now yields 5 per
-    /// team / 10 total, not the old 8x8 board's 6 per team / 12 total, and
-    /// not yet b3-t1's designed 3-active+1-bench/8-total layout. This test
-    /// pins today's actual `pieces()` output so the gate stays green until
-    /// b3-t1 rewrites `pieces()` (and this test) for the final layout.
+    /// Final layout: 3 active + 1 bench per side (8 total). Each team's 3
+    /// active pieces sit on its active row across the centered `ACTIVE_COLS`;
+    /// each team's single bench piece sits on its bench row at `BENCH_COL`.
+    /// No duplicate (team, col, row) entries.
     #[test]
-    fn pieces_are_5v5_on_the_edge_rows() {
+    fn pieces_are_3_active_1_bench_per_side() {
         let ps = pieces();
-        assert_eq!(ps.len(), 10, "expected exactly 10 pieces");
+        assert_eq!(ps.len(), 8, "expected exactly 8 pieces");
 
         let team_a: Vec<&Piece> = ps.iter().filter(|p| p.team == Team::A).collect();
         let team_b: Vec<&Piece> = ps.iter().filter(|p| p.team == Team::B).collect();
-        assert_eq!(team_a.len(), 5, "expected 5 Team A pieces");
-        assert_eq!(team_b.len(), 5, "expected 5 Team B pieces");
+        assert_eq!(team_a.len(), 4, "expected 4 Team A pieces (3 active + 1 bench)");
+        assert_eq!(team_b.len(), 4, "expected 4 Team B pieces (3 active + 1 bench)");
 
-        assert!(
-            team_a.iter().all(|p| p.row == 0),
-            "all Team A pieces must be on row 0"
+        let active_cols: HashSet<u16> = ACTIVE_COLS.iter().copied().collect();
+
+        let a_active: Vec<&&Piece> = team_a.iter().filter(|p| p.row == TEAM_A_ROW).collect();
+        let a_bench: Vec<&&Piece> = team_a
+            .iter()
+            .filter(|p| p.row == TEAM_A_BENCH_ROW)
+            .collect();
+        assert_eq!(a_active.len(), 3, "expected 3 Team A active pieces");
+        assert_eq!(a_bench.len(), 1, "expected 1 Team A bench piece");
+        let a_active_cols: HashSet<u16> = a_active.iter().map(|p| p.col).collect();
+        assert_eq!(
+            a_active_cols, active_cols,
+            "Team A active columns must be ACTIVE_COLS"
         );
-        assert!(
-            team_b.iter().all(|p| p.row == BOARD_ROWS - 1),
-            "all Team B pieces must be on row BOARD_ROWS - 1"
+        assert_eq!(
+            a_bench[0].col, BENCH_COL,
+            "Team A bench piece must sit on BENCH_COL"
         );
 
-        let expected_cols: HashSet<u16> = (1..=5).collect();
-        let a_cols: HashSet<u16> = team_a.iter().map(|p| p.col).collect();
-        let b_cols: HashSet<u16> = team_b.iter().map(|p| p.col).collect();
-        assert_eq!(a_cols, expected_cols, "Team A columns must be {{1..5}}");
-        assert_eq!(b_cols, expected_cols, "Team B columns must be {{1..5}}");
+        let b_active: Vec<&&Piece> = team_b.iter().filter(|p| p.row == TEAM_B_ROW).collect();
+        let b_bench: Vec<&&Piece> = team_b
+            .iter()
+            .filter(|p| p.row == TEAM_B_BENCH_ROW)
+            .collect();
+        assert_eq!(b_active.len(), 3, "expected 3 Team B active pieces");
+        assert_eq!(b_bench.len(), 1, "expected 1 Team B bench piece");
+        let b_active_cols: HashSet<u16> = b_active.iter().map(|p| p.col).collect();
+        assert_eq!(
+            b_active_cols, active_cols,
+            "Team B active columns must be ACTIVE_COLS"
+        );
+        assert_eq!(
+            b_bench[0].col, BENCH_COL,
+            "Team B bench piece must sit on BENCH_COL"
+        );
 
         let unique: HashSet<(bool, u16, u16)> = ps
             .iter()
             .map(|p| (p.team == Team::A, p.col, p.row))
             .collect();
-        assert_eq!(unique.len(), 10, "no duplicate (team, col, row) entries");
+        assert_eq!(unique.len(), 8, "no duplicate (team, col, row) entries");
     }
 
-    /// Piece indices form the stable set 0..10 (transitional 10-piece
-    /// layout; b3-t1 will re-pin this to 0..8), with no gaps or duplicates —
-    /// b4-t3's phase-stagger depends on this.
+    /// Piece indices form the stable contiguous set 0..8, with no gaps or
+    /// duplicates — b4-t3's phase-stagger depends on this.
     #[test]
-    fn piece_indices_are_stable_0_to_9() {
+    fn piece_indices_are_stable_0_to_8() {
         let ps = pieces();
         let mut indices: Vec<usize> = ps.iter().map(|p| p.index).collect();
         indices.sort_unstable();
-        assert_eq!(indices, (0..10).collect::<Vec<_>>());
+        assert_eq!(indices, (0..8).collect::<Vec<_>>());
+    }
+
+    /// Pins the exact index -> (team, col, row) assignment order: Team A's 3
+    /// active (ascending col), then Team A's bench, then Team B's 3 active
+    /// (ascending col), then Team B's bench. Downstream code (demo_events'
+    /// `piece_index: 6` targeting Team B, scene-wiring's `scene.pieces[6]`)
+    /// relies on this exact order — guard against silent reordering.
+    #[test]
+    fn piece_index_order_is_a_active_then_bench_then_b_active_then_bench() {
+        let ps = pieces();
+        let by_index = |i: usize| ps.iter().find(|p| p.index == i).expect("index must exist");
+
+        for (i, &col) in ACTIVE_COLS.iter().enumerate() {
+            let p = by_index(i);
+            assert_eq!(p.team, Team::A, "index {i} must be Team A active");
+            assert_eq!(p.col, col, "index {i} must be at ACTIVE_COLS[{i}]");
+            assert_eq!(p.row, TEAM_A_ROW);
+        }
+        let a_bench = by_index(3);
+        assert_eq!(a_bench.team, Team::A);
+        assert_eq!(a_bench.col, BENCH_COL);
+        assert_eq!(a_bench.row, TEAM_A_BENCH_ROW);
+
+        for (i, &col) in ACTIVE_COLS.iter().enumerate() {
+            let p = by_index(4 + i);
+            assert_eq!(p.team, Team::B, "index {} must be Team B active", 4 + i);
+            assert_eq!(p.col, col);
+            assert_eq!(p.row, TEAM_B_ROW);
+        }
+        let b_bench = by_index(7);
+        assert_eq!(b_bench.team, Team::B);
+        assert_eq!(b_bench.col, BENCH_COL);
+        assert_eq!(b_bench.row, TEAM_B_BENCH_ROW);
     }
 
     /// world_pos_for_cell must return the cell CENTER, not the corner — pins
@@ -1356,7 +1412,7 @@ mod move_event_driving_tests {
         before.update(&mut ctx, Duration::from_secs_f32(0.999));
         assert_eq!(
             (before.pieces[0].col, before.pieces[0].row),
-            (1, 0),
+            (ACTIVE_COLS[0], TEAM_A_ROW),
             "col/row must NOT yet commit to `to` before start_time"
         );
 
@@ -1375,9 +1431,9 @@ mod move_event_driving_tests {
     #[test]
     fn move_transform_translate_strictly_between_endpoints_mid_tween() {
         let mut ctx = EngineCtx;
-        let mut scene = scene_with_single_move(1.0, 1.0, (5, 0));
-        let from = world_pos_for_cell(1, 0);
-        let to = world_pos_for_cell(5, 0);
+        let mut scene = scene_with_single_move(1.0, 1.0, (5, TEAM_A_ROW));
+        let from = world_pos_for_cell(ACTIVE_COLS[0], TEAM_A_ROW);
+        let to = world_pos_for_cell(5, TEAM_A_ROW);
 
         scene.update(&mut ctx, Duration::from_secs_f32(1.5));
         let mid = scene.pieces[0].transform.translate;
@@ -1598,7 +1654,7 @@ mod overlapping_events_tests {
         let mut ctx = EngineCtx;
         let mut scene = scene_with_overlapping_move_and_die(1.0, 1.0);
 
-        let move_from = world_pos_for_cell(1, 0);
+        let move_from = world_pos_for_cell(ACTIVE_COLS[0], TEAM_A_ROW);
         let move_to = world_pos_for_cell(5, 0);
         let die_start_scale = scene.pieces[6].transform.scale;
         let die_start_translate = scene.pieces[6].transform.translate;
@@ -1645,7 +1701,7 @@ mod overlapping_events_tests {
         );
         assert_eq!(
             (scene.pieces[6].col, scene.pieces[6].row),
-            (2, TEAM_B_BENCH_ROW),
+            (ACTIVE_COLS[2], TEAM_B_ROW),
             "the Die piece's col/row must be untouched by the simultaneously-active Move event"
         );
         assert_eq!(
@@ -2047,11 +2103,11 @@ mod battle_viewer_scene_wiring_tests {
     /// b3-t1 DELIVERABLE: `BattleViewer::default().pieces` is seeded from the
     /// same layout logic as the free `pieces()` function — a real, owned
     /// field, not a divergent copy or an empty placeholder. Count is the
-    /// CURRENT transitional 10-piece layout (b3-t1 will re-pin to 8).
+    /// 8-piece (3 active + 1 bench per side) layout.
     #[test]
-    fn default_seeds_ten_pieces_from_layout() {
+    fn default_seeds_eight_pieces_from_layout() {
         let scene = BattleViewer::default();
-        assert_eq!(scene.pieces.len(), 10, "expected 10 seeded pieces");
+        assert_eq!(scene.pieces.len(), 8, "expected 8 seeded pieces");
         assert_eq!(
             scene.pieces,
             pieces(),
@@ -2199,12 +2255,11 @@ mod inspectable_tests {
         );
     }
 
-    /// DELIVERABLE: the CURRENT transitional 10-piece layout round-trips
-    /// through `snapshot()` as a `pieces` array of exactly 10 Piece-shaped
-    /// objects, and the hidden `sprite` field never appears in the snapshot
-    /// either. b3-t1 will re-pin this to 8 once it rewrites `pieces()`.
+    /// DELIVERABLE: the 8-piece layout round-trips through `snapshot()` as a
+    /// `pieces` array of exactly 8 Piece-shaped objects, and the hidden
+    /// `sprite` field never appears in the snapshot either.
     #[test]
-    fn battle_viewer_default_snapshot_has_ten_piece_shaped_elements_and_hides_sprite() {
+    fn battle_viewer_default_snapshot_has_eight_piece_shaped_elements_and_hides_sprite() {
         let scene = BattleViewer::default();
         let snap = scene.snapshot();
         let obj = snap.as_object().expect("BattleViewer snapshot must be a JSON object");
@@ -2219,7 +2274,7 @@ mod inspectable_tests {
             .expect("pieces key must be present")
             .as_array()
             .expect("pieces snapshot must be an array");
-        assert_eq!(pieces.len(), 10, "expected 10 seeded pieces in the snapshot");
+        assert_eq!(pieces.len(), 8, "expected 8 seeded pieces in the snapshot");
         for p in pieces {
             let p = p.as_object().expect("each piece snapshot must be an object");
             for key in ["col", "row", "team", "index", "transform", "color"] {
