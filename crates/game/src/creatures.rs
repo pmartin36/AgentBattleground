@@ -22,25 +22,74 @@ pub enum AnimationKind {
     Idle,
 }
 
-/// A named creature and its catalog of animations, each resolvable to a
-/// playable [`AnimatedSprite`].
+/// Max abilities a creature may carry (spec `Decisions (v1)`: the same
+/// `len() <= 4` convention as `Ability::modifiers`, applied one level up).
+pub const MAX_ABILITIES: usize = 4;
+
+/// A named creature: its animation catalog plus this game's RPG data —
+/// stats, level, abilities, and an exhaustion meter. There is no separate
+/// "roster entry" wrapper type around this: every `Creature` in this game is
+/// always a full battle participant, so the RPG fields live directly here
+/// rather than behind an extra layer of indirection. (`Creature` itself
+/// already lives in `crates/game`, not `engine_render` — see
+/// `34-creature-attributes-data-model.md`'s Decisions.)
 pub struct Creature {
     name: String,
     animations: HashMap<AnimationKind, AnimatedSprite>,
+    stats: Stats,
+    level: u32,
+    abilities: Vec<Ability>,
+    exhaustion: Exhaustion,
 }
 
 impl Creature {
-    /// New creature with the given name and an empty animation catalog.
+    /// New creature with the given name, an empty animation catalog, and
+    /// placeholder RPG defaults (`Stats::default()`, level 1, no abilities,
+    /// rested `Exhaustion`) — override via the `with_*` builders below.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             animations: HashMap::new(),
+            stats: Stats::default(),
+            level: 1,
+            abilities: Vec::new(),
+            exhaustion: Exhaustion::default(),
         }
     }
 
     /// Register `sprite` under `kind` and return self (builder style).
     pub fn with_animation(mut self, kind: AnimationKind, sprite: AnimatedSprite) -> Self {
         self.animations.insert(kind, sprite);
+        self
+    }
+
+    /// Set this creature's `Stats` and return self (builder style).
+    pub fn with_stats(mut self, stats: Stats) -> Self {
+        self.stats = stats;
+        self
+    }
+
+    /// Set this creature's level and return self (builder style).
+    pub fn with_level(mut self, level: u32) -> Self {
+        self.level = level;
+        self
+    }
+
+    /// Set this creature's abilities and return self (builder style).
+    /// Debug-asserts `abilities.len() <= MAX_ABILITIES`.
+    pub fn with_abilities(mut self, abilities: Vec<Ability>) -> Self {
+        debug_assert!(
+            abilities.len() <= MAX_ABILITIES,
+            "Creature may hold at most {MAX_ABILITIES} abilities, got {}",
+            abilities.len()
+        );
+        self.abilities = abilities;
+        self
+    }
+
+    /// Set this creature's `Exhaustion` and return self (builder style).
+    pub fn with_exhaustion(mut self, exhaustion: Exhaustion) -> Self {
+        self.exhaustion = exhaustion;
         self
     }
 
@@ -52,6 +101,22 @@ impl Creature {
     /// The sprite registered under `kind`, if any.
     pub fn animation(&self, kind: AnimationKind) -> Option<&AnimatedSprite> {
         self.animations.get(&kind)
+    }
+
+    pub fn stats(&self) -> &Stats {
+        &self.stats
+    }
+
+    pub fn level(&self) -> u32 {
+        self.level
+    }
+
+    pub fn abilities(&self) -> &[Ability] {
+        &self.abilities
+    }
+
+    pub fn exhaustion(&self) -> &Exhaustion {
+        &self.exhaustion
     }
 }
 
@@ -95,68 +160,6 @@ pub fn all() -> Vec<Creature> {
     ]
 }
 
-/// Max abilities a roster entry may carry (spec `Decisions (v1)`: the same
-/// `len() <= 4` convention as `Ability::modifiers`, applied one level up).
-pub const MAX_ABILITIES: usize = 4;
-
-/// A [`Creature`] (identity + animation catalog) paired with this game's
-/// RPG data: stats, level, abilities, and an exhaustion meter. Fields are
-/// private; the `abilities.len() <= MAX_ABILITIES` invariant is guaranteed
-/// only via [`RosterEntry::new`]. Not `Clone`/`Debug` — `Creature` isn't.
-pub struct RosterEntry {
-    creature: Creature,
-    stats: Stats,
-    level: u32,
-    abilities: Vec<Ability>,
-    exhaustion: Exhaustion,
-}
-
-impl RosterEntry {
-    /// Must debug-assert `abilities.len() <= MAX_ABILITIES` with a message
-    /// containing "at most" (mirrors `Ability::new`'s invariant message
-    /// pattern, one composition level up), then construct.
-    pub fn new(
-        creature: Creature,
-        stats: Stats,
-        level: u32,
-        abilities: Vec<Ability>,
-        exhaustion: Exhaustion,
-    ) -> Self {
-        debug_assert!(
-            abilities.len() <= MAX_ABILITIES,
-            "RosterEntry may hold at most {MAX_ABILITIES} abilities, got {}",
-            abilities.len()
-        );
-        Self {
-            creature,
-            stats,
-            level,
-            abilities,
-            exhaustion,
-        }
-    }
-
-    pub fn creature(&self) -> &Creature {
-        &self.creature
-    }
-
-    pub fn stats(&self) -> &Stats {
-        &self.stats
-    }
-
-    pub fn level(&self) -> u32 {
-        self.level
-    }
-
-    pub fn abilities(&self) -> &[Ability] {
-        &self.abilities
-    }
-
-    pub fn exhaustion(&self) -> &Exhaustion {
-        &self.exhaustion
-    }
-}
-
 /// Placeholder injury reassignment (spec `34` gives only "drops to reserve",
 /// no concrete policy). Swaps the entry at `injured_index` with the first
 /// reserve slot so `squad_role(new_index)` reports `Reserve`; the previously-
@@ -164,7 +167,7 @@ impl RosterEntry {
 /// out of range, the entry is not injured, the entry is already in reserve,
 /// or the target reserve slot does not exist. Non-canonical, exercised only
 /// by unit tests this round — TODO(code-writer): implement.
-pub fn reassign_injured_to_reserve(roster: &mut [RosterEntry], injured_index: usize) {
+pub fn reassign_injured_to_reserve(roster: &mut [Creature], injured_index: usize) {
     if injured_index >= roster.len() {
         return;
     }
@@ -181,17 +184,14 @@ pub fn reassign_injured_to_reserve(roster: &mut [RosterEntry], injured_index: us
     roster.swap(injured_index, target);
 }
 
-/// Wraps each of the 6 bundled creatures in a [`RosterEntry`] with
-/// illustrative, distinguishing placeholder `Stats`/`level`/`abilities` and a
-/// default (rested, non-injured) `Exhaustion`, in `all()`'s order. Values are
-/// non-canonical placeholders (spec `34-creature-attributes-data-model.md`
-/// `Decisions (v1)`) — TODO(code-writer): implement.
-pub fn demo_roster() -> Vec<RosterEntry> {
-    let entry = |creature: Creature,
-                 stats: Stats,
-                 level: u32,
-                 abilities: Vec<Ability>|
-     -> RosterEntry { RosterEntry::new(creature, stats, level, abilities, Exhaustion::default()) };
+/// Wraps each of the 6 bundled creatures with illustrative, distinguishing
+/// placeholder `Stats`/`level`/`abilities` (default, rested `Exhaustion`), in
+/// `all()`'s order. Values are non-canonical placeholders (spec
+/// `34-creature-attributes-data-model.md` `Decisions (v1)`) — TODO(code-writer): implement.
+pub fn demo_roster() -> Vec<Creature> {
+    let entry = |creature: Creature, stats: Stats, level: u32, abilities: Vec<Ability>| -> Creature {
+        creature.with_stats(stats).with_level(level).with_abilities(abilities)
+    };
 
     vec![
         entry(
@@ -366,44 +366,43 @@ mod tests {
         (0..n).map(|i| Ability::new(format!("Ability {i}"), vec![])).collect()
     }
 
-    /// Constructing with `MAX_ABILITIES` abilities succeeds, and every field
+    /// Building with `MAX_ABILITIES` abilities succeeds, and every field
     /// (including a non-default level/stats/exhaustion so a hardcoded-default
     /// getter can't silently pass) round-trips through its accessor.
     #[test]
-    fn new_round_trips_all_fields() {
-        let creature = Creature::new("Test");
+    fn builders_round_trip_all_fields() {
         let stats = Stats { strength: 5, dexterity: 6, intelligence: 7, vitality: 8 };
         let level = 3u32;
         let abilities = dummy_abilities(MAX_ABILITIES);
         let exhaustion = Exhaustion::default().apply_damage_exhaustion(15);
 
-        let entry = RosterEntry::new(creature, stats, level, abilities.clone(), exhaustion);
+        let creature = Creature::new("Test")
+            .with_stats(stats)
+            .with_level(level)
+            .with_abilities(abilities.clone())
+            .with_exhaustion(exhaustion);
 
-        assert_eq!(entry.creature().name(), "Test");
-        assert_eq!(*entry.stats(), stats);
-        assert_eq!(entry.level(), level);
-        assert_eq!(entry.abilities(), abilities.as_slice());
-        assert_eq!(entry.exhaustion(), &exhaustion);
+        assert_eq!(creature.name(), "Test");
+        assert_eq!(*creature.stats(), stats);
+        assert_eq!(creature.level(), level);
+        assert_eq!(creature.abilities(), abilities.as_slice());
+        assert_eq!(creature.exhaustion(), &exhaustion);
     }
 
     /// Constructing with more than `MAX_ABILITIES` abilities panics under
-    /// debug assertions (the profile `cargo test` uses by default) — same
-    /// invariant-enforcement pattern as `Ability::new`, one level up. The
+    /// debug assertions (the profile `cargo test` uses by default). The
     /// panic message must mention "at most" so this can't be satisfied by an
     /// unrelated panic.
     #[test]
     #[should_panic(expected = "at most")]
-    fn new_with_more_than_max_abilities_panics() {
-        let creature = Creature::new("Test");
-        let stats = Stats::default();
-        let exhaustion = Exhaustion::default();
-        RosterEntry::new(creature, stats, 1, dummy_abilities(MAX_ABILITIES + 1), exhaustion);
+    fn with_abilities_more_than_max_panics() {
+        Creature::new("Test").with_abilities(dummy_abilities(MAX_ABILITIES + 1));
     }
 
-    /// A full `ROSTER_SIZE` roster of distinctly-named entries, all rested
+    /// A full `ROSTER_SIZE` roster of distinctly-named creatures, all rested
     /// except `injured_index` (if `Some`), which is pushed to `Exhaustion`'s
     /// injured state via 100 damage-exhaustion.
-    fn build_roster(injured_index: Option<usize>) -> Vec<RosterEntry> {
+    fn build_roster(injured_index: Option<usize>) -> Vec<Creature> {
         (0..crate::squad_role::ROSTER_SIZE)
             .map(|i| {
                 let exhaustion = if Some(i) == injured_index {
@@ -411,19 +410,13 @@ mod tests {
                 } else {
                     Exhaustion::default()
                 };
-                RosterEntry::new(
-                    Creature::new(format!("Entry {i}")),
-                    Stats::default(),
-                    1,
-                    vec![],
-                    exhaustion,
-                )
+                Creature::new(format!("Entry {i}")).with_exhaustion(exhaustion)
             })
             .collect()
     }
 
-    fn names(roster: &[RosterEntry]) -> Vec<String> {
-        roster.iter().map(|e| e.creature().name().to_string()).collect()
+    fn names(roster: &[Creature]) -> Vec<String> {
+        roster.iter().map(|c| c.name().to_string()).collect()
     }
 
     /// An injured entry in an active slot is swapped into the first reserve
@@ -449,7 +442,7 @@ mod tests {
             "injured entry's new position {new_index} must be a reserve slot"
         );
         assert_eq!(
-            roster[0].creature().name(),
+            roster[0].name(),
             before[first_reserve],
             "the entry previously in the first reserve slot must now occupy the vacated active slot"
         );
@@ -501,7 +494,7 @@ mod tests {
             "Verdant Treant",
             "Shadow Cat",
         ];
-        let actual: Vec<&str> = roster.iter().map(|e| e.creature().name()).collect();
+        let actual: Vec<&str> = roster.iter().map(|c| c.name()).collect();
         assert_eq!(actual, expected);
     }
 
@@ -513,11 +506,11 @@ mod tests {
         let roster = demo_roster();
         let ember_wolf = roster
             .iter()
-            .find(|e| e.creature().name() == "Ember Wolf")
+            .find(|c| c.name() == "Ember Wolf")
             .expect("Ember Wolf must be in demo_roster");
         let stone_golem = roster
             .iter()
-            .find(|e| e.creature().name() == "Stone Golem")
+            .find(|c| c.name() == "Stone Golem")
             .expect("Stone Golem must be in demo_roster");
         assert_ne!(
             ember_wolf.stats(),
@@ -531,11 +524,11 @@ mod tests {
     #[test]
     fn demo_roster_entries_start_rested() {
         let roster = demo_roster();
-        for entry in &roster {
+        for creature in &roster {
             assert!(
-                !entry.exhaustion().is_injured(),
+                !creature.exhaustion().is_injured(),
                 "{} must start rested, not injured",
-                entry.creature().name()
+                creature.name()
             );
         }
     }
