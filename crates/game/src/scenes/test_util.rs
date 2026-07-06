@@ -48,13 +48,3 @@ pub(crate) fn has_non_space(buf: &Buffer, rect: Rect) -> bool {
         .flat_map(|y| (rect.left()..rect.right()).map(move |x| (x, y)))
         .any(|(x, y)| buf.cell((x, y)).unwrap().symbol() != " ")
 }
-
-/// Row index of the first row whose text contains `needle`, if any.
-pub(crate) fn row_containing(buf: &Buffer, w: u16, h: u16, needle: &str) -> Option<u16> {
-    (0..h).find(|&y| {
-        let row_text: String = (0..w)
-            .map(|x| buf.cell((x, y)).unwrap().symbol().to_string())
-            .collect();
-        row_text.contains(needle)
-    })
-}

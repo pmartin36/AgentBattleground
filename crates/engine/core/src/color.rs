@@ -72,6 +72,28 @@ impl Rgba {
     }
 }
 
+impl Rgba {
+    /// Per-channel (r,g,b,a) linear interpolation from `self` (t=0) toward
+    /// `other` (t=1). `t` is clamped to `[0.0, 1.0]` before use. Each channel
+    /// is rounded to the nearest `u8` (b2-t1: drives the roster name's
+    /// fade-toward-background colour cross-fade).
+    ///
+    pub fn lerp(self, other: Rgba, t: f32) -> Rgba {
+        let t = t.clamp(0.0, 1.0);
+        let ch = |a: u8, b: u8| -> u8 {
+            (a as f32 + (b as f32 - a as f32) * t)
+                .round()
+                .clamp(0.0, 255.0) as u8
+        };
+        Rgba {
+            r: ch(self.r, other.r),
+            g: ch(self.g, other.g),
+            b: ch(self.b, other.b),
+            a: ch(self.a, other.a),
+        }
+    }
+}
+
 impl std::str::FromStr for Rgba {
     type Err = ParseRgbaError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -235,5 +257,41 @@ mod tests {
     fn reject_serde_malformed_string() {
         let result = serde_json::from_str::<Rgba>("\"not-a-color\"");
         assert!(result.is_err(), "serde must reject malformed hex");
+    }
+
+    // --- lerp (b2-t1: roster name fade-toward-background) ---
+
+    #[test]
+    fn lerp_at_t0_returns_self() {
+        let a = Rgba::new(0xc8, 0x1e, 0x1e, 0xff);
+        let b = Rgba::new(0x00, 0x00, 0x00, 0xff);
+        assert_eq!(a.lerp(b, 0.0), a, "t=0 must return the first colour unchanged");
+    }
+
+    #[test]
+    fn lerp_at_t1_returns_other() {
+        let a = Rgba::new(0xc8, 0x1e, 0x1e, 0xff);
+        let b = Rgba::new(0x00, 0x00, 0x00, 0xff);
+        assert_eq!(a.lerp(b, 1.0), b, "t=1 must return the second colour unchanged");
+    }
+
+    #[test]
+    fn lerp_at_midpoint_averages_channels() {
+        let a = Rgba::new(0xff, 0xff, 0xff, 0xff);
+        let b = Rgba::new(0x00, 0x00, 0x00, 0xff);
+        let mid = a.lerp(b, 0.5);
+        assert_eq!(
+            (mid.r, mid.g, mid.b),
+            (0x80, 0x80, 0x80),
+            "midpoint of white->black must be the per-channel rounded average"
+        );
+    }
+
+    #[test]
+    fn lerp_clamps_t_outside_unit_range() {
+        let a = Rgba::new(0xc8, 0x1e, 0x1e, 0xff);
+        let b = Rgba::new(0x00, 0x00, 0x00, 0xff);
+        assert_eq!(a.lerp(b, -1.0), a, "t below 0 must clamp to t=0 (return self)");
+        assert_eq!(a.lerp(b, 2.0), b, "t above 1 must clamp to t=1 (return other)");
     }
 }
