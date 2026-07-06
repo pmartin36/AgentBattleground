@@ -1,3 +1,4 @@
+pub mod ability;
 pub mod app;
 pub mod assets;
 pub mod creatures;
