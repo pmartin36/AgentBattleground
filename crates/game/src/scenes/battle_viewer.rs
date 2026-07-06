@@ -90,18 +90,19 @@ pub fn draw_board_lines(buf: &mut Buffer, geom: &BoardGeometry) {
     }
 
     let mut dots = DotBuffer::new(buf_cols, buf_rows);
+    let line_color = geom.camera.grid_line_color();
 
     for i in 0..=BOARD_COLS {
         let dot_x = ((i * cw) as usize * 2).min(buf_cols - 1);
         for y in 0..buf_rows {
-            dots.set(dot_x, y, Dot::Lit(GRID_LINE_COLOR));
+            dots.set(dot_x, y, Dot::Lit(line_color));
         }
     }
 
     for j in 0..=BOARD_ROWS {
         let dot_y = ((j * chh) as usize * 4).min(buf_rows - 1);
         for x in 0..buf_cols {
-            dots.set(x, dot_y, Dot::Lit(GRID_LINE_COLOR));
+            dots.set(x, dot_y, Dot::Lit(line_color));
         }
     }
 
@@ -147,6 +148,18 @@ impl BattleCamera {
             BattleCamera::Sideline(c) => c.scale_dots,
             BattleCamera::TopDown(c) => c.scale_dots,
             BattleCamera::OverShoulder(c) => c.scale_dots,
+        }
+    }
+
+    /// Grid-line prominence for `draw_board_lines`: full-strength
+    /// `GRID_LINE_COLOR` for `TopDown`, dimmed `GRID_LINE_COLOR_DIM` for
+    /// `Sideline`/`OverShoulder` (b4-t1). Exhaustive match — no wildcard, so a
+    /// future variant is forced to choose a prominence.
+    pub fn grid_line_color(&self) -> Rgba {
+        match self {
+            BattleCamera::TopDown(_) => GRID_LINE_COLOR,
+            BattleCamera::Sideline(_) => GRID_LINE_COLOR_DIM,
+            BattleCamera::OverShoulder(_) => GRID_LINE_COLOR_DIM,
         }
     }
 
@@ -353,6 +366,11 @@ pub const TEAM_B_COLOR: Rgba = Rgba::rgb(0xb0, 0xff, 0xe0);
 /// truth referenced by both the drawing code and every test needing the
 /// exact value — never re-hardcoded as a bare `0x55` literal elsewhere.
 pub const GRID_LINE_COLOR: Rgba = Rgba::rgb(0x55, 0x55, 0x55);
+
+/// Dimmed grid-line color for camera modes where board chrome should read as
+/// faint (Sideline/OverShoulder). Strictly darker (each channel) than
+/// `GRID_LINE_COLOR` (0x55) while remaining non-zero/visible — ~half strength.
+pub const GRID_LINE_COLOR_DIM: Rgba = Rgba::rgb(0x2a, 0x2a, 0x2a);
 
 impl Team {
     /// This team's tint color: A -> `TEAM_A_COLOR`, B -> `TEAM_B_COLOR`.
@@ -868,19 +886,39 @@ mod draw_board_lines_tests {
     /// sits at dx=0/dy=0 within its terminal cell (exact, no clamp); only the
     /// outermost i==7/j==7 boundary clamps to the LAST valid dot index
     /// (dx=1/dy=3 — one dot short of board_rect.right()/bottom()).
+    ///
+    /// Camera is `TopDown` (full-strength grid lines, b4-t1) so the glyph/
+    /// shape assertions below stay independent of grid-line *color* — color
+    /// is covered separately by the per-mode color tests further down.
     fn geom() -> BoardGeometry {
         BoardGeometry {
             cell_width_cols: 4,
             cell_height_rows: 2,
             board_rect: Rect::new(2, 1, 28, 14),
-            camera: BattleCamera::Sideline(SideView::new(8.0)),
+            camera: BattleCamera::TopDown(TopDownView::new(8.0)),
         }
+    }
+
+    /// Same geometry as `geom()` but with a caller-supplied camera, for
+    /// per-mode grid-line-color tests (b4-t1).
+    fn geom_with_camera(camera: BattleCamera) -> BoardGeometry {
+        BoardGeometry { camera, ..geom() }
     }
 
     /// GRID_LINE_COLOR converted to the ratatui fg representation `draw_grid`
     /// writes it as — never a duplicated `0x55` literal.
     fn grid_fg() -> Color {
         Color::Rgb(GRID_LINE_COLOR.r, GRID_LINE_COLOR.g, GRID_LINE_COLOR.b)
+    }
+
+    /// GRID_LINE_COLOR_DIM converted to the ratatui fg representation
+    /// `draw_grid` writes it as — never a duplicated literal (b4-t1).
+    fn grid_fg_dim() -> Color {
+        Color::Rgb(
+            GRID_LINE_COLOR_DIM.r,
+            GRID_LINE_COLOR_DIM.g,
+            GRID_LINE_COLOR_DIM.b,
+        )
     }
 
     #[test]
@@ -1031,6 +1069,73 @@ mod draw_board_lines_tests {
                 .symbol(),
             "\u{284F}"
         );
+    }
+
+    /// `GRID_LINE_COLOR_DIM` must be strictly darker (every channel) than
+    /// `GRID_LINE_COLOR` and non-zero — dimmed but still visible (b4-t1).
+    #[test]
+    fn grid_line_color_dim_is_darker_than_full() {
+        // `black_box` hides the fact both sides are `const` from clippy's
+        // constant-comparison lints (assertions_on_constants /
+        // absurd_extreme_comparisons) — the values themselves are still real.
+        let dim = std::hint::black_box(GRID_LINE_COLOR_DIM);
+        let full = std::hint::black_box(GRID_LINE_COLOR);
+        assert!(dim.r < full.r);
+        assert!(dim.g < full.g);
+        assert!(dim.b < full.b);
+        assert!(dim.r > 0 || dim.g > 0 || dim.b > 0);
+    }
+
+    /// `BattleCamera::grid_line_color` per-variant mapping: full strength for
+    /// `TopDown`, dimmed for `Sideline`/`OverShoulder` (b4-t1).
+    #[test]
+    fn battle_camera_grid_line_color_per_variant() {
+        assert_eq!(
+            BattleCamera::TopDown(TopDownView::new(8.0)).grid_line_color(),
+            GRID_LINE_COLOR
+        );
+        assert_eq!(
+            BattleCamera::Sideline(SideView::new(8.0)).grid_line_color(),
+            GRID_LINE_COLOR_DIM
+        );
+        assert_eq!(
+            BattleCamera::OverShoulder(OverShoulderView::new(8.0, 3.0)).grid_line_color(),
+            GRID_LINE_COLOR_DIM
+        );
+    }
+
+    /// Sideline mode must render grid lines dimmed (b4-t1).
+    #[test]
+    fn sideline_grid_lines_render_dimmed() {
+        let g = geom_with_camera(BattleCamera::Sideline(SideView::new(8.0)));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 20));
+        draw_board_lines(&mut buf, &g);
+
+        let cell = buf.cell((2, 1)).unwrap();
+        assert_eq!(cell.fg, grid_fg_dim());
+    }
+
+    /// Over-the-shoulder mode must render grid lines dimmed (b4-t1).
+    #[test]
+    fn overshoulder_grid_lines_render_dimmed() {
+        let g = geom_with_camera(BattleCamera::OverShoulder(OverShoulderView::new(8.0, 3.0)));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 20));
+        draw_board_lines(&mut buf, &g);
+
+        let cell = buf.cell((2, 1)).unwrap();
+        assert_eq!(cell.fg, grid_fg_dim());
+    }
+
+    /// Top-down mode must render grid lines at full `GRID_LINE_COLOR`
+    /// strength (b4-t1).
+    #[test]
+    fn topdown_grid_lines_render_full_strength() {
+        let g = geom_with_camera(BattleCamera::TopDown(TopDownView::new(8.0)));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 20));
+        draw_board_lines(&mut buf, &g);
+
+        let cell = buf.cell((2, 1)).unwrap();
+        assert_eq!(cell.fg, grid_fg());
     }
 }
 
@@ -1987,8 +2092,9 @@ mod battle_viewer_scene_wiring_tests {
         );
         assert_eq!(
             corner.fg,
-            Color::Rgb(GRID_LINE_COLOR.r, GRID_LINE_COLOR.g, GRID_LINE_COLOR.b),
-            "top-left board corner must be colored GRID_LINE_COLOR"
+            Color::Rgb(GRID_LINE_COLOR_DIM.r, GRID_LINE_COLOR_DIM.g, GRID_LINE_COLOR_DIM.b),
+            "top-left board corner must be colored GRID_LINE_COLOR_DIM (default camera is \
+             Sideline, which renders grid lines dimmed per b4-t1)"
         );
     }
 
@@ -2024,7 +2130,8 @@ mod battle_viewer_scene_wiring_tests {
         let mut top_colors: HashSet<(u8, u8, u8)> = HashSet::new();
         let mut bottom_colors: HashSet<(u8, u8, u8)> = HashSet::new();
 
-        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR.r, GRID_LINE_COLOR.g, GRID_LINE_COLOR.b);
+        // Default scene camera is Sideline, which renders grid lines dimmed (b4-t1).
+        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR_DIM.r, GRID_LINE_COLOR_DIM.g, GRID_LINE_COLOR_DIM.b);
         for y in geom.board_rect.y..geom.board_rect.bottom() {
             for x in geom.board_rect.x..geom.board_rect.right() {
                 let cell = buf.cell((x, y)).unwrap();
@@ -2116,7 +2223,8 @@ mod battle_viewer_scene_wiring_tests {
         }
 
         let buf = render_to_buffer(&scene, 100, 50);
-        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR.r, GRID_LINE_COLOR.g, GRID_LINE_COLOR.b);
+        // Default scene camera is Sideline, which renders grid lines dimmed (b4-t1).
+        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR_DIM.r, GRID_LINE_COLOR_DIM.g, GRID_LINE_COLOR_DIM.b);
 
         let mut found_glyph = false;
         for y in geom.board_rect.y..geom.board_rect.bottom() {
@@ -2159,7 +2267,8 @@ mod battle_viewer_scene_wiring_tests {
         scene.pieces[0].color = TEAM_B_COLOR;
         let buf_b = render_to_buffer(&scene, 100, 50);
 
-        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR.r, GRID_LINE_COLOR.g, GRID_LINE_COLOR.b);
+        // Default scene camera is Sideline, which renders grid lines dimmed (b4-t1).
+        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR_DIM.r, GRID_LINE_COLOR_DIM.g, GRID_LINE_COLOR_DIM.b);
         let mut color_diff_found = false;
         for y in geom.board_rect.y..geom.board_rect.bottom() {
             for x in geom.board_rect.x..geom.board_rect.right() {
@@ -2221,7 +2330,8 @@ mod battle_viewer_scene_wiring_tests {
         let new_center = terminal_center_cell(new_translate, &geom);
 
         let buf = render_to_buffer(&scene, 100, 50);
-        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR.r, GRID_LINE_COLOR.g, GRID_LINE_COLOR.b);
+        // Default scene camera is Sideline, which renders grid lines dimmed (b4-t1).
+        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR_DIM.r, GRID_LINE_COLOR_DIM.g, GRID_LINE_COLOR_DIM.b);
 
         let has_piece_glyph_near = |center: (i32, i32)| -> bool {
             const WINDOW: i32 = 8;
@@ -2260,7 +2370,8 @@ mod battle_viewer_scene_wiring_tests {
     /// braille glyph — the same piece-glyph-presence probe used by
     /// `render_reflects_mutated_stored_piece_transform_translate`.
     fn has_piece_glyph_near(buf: &Buffer, geom: &BoardGeometry, center: (i32, i32)) -> bool {
-        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR.r, GRID_LINE_COLOR.g, GRID_LINE_COLOR.b);
+        // Default scene camera is Sideline, which renders grid lines dimmed (b4-t1).
+        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR_DIM.r, GRID_LINE_COLOR_DIM.g, GRID_LINE_COLOR_DIM.b);
         const WINDOW: i32 = 8;
         for dy in -WINDOW..=WINDOW {
             for dx in -WINDOW..=WINDOW {
