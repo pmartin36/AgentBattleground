@@ -1785,7 +1785,8 @@ mod overlapping_events_tests {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests: BattleViewer scene wiring (b4-t4) — replaces fill_and_label with the
-// real board + 6v6 team-tinted idle-animating pieces.
+// real board + 4v4 (3 active + 1 bench per side, 8 pieces total) team-tinted
+// idle-animating pieces.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
