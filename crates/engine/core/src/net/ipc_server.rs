@@ -323,12 +323,10 @@ fn reader_loop(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 //
-// Relocated verbatim (in meaning) from `game/src/ipc_server.rs`'s test module.
-// Wire spellings that referenced game-only `SceneId`/`scene_for_digit` are
-// re-targeted at the shared `test_support::MockCatalog` fixture ("A"/"B"/"C"
-// available, everything else unavailable) per the b4-t1 blueprint — the
-// assertion *meaning* ("known target forwards+Acks; unknown target is
-// rejected with reply_to=seq, no Command forwarded") is unchanged.
+// Wire spellings are targeted at the shared `test_support::MockCatalog`
+// fixture ("A"/"B"/"C" available, everything else unavailable). The
+// assertion meaning: known target forwards+Acks; unknown target is
+// rejected with reply_to=seq, no Command forwarded.
 
 #[cfg(test)]
 mod tests {
@@ -620,9 +618,8 @@ mod tests {
     // Scene is not Send, so we cannot move a real SceneManager across threads
     // here. This lightweight protocol-stub harness mirrors what
     // apply_command + process_pending_notify do, using inline synthetic
-    // `CatalogEntry` values (no reference to any real game scene — b4-t1
-    // strips the old harness's `crate::scenes::scene_for_digit` dependency,
-    // which cannot exist in scene-core).
+    // `CatalogEntry` values (no reference to any real game scene, which
+    // cannot exist in scene-core).
 
     fn stub_schema(name: &str) -> FieldSchema {
         FieldSchema {

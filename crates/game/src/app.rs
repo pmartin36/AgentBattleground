@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::{
     cursor::{Hide, Show},
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEvent},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -12,22 +12,10 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use crate::registry::GameCatalog;
 use engine_core::net::{inspect, ipc_server};
 use engine_core::scene::manager::{self, SceneManager};
-use engine_core::scene::{InputEvent, Scene, Transition};
+use engine_core::scene::{InputEvent, Scene};
 
-/// Digit ('1'-'9') hotkeys: global scene switch via the gameplay path. Moved
-/// here from `SceneManager::route_key` in b3-t1 (scene-core cannot depend on
-/// `game::scenes`). Falls through to `mgr.route_key(key)` for everything else
-/// (quit keys, gameplay-forwarded input). Returns `true` iff the app should quit.
+/// Routes a key event to the active scene. Returns `true` iff the app should quit.
 fn handle_key(mgr: &mut SceneManager, key: KeyEvent) -> bool {
-    if let KeyCode::Char(c) = key.code {
-        if let Some(id) = crate::scenes::scene_for_digit(c) {
-            mgr.set_gameplay_transition(Transition {
-                target: id.into(),
-                params: None,
-            });
-            return false;
-        }
-    }
     mgr.route_key(key)
 }
 
@@ -129,9 +117,8 @@ pub fn run_with_params(
         //    across multiple frames, each event only advancing 33ms of
         //    apparent lag per frame; the debug command channel above already
         //    drains fully with `while let Ok(..) = try_recv()`, this matches
-        //    that pattern. Digit hotkeys (1–4) are intercepted by `handle_key`;
-        //    everything else (q / Ctrl-C / gameplay input) is handled by
-        //    route_key.
+        //    that pattern. Every key (q / Ctrl-C / gameplay input, including
+        //    digits) is handled by route_key.
         let mut should_quit = false;
         while event::poll(Duration::ZERO)? {
             match event::read()? {
@@ -214,64 +201,4 @@ mod tests {
         );
     }
 
-    // ---- digit-hotkey dispatch (reinstated from manager.rs, moved in b3-t2) ----
-
-    use crate::scene_id::SceneId;
-    use crossterm::event::KeyModifiers;
-    use engine_core::SceneKey;
-
-    fn key(c: char) -> KeyEvent {
-        KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
-    }
-
-    fn mgr_at(boot: SceneId) -> SceneManager {
-        SceneManager::new(SceneKey::from(boot), Box::new(GameCatalog))
-    }
-
-    #[test]
-    fn route_key_digit_2_switches_to_battle_viewer() {
-        let mut mgr = mgr_at(SceneId::MainHub);
-        let quit = handle_key(&mut mgr, key('2'));
-        assert!(!quit, "digit key must never request quit");
-        mgr.process_pending();
-        assert_eq!(mgr.active_id(), SceneKey::from(SceneId::BattleViewer));
-    }
-
-    #[test]
-    fn route_key_digit_1_is_global_from_battle_viewer() {
-        let mut mgr = mgr_at(SceneId::MainHub);
-        mgr.set_gameplay_transition(Transition {
-            target: SceneKey::from(SceneId::BattleViewer),
-            params: None,
-        });
-        mgr.process_pending();
-        assert_eq!(mgr.active_id(), SceneKey::from(SceneId::BattleViewer));
-
-        let quit = handle_key(&mut mgr, key('1'));
-        assert!(!quit);
-        mgr.process_pending();
-        assert_eq!(
-            mgr.active_id(),
-            SceneKey::from(SceneId::MainHub),
-            "digit '1' must switch scenes globally, not just from MainHub"
-        );
-    }
-
-    #[test]
-    fn route_key_debug_transition_overrides_digit_gameplay() {
-        let mut mgr = mgr_at(SceneId::MainHub);
-        mgr.set_debug_transition(Transition {
-            target: SceneKey::from(SceneId::RosterManager),
-            params: None,
-        });
-
-        let quit = handle_key(&mut mgr, key('2'));
-        assert!(!quit);
-        mgr.process_pending();
-        assert_eq!(
-            mgr.active_id(),
-            SceneKey::from(SceneId::RosterManager),
-            "a same-tick debug transition must win over a digit-triggered gameplay transition"
-        );
-    }
 }

@@ -34,12 +34,19 @@ pub fn schema_for(id: SceneId) -> FieldSchema {
     }
 }
 
+/// Authoritative ordered list of scenes M1 implements, in catalog order.
+/// `is_implemented`/`catalog_keys` both read this single list.
+const IMPLEMENTED_SCENES: &[SceneId] = &[
+    SceneId::MainHub,
+    SceneId::BattleViewer,
+    SceneId::RosterManager,
+    SceneId::Leaderboard,
+];
+
 /// Whether `construct(id)` will succeed (vs. panic) for `id`. Derived from
-/// `scene_for_digit`, the single source of truth for constructible scenes.
+/// `IMPLEMENTED_SCENES`, the single source of truth for constructible scenes.
 pub fn is_implemented(id: SceneId) -> bool {
-    ('1'..='9')
-        .filter_map(crate::scenes::scene_for_digit)
-        .any(|s| s == id)
+    IMPLEMENTED_SCENES.contains(&id)
 }
 
 /// `engine_core::SceneCatalog` adapter wrapping the free `construct`/`schema_for`/
@@ -67,11 +74,7 @@ impl SceneCatalog for GameCatalog {
     }
 
     fn catalog_keys(&self) -> Vec<SceneKey> {
-        ['1', '2', '3', '4']
-            .iter()
-            .filter_map(|&c| crate::scenes::scene_for_digit(c))
-            .map(SceneKey::from)
-            .collect()
+        IMPLEMENTED_SCENES.iter().map(|&id| SceneKey::from(id)).collect()
     }
 
     fn is_available(&self, key: &SceneKey) -> bool {
@@ -298,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn game_catalog_catalog_keys_are_four_in_digit_order() {
+    fn game_catalog_catalog_keys_are_four_in_catalog_order() {
         let catalog = GameCatalog;
         let expected: Vec<SceneKey> = vec![
             SceneId::MainHub.into(),
@@ -307,6 +310,24 @@ mod tests {
             SceneId::Leaderboard.into(),
         ];
         assert_eq!(catalog.catalog_keys(), expected);
+    }
+
+    /// Pins `IMPLEMENTED_SCENES` directly: exactly the 4 M1 scenes, in
+    /// catalog order — not the digit order of `SceneId::all()`, and not a
+    /// subset/superset. A silently wrong list here breaks
+    /// `is_implemented`/`catalog_keys` and the debug-inspector's scene-switch
+    /// validation that consumes them.
+    #[test]
+    fn implemented_scenes_const_is_four_in_catalog_order() {
+        assert_eq!(
+            IMPLEMENTED_SCENES,
+            &[
+                SceneId::MainHub,
+                SceneId::BattleViewer,
+                SceneId::RosterManager,
+                SceneId::Leaderboard,
+            ]
+        );
     }
 
     #[test]
