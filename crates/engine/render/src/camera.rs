@@ -115,10 +115,11 @@ impl Camera for OverShoulderView {
     }
 
     fn depth_key(&self, pos: WorldPos) -> i32 {
-        // Nearer = closer to the shoulder row (the camera's vantage), so depth
-        // DECREASES with y — the reverse of SideView, matching "from behind
-        // the back row." Linear in y; no perspective term.
-        ((self.shoulder_row - pos.y) * self.scale_dots).round() as i32
+        // Nearer = closer to the shoulder row (the camera's vantage, behind one
+        // back row). Proximity — NOT raw y — so pieces closest to `shoulder_row`
+        // sort on top no matter which side of the board that row sits on. Linear;
+        // no perspective term.
+        (-(pos.y - self.shoulder_row).abs() * self.scale_dots).round() as i32
     }
 }
 
@@ -334,10 +335,42 @@ mod tests {
         assert_eq!(dx, -8, "negative pos must project via the same linear formula");
     }
 
-    /// depth_key must strictly DECREASE as y increases (reversed vs. SideView):
-    /// nearer = closer to the shoulder row, the camera's vantage point.
+    /// depth_key must be larger for positions CLOSER to the shoulder row
+    /// (proximity to the camera's vantage), regardless of which side of the
+    /// board the shoulder row sits on. Uses the game's actual placement
+    /// (shoulder_row ABOVE the pieces) — the config the prior masking test
+    /// (shoulder_row below all pieces) never exercised.
     #[test]
-    fn overshoulderview_depth_key_smaller_y_is_nearer() {
+    fn overshoulderview_depth_key_nearer_shoulder_row_is_nearer() {
+        let cam = OverShoulderView::new(4.0, 6.5);
+        let near_pos = WorldPos::new(0.0, 5.0); // distance 1.5 from shoulder_row
+        let far_pos = WorldPos::new(0.0, 1.0); // distance 5.5 from shoulder_row
+        assert!(
+            cam.depth_key(near_pos) > cam.depth_key(far_pos),
+            "position closer to shoulder_row must yield a strictly greater depth_key"
+        );
+    }
+
+    /// Pins the exact regression: with the game's real construction
+    /// (shoulder_row = 6.5, scale = 36), the team nearer the shoulder row
+    /// must composite ON TOP of (greater depth_key than) the far team —
+    /// occlusion must not invert.
+    #[test]
+    fn overshoulderview_depth_key_matches_composite_ordering() {
+        let cam = OverShoulderView::new(36.0, 6.5);
+        let team_b_near = WorldPos::new(0.0, 5.0);
+        let team_a_far = WorldPos::new(0.0, 1.0);
+        assert!(
+            cam.depth_key(team_b_near) > cam.depth_key(team_a_far),
+            "near team must get a greater depth_key than the far team (composites on top)"
+        );
+    }
+
+    /// Proximity ordering is symmetric regardless of which side of the board
+    /// the shoulder row sits on: with shoulder_row BELOW all pieces, smaller
+    /// y (nearer the row) still yields the greater depth_key.
+    #[test]
+    fn overshoulderview_depth_key_side_independent() {
         let cam = OverShoulderView::new(4.0, -10.0);
         let near_pos = WorldPos::new(0.0, 1.0); // closer to shoulder_row (-10)
         let far_pos = WorldPos::new(0.0, 3.0);

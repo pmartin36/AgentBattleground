@@ -2667,30 +2667,60 @@ mod handle_input_camera_tests {
         }
     }
 
-    /// BEHAVIORAL: the keypress must actually reach `BattleViewer::handle_input`
-    /// through the real `app.rs`/`SceneManager::route_key` path (b1-t2's seam),
-    /// not just work against the isolated fn — routing key '3' through a real
-    /// `SceneManager` booted into `BattleViewer` must visibly change the
-    /// rendered frame (grid-line prominence / piece projection) versus the
-    /// default (Sideline) render.
+    /// BEHAVIORAL (b6-t1 checkpoint): the keypress must actually reach
+    /// `BattleViewer::handle_input` through the real `app.rs`/
+    /// `SceneManager::route_key` path (b1-t2's seam) for all 3 camera modes,
+    /// AND must stay a purely local camera change — never a global scene
+    /// transition (no pending transition queued, scene identity unchanged).
     #[test]
     fn route_key_switches_battle_viewer_camera_end_to_end() {
         let mut mgr = SceneManager::with_scene(Box::new(BattleViewer::default()), Box::new(GameCatalog));
 
         let mut terminal = Terminal::new(TestBackend::new(40, 20)).unwrap();
         terminal.draw(|f| mgr.render(f)).unwrap();
-        let buf_default = terminal.backend().buffer().clone();
+        let buf_sideline = terminal.backend().buffer().clone();
 
-        let quit = mgr.route_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
-        assert!(!quit, "digit key must not be treated as a quit key");
+        let mut render_after = |digit: char| {
+            let quit = mgr.route_key(KeyEvent::new(KeyCode::Char(digit), KeyModifiers::NONE));
+            assert!(!quit, "digit key '{digit}' must not be treated as a quit key");
+            assert!(
+                mgr.process_pending().is_none(),
+                "digit key '{digit}' must never queue a scene transition — camera switching \
+                 is local to BattleViewer, not a global scene change"
+            );
+            assert_eq!(
+                mgr.active_id(),
+                SceneId::BattleViewer.into(),
+                "digit key '{digit}' must leave the active scene as BattleViewer"
+            );
+            terminal.draw(|f| mgr.render(f)).unwrap();
+            terminal.backend().buffer().clone()
+        };
 
-        terminal.draw(|f| mgr.render(f)).unwrap();
-        let buf_top_down = terminal.backend().buffer().clone();
+        let buf_over_shoulder = render_after('2');
+        let buf_top_down = render_after('3');
 
         assert_ne!(
-            buf_default, buf_top_down,
+            buf_sideline, buf_over_shoulder,
+            "routing '2' through SceneManager::route_key must reach BattleViewer::handle_input \
+             and change the rendered output (Sideline -> OverShoulder)"
+        );
+        assert_ne!(
+            buf_sideline, buf_top_down,
             "routing '3' through SceneManager::route_key must reach BattleViewer::handle_input \
              and change the rendered output (Sideline -> TopDown)"
+        );
+        assert_ne!(
+            buf_over_shoulder, buf_top_down,
+            "OverShoulder and TopDown frames must be visibly distinct from each other"
+        );
+
+        // Back to Sideline via '1' — confirms direct (non-cycling) re-selection also
+        // stays local and reproduces the original default frame.
+        let buf_back_to_sideline = render_after('1');
+        assert_eq!(
+            buf_sideline, buf_back_to_sideline,
+            "routing '1' must jump directly back to Sideline, reproducing the default frame"
         );
     }
 }
