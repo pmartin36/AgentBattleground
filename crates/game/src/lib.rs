@@ -3,6 +3,8 @@ pub mod assets;
 pub mod creatures;
 pub mod scene_id;
 pub mod scenes;
+pub mod squad_role;
+pub mod stats;
 pub mod registry;
 pub mod cli;
 
