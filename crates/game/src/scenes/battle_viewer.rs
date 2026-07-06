@@ -114,9 +114,28 @@ pub enum Team {
     B,
 }
 
-/// Team A occupies the top row; Team B occupies the bottom row.
-pub const TEAM_A_ROW: u16 = 0;
-pub const TEAM_B_ROW: u16 = BOARD_ROWS - 1;
+/// Team A's active (fighting) row is one cell inward of its bench row; Team
+/// B's active row mirrors it from the bottom. Team A's bench row is the
+/// topmost row, Team B's bench row is the bottommost row.
+pub const TEAM_A_ROW: u16 = 1;
+pub const TEAM_B_ROW: u16 = BOARD_ROWS - 2;
+pub const TEAM_A_BENCH_ROW: u16 = 0;
+pub const TEAM_B_BENCH_ROW: u16 = BOARD_ROWS - 1;
+
+/// Symmetric empty column margin on each board edge framing the 3 centered
+/// active columns: `(BOARD_COLS - 3) / 2`. For `BOARD_COLS = 7` this is 2,
+/// leaving cols 0-1 and 5-6 empty.
+const COL_MARGIN: u16 = (BOARD_COLS - 3) / 2;
+
+/// The 3 centered active (fighting) columns each team's active pieces
+/// occupy, ascending, with symmetric empty margins on both board edges
+/// (18's centering approach, narrowed). For `BOARD_COLS = 7`: `[2, 3, 4]`.
+pub const ACTIVE_COLS: [u16; 3] = [COL_MARGIN, COL_MARGIN + 1, COL_MARGIN + 2];
+
+/// The single column the lone bench piece stands on — the center of the 3
+/// active columns, directly behind the middle active piece. For
+/// `BOARD_COLS = 7`: `3`.
+pub const BENCH_COL: u16 = ACTIVE_COLS[1];
 
 /// One placed piece. `index` is a stable 0..12 ordinal (column-ascending
 /// within a team, Team A before Team B) used later by b4-t3's phase-stagger.
@@ -160,13 +179,16 @@ impl Piece {
     }
 }
 
-/// The 12-piece 6v6 static layout: Team A on `TEAM_A_ROW`, Team B on
-/// `TEAM_B_ROW`, both on columns `1..(BOARD_COLS - 1)` (cols 0 and the last
-/// column left empty). Deterministic order: Team A cols asc, then Team B cols asc.
+/// Transitional 10-piece 5v5 layout: parks pieces on each team's BENCH row
+/// (`TEAM_A_BENCH_ROW`/`TEAM_B_BENCH_ROW`), both on columns
+/// `1..(BOARD_COLS - 1)` (cols 0 and the last column left empty).
+/// Deterministic order: Team A cols asc, then Team B cols asc. This is a
+/// scaffold — b3-t1 replaces it with the real 3-active+1-bench-per-side
+/// layout on the active rows (`TEAM_A_ROW`/`TEAM_B_ROW`).
 pub fn pieces() -> Vec<Piece> {
-    let mut out = Vec::with_capacity(12);
+    let mut out = Vec::with_capacity(2 * (BOARD_COLS - 2) as usize);
     let mut index = 0;
-    for (team, row) in [(Team::A, TEAM_A_ROW), (Team::B, TEAM_B_ROW)] {
+    for (team, row) in [(Team::A, TEAM_A_BENCH_ROW), (Team::B, TEAM_B_BENCH_ROW)] {
         for col in 1..(BOARD_COLS - 1) {
             out.push(Piece::new(col, row, team, index));
             index += 1;
@@ -580,6 +602,62 @@ mod board_geometry_tests {
     fn board_size_constants_are_7x7() {
         assert_eq!(BOARD_COLS, 7);
         assert_eq!(BOARD_ROWS, 7);
+    }
+
+    /// Row-layout constants (b2-t1): Team A bench(0)/active(1), Team B
+    /// active(5)/bench(6), each active row exactly one cell inward of its
+    /// team's bench row, and the layout is vertically symmetric.
+    #[test]
+    fn row_layout_constants_match_spec() {
+        assert_eq!(TEAM_A_BENCH_ROW, 0);
+        assert_eq!(TEAM_A_ROW, 1);
+        assert_eq!(TEAM_B_ROW, BOARD_ROWS - 2);
+        assert_eq!(TEAM_B_BENCH_ROW, BOARD_ROWS - 1);
+
+        assert_eq!(
+            TEAM_A_BENCH_ROW + TEAM_B_BENCH_ROW,
+            BOARD_ROWS - 1,
+            "bench rows must be vertically symmetric"
+        );
+        assert_eq!(
+            TEAM_A_ROW + TEAM_B_ROW,
+            BOARD_ROWS - 1,
+            "active rows must be vertically symmetric"
+        );
+    }
+
+    /// Column-layout constants (b2-t2): the 3 centered active columns have
+    /// symmetric empty margins on both board edges, and the lone bench
+    /// column sits at the center of that trio.
+    #[test]
+    fn column_layout_constants_are_centered() {
+        assert_eq!(ACTIVE_COLS.len(), 3);
+        assert_eq!(
+            ACTIVE_COLS[1],
+            ACTIVE_COLS[0] + 1,
+            "active columns must be contiguous ascending"
+        );
+        assert_eq!(
+            ACTIVE_COLS[2],
+            ACTIVE_COLS[1] + 1,
+            "active columns must be contiguous ascending"
+        );
+
+        let left_margin = ACTIVE_COLS[0];
+        let right_margin = (BOARD_COLS - 1) - ACTIVE_COLS[2];
+        assert_eq!(
+            left_margin, right_margin,
+            "empty margins on both board edges must be symmetric"
+        );
+
+        assert_eq!(
+            BENCH_COL, ACTIVE_COLS[1],
+            "bench column must be the center of the 3 active columns"
+        );
+        assert!(
+            ACTIVE_COLS.contains(&BENCH_COL),
+            "bench column must be one of the 3 active columns"
+        );
     }
 
     /// Cross-check: board_geometry's centering derivation must land at the
@@ -1567,7 +1645,7 @@ mod overlapping_events_tests {
         );
         assert_eq!(
             (scene.pieces[6].col, scene.pieces[6].row),
-            (2, TEAM_B_ROW),
+            (2, TEAM_B_BENCH_ROW),
             "the Die piece's col/row must be untouched by the simultaneously-active Move event"
         );
         assert_eq!(
