@@ -233,6 +233,10 @@ pub const TEAM_B_ROW: u16 = BOARD_ROWS - 2;
 pub const TEAM_A_BENCH_ROW: u16 = 0;
 pub const TEAM_B_BENCH_ROW: u16 = BOARD_ROWS - 1;
 
+/// World-y the over-shoulder camera sits behind — center of Team B's back
+/// (bench) row.
+const OVER_SHOULDER_ROW: f32 = TEAM_B_BENCH_ROW as f32 + 0.5;
+
 /// Symmetric empty column margin on each board edge framing the 3 centered
 /// active columns: `(BOARD_COLS - 3) / 2`. For `BOARD_COLS = 7` this is 2,
 /// leaving cols 0-1 and 5-6 empty.
@@ -481,6 +485,12 @@ pub struct BattleViewer {
     /// (e.g. an inspector edit) to the same piece's `transform`.
     #[inspect(hidden)]
     settled_events: std::collections::HashSet<usize>,
+    /// Active camera mode (b5-t1). Not part of the inspectable surface —
+    /// `BattleCamera` does not implement `Inspectable` — and never persists
+    /// across a scene re-entry; `enter()` resets it to
+    /// `Self::default_camera_mode()` every time.
+    #[inspect(hidden)]
+    camera_mode: BattleCamera,
 }
 
 impl Default for BattleViewer {
@@ -499,11 +509,18 @@ impl Default for BattleViewer {
             events: demo_events(),
             event_from_values: std::collections::HashMap::new(),
             settled_events: std::collections::HashSet::new(),
+            camera_mode: Self::default_camera_mode(),
         }
     }
 }
 
 impl BattleViewer {
+    /// Single source of truth for the starting camera, shared by `Default`
+    /// and `Scene::enter()` so the two can never drift apart (b5-t1).
+    fn default_camera_mode() -> BattleCamera {
+        BattleCamera::Sideline(SideView::new(0.0))
+    }
+
     /// Drives every event whose window has begun and is not yet settled,
     /// every frame — independent of any other event, per the spec's overlap
     /// rule ("the playback clock evaluates which events are active at the
@@ -595,7 +612,9 @@ impl Scene for BattleViewer {
         SceneId::BattleViewer.into()
     }
 
-    fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {}
+    fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {
+        self.camera_mode = Self::default_camera_mode();
+    }
 
     fn update(&mut self, _ctx: &mut EngineCtx, dt: Duration) -> Option<Transition> {
         self.elapsed += dt.as_secs_f32();
@@ -604,8 +623,7 @@ impl Scene for BattleViewer {
     }
 
     fn render(&self, frame: &mut Frame, area: Rect) {
-        // b5-t1 will replace this placeholder with `self.camera_mode`.
-        let geom = board_geometry(area, BattleCamera::Sideline(SideView::new(0.0)));
+        let geom = board_geometry(area, self.camera_mode);
         draw_board_lines(frame.buffer_mut(), &geom);
 
         let elapsed = Duration::from_secs_f32(self.elapsed);
@@ -632,7 +650,23 @@ impl Scene for BattleViewer {
         draw_grid(frame.buffer_mut(), geom.board_rect, &grid);
     }
 
-    fn handle_input(&mut self, _ev: InputEvent) -> Option<Transition> {
+    fn handle_input(&mut self, ev: InputEvent) -> Option<Transition> {
+        use crossterm::event::KeyCode;
+        if let InputEvent::Key(key) = ev {
+            // Direct selection: each digit always picks the same view,
+            // never a next/prev cycle (spec 37). 1=Sideline 2=OverShoulder 3=TopDown.
+            match key.code {
+                KeyCode::Char('1') => self.camera_mode = Self::default_camera_mode(),
+                KeyCode::Char('2') => {
+                    self.camera_mode =
+                        BattleCamera::OverShoulder(OverShoulderView::new(0.0, OVER_SHOULDER_ROW));
+                }
+                KeyCode::Char('3') => {
+                    self.camera_mode = BattleCamera::TopDown(TopDownView::new(0.0));
+                }
+                _ => {}
+            }
+        }
         None
     }
 
@@ -2487,6 +2521,176 @@ mod battle_viewer_scene_wiring_tests {
             (scene.elapsed - 0.15).abs() < 1e-4,
             "expected elapsed ~= 0.15 seconds after a 150ms update(), got {}",
             scene.elapsed
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: camera_mode default + enter()-reset contract (b5-t1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod camera_mode_tests {
+    use super::*;
+    use engine_core::scene::{EngineCtx, Scene};
+
+    fn default_camera() -> BattleCamera {
+        BattleViewer::default_camera_mode()
+    }
+
+    /// `BattleViewer::default()` must start on the pinned default camera
+    /// (Sideline), matching today's pre-b5-t1 hardcoded render behavior.
+    #[test]
+    fn default_battle_viewer_starts_on_default_camera() {
+        let scene = BattleViewer::default();
+        assert_eq!(
+            scene.camera_mode,
+            default_camera(),
+            "BattleViewer::default() must initialize camera_mode to the pinned default"
+        );
+    }
+
+    /// DELIVERABLE: `enter()` resets `camera_mode` to the default even if it
+    /// was previously left on a different variant (TopDown) — a prior
+    /// session's/scene-visit's camera choice must never leak into the next
+    /// entry.
+    #[test]
+    fn enter_resets_camera_mode_from_top_down_to_default() {
+        let mut scene = BattleViewer {
+            camera_mode: BattleCamera::TopDown(TopDownView::new(0.0)),
+            ..Default::default()
+        };
+
+        let mut ctx = EngineCtx;
+        scene.enter(&mut ctx, None);
+
+        assert_eq!(
+            scene.camera_mode,
+            default_camera(),
+            "enter() must reset camera_mode to the default even after it was set to TopDown"
+        );
+    }
+
+    /// Same reset contract, starting from OverShoulder instead of TopDown —
+    /// guards against a fix that only special-cases one non-default variant.
+    #[test]
+    fn enter_resets_camera_mode_from_over_shoulder_to_default() {
+        let mut scene = BattleViewer {
+            camera_mode: BattleCamera::OverShoulder(OverShoulderView::new(0.0, 3.0)),
+            ..Default::default()
+        };
+
+        let mut ctx = EngineCtx;
+        scene.enter(&mut ctx, None);
+
+        assert_eq!(
+            scene.camera_mode,
+            default_camera(),
+            "enter() must reset camera_mode to the default even after it was set to OverShoulder"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: handle_input maps keys 1/2/3 to direct camera selection (b5-t2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod handle_input_camera_tests {
+    use super::*;
+    use crate::registry::GameCatalog;
+    use crate::scenes::test_util::key_event;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use engine_core::scene::manager::SceneManager;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    /// Direct, non-cycling selection: from every starting camera_mode,
+    /// pressing '1'/'2'/'3' always jumps to the same fixed variant — never a
+    /// step relative to the current mode.
+    #[test]
+    fn digit_keys_select_camera_mode_directly_from_every_start() {
+        let starts: [BattleCamera; 3] = [
+            BattleCamera::Sideline(SideView::new(0.0)),
+            BattleCamera::OverShoulder(OverShoulderView::new(0.0, 3.0)),
+            BattleCamera::TopDown(TopDownView::new(0.0)),
+        ];
+
+        for start in starts {
+            for (digit, expect_variant) in [('1', "Sideline"), ('2', "OverShoulder"), ('3', "TopDown")] {
+                let mut scene = BattleViewer {
+                    camera_mode: start,
+                    ..Default::default()
+                };
+
+                let transition = scene.handle_input(key_event(KeyCode::Char(digit)));
+
+                assert!(
+                    transition.is_none(),
+                    "handle_input('{digit}') must never request a scene transition"
+                );
+
+                let matched = match expect_variant {
+                    "Sideline" => matches!(scene.camera_mode, BattleCamera::Sideline(_)),
+                    "OverShoulder" => matches!(scene.camera_mode, BattleCamera::OverShoulder(_)),
+                    "TopDown" => matches!(scene.camera_mode, BattleCamera::TopDown(_)),
+                    _ => unreachable!(),
+                };
+                assert!(
+                    matched,
+                    "pressing '{digit}' from {:?} must select {expect_variant} directly, got {:?}",
+                    start, scene.camera_mode
+                );
+            }
+        }
+    }
+
+    /// A non-digit key (and an out-of-range digit) must leave camera_mode
+    /// untouched and never trigger a transition.
+    #[test]
+    fn non_digit_key_leaves_camera_mode_unchanged() {
+        for code in [KeyCode::Char('x'), KeyCode::Char('4')] {
+            let mut scene = BattleViewer {
+                camera_mode: BattleCamera::TopDown(TopDownView::new(0.0)),
+                ..Default::default()
+            };
+
+            let transition = scene.handle_input(key_event(code));
+
+            assert!(transition.is_none(), "unmapped key must not request a transition");
+            assert!(
+                matches!(scene.camera_mode, BattleCamera::TopDown(_)),
+                "unmapped key {:?} must leave camera_mode unchanged, got {:?}",
+                code,
+                scene.camera_mode
+            );
+        }
+    }
+
+    /// BEHAVIORAL: the keypress must actually reach `BattleViewer::handle_input`
+    /// through the real `app.rs`/`SceneManager::route_key` path (b1-t2's seam),
+    /// not just work against the isolated fn — routing key '3' through a real
+    /// `SceneManager` booted into `BattleViewer` must visibly change the
+    /// rendered frame (grid-line prominence / piece projection) versus the
+    /// default (Sideline) render.
+    #[test]
+    fn route_key_switches_battle_viewer_camera_end_to_end() {
+        let mut mgr = SceneManager::with_scene(Box::new(BattleViewer::default()), Box::new(GameCatalog));
+
+        let mut terminal = Terminal::new(TestBackend::new(40, 20)).unwrap();
+        terminal.draw(|f| mgr.render(f)).unwrap();
+        let buf_default = terminal.backend().buffer().clone();
+
+        let quit = mgr.route_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
+        assert!(!quit, "digit key must not be treated as a quit key");
+
+        terminal.draw(|f| mgr.render(f)).unwrap();
+        let buf_top_down = terminal.backend().buffer().clone();
+
+        assert_ne!(
+            buf_default, buf_top_down,
+            "routing '3' through SceneManager::route_key must reach BattleViewer::handle_input \
+             and change the rendered output (Sideline -> TopDown)"
         );
     }
 }
