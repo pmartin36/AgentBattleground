@@ -35,18 +35,20 @@
 //! so they collapse to at most one cache entry per image — at most
 //! `DOT_FILLED` and `DOT_UNFILLED` once each) plus its three
 //! `engine_render::Button`s (`left`/`right`/`home`), which as of b4-t1 also
-//! route their panel+icon rasterization through this SAME shared cache: the
-//! left/right arrow buttons share one `BUTTON_PANEL` entry (identical rect
-//! dims), the home button is a second `BUTTON_PANEL` entry (distinct dims),
-//! and `ICON_ARROW_LEFT`/`ICON_ARROW_RIGHT`/`ICON_HOME` are three more
+//! route their panel+icon rasterization through this SAME shared cache. As
+//! of b1-t2 (`roster-screen-layout-corrections`), the left/right arrow
+//! buttons are full-`ARROW_W` sized, which now equals the home button's
+//! `(HOME_W, HOME_H)` dims exactly, so all three buttons share ONE
+//! `BUTTON_PANEL` entry (a single set of dims across arrow+home), and
+//! `ICON_ARROW_LEFT`/`ICON_ARROW_RIGHT`/`ICON_HOME` are three more
 //! distinct-bytes entries. So a single cold render's EXACT recompute delta
 //! is discriminating: routed through the shared cache (dots fixed by this
-//! test's own task, buttons fixed by b4-t1) it is 8 (sprite + DOT_FILLED +
-//! DOT_UNFILLED + 2 panel entries + 3 icon entries, each a first-ever miss);
-//! with the dots NOT routed through the cache it would be 5 (sprite + the 2
-//! panel + 3 icon entries only, since the dots never touch `asset_cache` at
-//! all on that path). A plain "delta > 0" or "second render adds 0" check
-//! cannot tell these apart; the exact value 8 vs. 5 can.
+//! test's own task, buttons fixed by b4-t1) it is 7 (sprite + DOT_FILLED +
+//! DOT_UNFILLED + 1 shared panel entry + 3 icon entries, each a first-ever
+//! miss); with the dots NOT routed through the cache it would be 4 (sprite +
+//! the 1 panel + 3 icon entries only, since the dots never touch
+//! `asset_cache` at all on that path). A plain "delta > 0" or "second render
+//! adds 0" check cannot tell these apart; the exact value 7 vs. 4 can.
 
 use std::sync::Mutex;
 
@@ -78,15 +80,14 @@ fn render_to_buffer(scene: &dyn Scene, w: u16, h: u16) -> Buffer {
 }
 
 /// A single cold `RosterManager` render (fresh scene, fresh process — no
-/// prior renders in this binary) must perform EXACTLY 8 rasterizations:
+/// prior renders in this binary) must perform EXACTLY 7 rasterizations:
 /// creature idle sprite (1) + `DOT_FILLED` (1) + `DOT_UNFILLED` (1) +
-/// `BUTTON_PANEL` at the arrow buttons' shared dims (1) + `BUTTON_PANEL` at
-/// the home button's distinct dims (1) + `ICON_ARROW_LEFT` (1) +
-/// `ICON_ARROW_RIGHT` (1) + `ICON_HOME` (1), each a first-ever miss. A delta
-/// of 5 means the dots never touched the shared cache (`RosterManager`
-/// still routes them through its own decoded field instead of
-/// `engine_render::asset_cache`) — a clean, deterministic RED against that
-/// code.
+/// `BUTTON_PANEL` shared across arrow and home buttons (1, since b1-t2 made
+/// arrow dims equal home dims) + `ICON_ARROW_LEFT` (1) + `ICON_ARROW_RIGHT`
+/// (1) + `ICON_HOME` (1), each a first-ever miss. A delta of 4 means the
+/// dots never touched the shared cache (`RosterManager` still routes them
+/// through its own decoded field instead of `engine_render::asset_cache`) —
+/// a clean, deterministic RED against that code.
 #[test]
 fn roster_manager_render_routes_dots_through_shared_cache() {
     let _guard = test_lock();
@@ -98,13 +99,14 @@ fn roster_manager_render_routes_dots_through_shared_cache() {
 
     assert_eq!(
         after - before,
-        8,
-        "a single cold RosterManager render must perform exactly 8 \
-         rasterizations (creature sprite + DOT_FILLED + DOT_UNFILLED + 2 \
-         BUTTON_PANEL entries (arrow dims, home dims) + 3 distinct icon \
-         entries, each once) — a delta of 5 means the dots never touched \
-         the shared cache (RosterManager still routes them through its own \
-         decoded field instead of engine_render::asset_cache); \
+        7,
+        "a single cold RosterManager render must perform exactly 7 \
+         rasterizations (creature sprite + DOT_FILLED + DOT_UNFILLED + 1 \
+         BUTTON_PANEL entry shared across arrow and home buttons (arrow \
+         dims now equal home dims as of b1-t2) + 3 distinct icon entries, \
+         each once) — a delta of 4 means the dots never touched the shared \
+         cache (RosterManager still routes them through its own decoded \
+         field instead of engine_render::asset_cache); \
          before={before}, after={after}"
     );
 }
