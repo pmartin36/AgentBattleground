@@ -83,9 +83,13 @@ struct RosterLayout {
 }
 
 impl RosterManager {
-    /// Width/height of the left/right arrow buttons flanking the sprite.
-    const ARROW_W: u16 = 6;
-    const ARROW_H: u16 = 3;
+    /// Width/height of the left/right arrow buttons flanking the dot row.
+    /// Shrunk ~30% from the original 6×3 so the arrows read as compact chrome
+    /// beside the dots rather than dominating the band. `ARROW_H` (2) is <=
+    /// `DOT_H` (3), so the button still sits entirely within `dot_row`'s rows,
+    /// vertically centered inline with the dot cluster.
+    const ARROW_W: u16 = 4;
+    const ARROW_H: u16 = 2;
 
     /// Width/height of the top-right home button.
     const HOME_W: u16 = 6;
@@ -94,6 +98,28 @@ impl RosterManager {
     /// Inset (in whole terminal cells) of the home/arrow buttons from the
     /// edges of `area` they anchor to (spec `Decisions (v1)`).
     const EDGE_MARGIN: u16 = 1;
+
+    /// Extra rightward inset (in cells) of the details panel beyond
+    /// `EDGE_MARGIN`, pulling the whole panel LEFT off the screen's right edge.
+    /// One cell == 2 braille dots wide, so this shifts the panel left by 2
+    /// dots (its width is unchanged — only `details_x` moves).
+    const DETAILS_LEFT_SHIFT: u16 = 1;
+
+    /// Horizontal blank-cell gap between each flanking arrow button and the
+    /// dot-cluster group it flanks. The arrows are anchored to the actual
+    /// centered dot cluster group (`dot_cluster_rects`), NOT the full-width
+    /// `dot_row` band, so they stay visually associated with the dots at any
+    /// screen width instead of hugging the screen edges. Widened from a
+    /// 1-cell hairline to a genuine 3-cell margin so the arrows have real
+    /// horizontal breathing room on either side of the dots.
+    const ARROW_DOT_GAP: u16 = 3;
+
+    /// Deliberate blank-row clearance reserved between the home button's
+    /// bottom edge and the details panel's top border. The home button and
+    /// the details panel share the top-right column, so without this the
+    /// panel jams flush against the button. The panel's top is pushed down
+    /// by this amount (shrinking its height), never the button up.
+    const DETAILS_TOP_GAP: u16 = 2;
 
     /// Duration of the slide transition between roster positions.
     const SLIDE_DUR: Duration = Duration::from_millis(300);
@@ -149,26 +175,90 @@ impl RosterManager {
     const NAME_H: u16 = 2;
     /// Height of the `level` band directly below `name`.
     const LEVEL_H: u16 = 1;
-    /// Height of the blank row separating `level` from the body content
-    /// (`stat_bar`/`exhaustion`).
+    /// Height of the blank row above the `name`/`level` header block — a top
+    /// margin that pushes the whole header block down by this amount while the
+    /// body (`stat_bar`/`sprite`/details) stays anchored (the block's height
+    /// is unchanged, so nothing below it moves). `level` still sits tight
+    /// under `name` with no gap between them; the blank row lives above the
+    /// block, not between `level` and the body.
     const HEADER_GAP_H: u16 = 1;
-    /// Height of the `stat_bar`/`exhaustion` panel row below the header gap.
+    /// Height (in rows) of the `exhaustion` sub-region at the top of the
+    /// details panel.
     const PANEL_H: u16 = 5;
+    /// Total height (in rows) of the `stat_bar` band. Sized to hold exactly
+    /// one bar outline + the label row (immediately below the outline, no
+    /// blank gap row) + one row of bottom breathing room — deliberately
+    /// compact so the freed vertical space (vs. the old 8-dot-row-tall bars,
+    /// and vs. the removed bar→label gap) becomes real margin around the bars
+    /// AND extra height for the sprite band below, not a stretched bar or a
+    /// dead empty band.
+    const STAT_BAR_BAND_H: u16 =
+        Self::STAT_BAR_OUTLINE_H + Self::STAT_LABEL_H + 1;
+    /// Height (in cells) of each stat-bar OUTLINE. 3 cells = 12 dot rows. The
+    /// fill occupies the MIDDLE cell (dot rows 4-7, 4 dot rows tall — half the
+    /// old 8), and the border box is drawn hugging that fill cell: 1 dot
+    /// outside it on every side (top border at dot row 3, bottom at dot row 8,
+    /// left/right one dot outside the fill's cell columns). Border edges and
+    /// fill dots therefore always land in DIFFERENT braille cells, so no cell
+    /// ever mixes border-grey with fill-green (the adaptive-luma masking in
+    /// `dots_to_grid` would otherwise drop the darker border dots when a
+    /// brighter fill dot shares the cell). This hug is what makes the border
+    /// read as tightly wrapping the bar instead of framing empty space.
+    const STAT_BAR_OUTLINE_H: u16 = 3;
+    /// Reserved blank cells on the RIGHT of `stat_bar` that the 4 slices never
+    /// occupy, so the rightmost bar keeps genuine horizontal clearance from
+    /// the details panel's left border. The panel's left edge sits
+    /// `EDGE_MARGIN + DETAILS_LEFT_SHIFT` (2) cells inside `stat_bar.right()`
+    /// after spec 38 item 4 pulled the panel left, so reserving 4 keeps a real
+    /// two-cell-or-wider gap between the last bar and the (now closer) panel at
+    /// every tested width.
+    const STAT_BAR_DETAILS_MARGIN: u16 = 4;
+    /// Reserved blank cells on the LEFT of `stat_bar`, before the first bar
+    /// slice, so the leftmost bar has a deliberate left margin off the screen
+    /// edge rather than starting flush at `area.x`. Mirrors how
+    /// `STAT_BAR_DETAILS_MARGIN` reserves space on the right; the 4 slices
+    /// divide the width remaining between the two margins, so adding this
+    /// narrows each bar by a few dots rather than widening the group.
+    const STAT_BAR_LEFT_MARGIN: u16 = 2;
     /// Gap (in cells) between adjacent stat-bar slices (b1-t6).
     const STAT_BAR_GAP: u16 = 1;
+    /// Dots by which each stat-bar outline box extends beyond the tight
+    /// 1-dot hug of its fill cell: the TOP border is raised this many dots
+    /// (moving the bar's top edge UP toward the header) and the BOTTOM border
+    /// is lowered this many dots (dropping it to the very bottom of its cell,
+    /// snug against the label cell directly below with no empty dot-gap). At
+    /// the fixed 3-cell `STAT_BAR_OUTLINE_H` this lands the top edge on the
+    /// top dot-row of the outline and the bottom edge on its bottom dot-row.
+    /// Only the grey border moves — the green fill stays cell-aligned in the
+    /// middle cell (a sub-cell fill shift would share a cell with a border
+    /// dot and be dropped by `dots_to_grid`'s adaptive-luma masking).
+    const STAT_BAR_BORDER_RAISE_DOTS: usize = 3;
     /// Height (in rows) of the label row at the bottom of each stat-bar
     /// slice (b1-t6).
     const STAT_LABEL_H: u16 = 1;
-    /// Sprite render-target inset from the left edge of `layout().sprite`
-    /// (b1-t7). Asymmetric with `SPRITE_INSET_RIGHT` — this asymmetry IS
-    /// the rightward shift; do not add a separate shift constant.
-    const SPRITE_INSET_LEFT: u16 = 5;
-    /// Sprite render-target inset from the right edge of `layout().sprite`
-    /// (b1-t7).
+    /// Sprite render-target inset from the left edge of `layout().sprite`.
+    /// Asymmetric with `SPRITE_INSET_RIGHT` — the asymmetry IS the horizontal
+    /// shift; do not add a separate shift constant. `LEFT < RIGHT` biases the
+    /// centered sprite LEFT: the sprite's centre moves `(LEFT - RIGHT)` dots
+    /// horizontally, so `LEFT=1`/`RIGHT=3` sits the sprite 2 dots left of its
+    /// band centre — a leftward shift of 3 dots from the prior `LEFT=3`/
+    /// `RIGHT=2` (which biased 1 dot right).
+    const SPRITE_INSET_LEFT: u16 = 1;
+    /// Sprite render-target inset from the right edge of `layout().sprite`.
+    /// Kept strictly ABOVE `SPRITE_INSET_LEFT` so the left/right asymmetry
+    /// shifts the sprite LEFT (see `SPRITE_INSET_LEFT`).
     const SPRITE_INSET_RIGHT: u16 = 3;
-    /// Sprite render-target inset from the top and bottom edges of
-    /// `layout().sprite` (b1-t7). Guarantees a blank row above `dot_row`.
-    const SPRITE_INSET_V: u16 = 1;
+    /// Sprite render-target inset from the TOP edge of `layout().sprite`. `0`
+    /// so the sprite grows UPWARD into the full band height — its baseline
+    /// (bottom edge) is pinned by `SPRITE_INSET_BOTTOM`, so shrinking only the
+    /// top inset makes the creature taller without moving its feet.
+    const SPRITE_INSET_TOP: u16 = 0;
+    /// Sprite render-target inset from the BOTTOM edge of `layout().sprite`.
+    /// Guarantees a blank row above `dot_row` — do NOT drop below 1, or the
+    /// sprite-gap regression test (a fully-blank row between the sprite's
+    /// lowest content and `dot_row`) breaks. This is the sprite's fixed
+    /// baseline: growing the sprite (via `SPRITE_INSET_TOP`) never moves it.
+    const SPRITE_INSET_BOTTOM: u16 = 1;
     /// Height of the `dot_row` band at the bottom of the frame — the dots
     /// themselves (`DOT_H - DOT_LABEL_H` rows) plus one row of static role
     /// labels underneath (b2-t6).
@@ -176,6 +266,14 @@ impl RosterManager {
     /// Height (in rows) of the role-label row at the bottom of `dot_row`
     /// (b2-t6). See `dot_bands`.
     const DOT_LABEL_H: u16 = 1;
+    /// Sub-cell downward nudge (in braille dots) applied to each rendered
+    /// position-indicator circle within its slot, on top of the slot's own
+    /// cell-centering. `draw_grid`'s integer cell-centering pins the circle to
+    /// the TOP of its 2-cell-tall slot; this drops it ~half a cell lower so it
+    /// reads closer to the role labels beneath. A genuine dot-level offset
+    /// (2 dots < one 4-dot cell), applied by compositing the circle into a
+    /// slot-sized `DotBuffer` at the offset rather than rounding to a cell.
+    const DOT_SLOT_DOWN_DOTS: usize = 2;
     /// Width (in cells) of a single dot slot within a cluster (b1-t3/b2-t6).
     /// 2 cells wide × the dots band's 1-cell height = 4×4 dots per
     /// indicator — enough resolution for a recognizable filled/unfilled
@@ -222,33 +320,56 @@ impl RosterManager {
             .height
             .saturating_sub(name_h + level_h + gap_h + dot_h);
 
-        let name = Rect::new(area.x, area.y, area.width, name_h);
-        let level = Rect::new(area.x, area.y + name_h, area.width, level_h);
+        // The `gap_h` blank row now sits ABOVE the header block (a top
+        // margin) rather than between `level` and the body, shifting `name`
+        // and `level` down by `gap_h` while keeping them tight to each other.
+        // `body_y` is unchanged (same total header height), so nothing below
+        // the header moves.
+        let name = Rect::new(area.x, area.y + gap_h, area.width, name_h);
+        let level = Rect::new(area.x, area.y + gap_h + name_h, area.width, level_h);
 
         let body_y = area.y + name_h + level_h + gap_h;
+        let dot_row = Rect::new(area.x, body_y + body_h, area.width, dot_h);
 
-        // LEFT column: stat_bar directly above sprite, both spanning the
-        // same column range (no ARROW_W inset — arrows move to dot_row).
         let left_w = area.width * 2 / 3;
-        let stat_bar_h = Self::PANEL_H.min(body_h);
-        let stat_bar = Rect::new(area.x, body_y, left_w, stat_bar_h);
-        let sprite_h = body_h.saturating_sub(stat_bar_h);
-        let sprite = Rect::new(area.x, body_y + stat_bar_h, left_w, sprite_h);
 
         // RIGHT column (details panel): width = area.width - left_w, right
-        // edge inset EDGE_MARGIN from area's edge.
+        // edge inset EDGE_MARGIN from area's edge. Its TOP is pushed below
+        // the home button plus a deliberate DETAILS_TOP_GAP so the panel
+        // never jams against the home button in the shared top-right column;
+        // it still bottoms out at dot_row's top, so this shrinks the panel's
+        // height rather than pushing anything off-screen.
         let details_w = area.width.saturating_sub(left_w);
-        let details_x = area.right().saturating_sub(Self::EDGE_MARGIN + details_w);
-        let exhaustion_h = Self::PANEL_H.min(body_h);
-        let exhaustion = Rect::new(details_x, body_y, details_w, exhaustion_h);
+        let details_x = area
+            .right()
+            .saturating_sub(Self::EDGE_MARGIN + Self::DETAILS_LEFT_SHIFT + details_w);
+        let home_bottom = area
+            .y
+            .saturating_add(Self::EDGE_MARGIN)
+            .saturating_add(Self::HOME_H);
+        let details_top = home_bottom
+            .saturating_add(Self::DETAILS_TOP_GAP)
+            .min(dot_row.y);
+
+        // LEFT column: stat_bar directly above sprite, both spanning the
+        // same column range (no ARROW_W inset — arrows move to dot_row). The
+        // stat_bar's TOP is aligned to `details_top` so the bars sit level
+        // with the top of the details box (not high up near the header); the
+        // sprite fills the remaining space below it down to dot_row.
+        let stat_bar_h = Self::STAT_BAR_BAND_H.min(dot_row.y.saturating_sub(details_top));
+        let stat_bar = Rect::new(area.x, details_top, left_w, stat_bar_h);
+        let sprite_y = details_top + stat_bar_h;
+        let sprite = Rect::new(area.x, sprite_y, left_w, dot_row.y.saturating_sub(sprite_y));
+
+        let details_h = dot_row.y.saturating_sub(details_top);
+        let exhaustion_h = Self::PANEL_H.min(details_h);
+        let exhaustion = Rect::new(details_x, details_top, details_w, exhaustion_h);
         let ability_list = Rect::new(
             details_x,
-            body_y + exhaustion_h,
+            details_top + exhaustion_h,
             details_w,
-            body_h.saturating_sub(exhaustion_h),
+            details_h.saturating_sub(exhaustion_h),
         );
-
-        let dot_row = Rect::new(area.x, body_y + body_h, area.width, dot_h);
 
         RosterLayout {
             name,
@@ -292,6 +413,33 @@ impl RosterManager {
             engine_render::Anchor::TopCenter,
         );
         engine_render::stack(group_rect, &sizes, Self::CLUSTER_GAP, engine_render::StackAxis::Horizontal)
+    }
+
+    /// The visual left/right column bounds of the centered dot-cluster group
+    /// within `layout(area).dot_row` — the union of the dot clusters
+    /// (`dot_cluster_rects`) AND the role labels centered beneath them (the
+    /// labels are wider than their clusters, so they, not the dots, set the
+    /// group's true horizontal extent). `arrow_rects` flanks THIS extent — not
+    /// the full-width band (the bug that left arrows at the screen edges) and
+    /// not the dots-only bounds (which would let the arrows overwrite the
+    /// wider labels) — so the arrows sit immediately outside the whole group
+    /// without ever landing on a label glyph. Sole source of these bounds;
+    /// `arrow_rects` and its tests both call it.
+    fn dot_cluster_group_bounds(area: Rect) -> (u16, u16) {
+        let band = Self::layout(area).dot_row;
+        let (dots_band, _label_band) = Self::dot_bands(band);
+        let clusters = Self::dot_cluster_rects(dots_band);
+        let mut left = band.right();
+        let mut right = band.left();
+        for (cluster, (_count, label)) in clusters.iter().zip(Self::CLUSTERS.iter()) {
+            let label_w = label.chars().count() as u16;
+            let center_x = cluster.x + cluster.width / 2;
+            let label_left = center_x.saturating_sub(label_w / 2);
+            let label_right = label_left + label_w;
+            left = left.min(cluster.left()).min(label_left);
+            right = right.max(cluster.right()).max(label_right);
+        }
+        (left, right)
     }
 
     /// The `squad_role::ROSTER_SIZE` dot slots across `row`, grouped into 3
@@ -351,27 +499,42 @@ impl RosterManager {
         }
     }
 
-    /// Left/right arrow button rects flanking `layout(area).dot_row` — the
-    /// sole place button positioning is computed; `render()` and tests both
-    /// call this rather than re-deriving it. `ARROW_H` already matches
-    /// `DOT_H`, so a full-`ARROW_W`-wide button anchored in the FULL
-    /// `dot_row` band (dots + role-label row) sits entirely within that band
-    /// and entirely outside the sprite band above it.
+    /// Left/right arrow button rects flanking the centered dot-cluster group
+    /// within `layout(area).dot_row` — the sole place button positioning is
+    /// computed; `render()` and tests both call this rather than re-deriving
+    /// it. The arrows anchor to the ACTUAL dot-cluster group rect
+    /// (`dot_cluster_rects`, which centers the 6 role-grouped dots as a
+    /// narrower group within the band) — NOT the full-width band — so they
+    /// genuinely flank the dots at any screen width instead of sitting at the
+    /// screen edges while the dots float in the middle. Each arrow sits
+    /// `ARROW_DOT_GAP` cells outside the group, clamped inside the band so it
+    /// never underflows or runs off-screen. `ARROW_H` matches `DOT_H`, so the
+    /// buttons stay within `dot_row`'s rows and entirely outside the sprite
+    /// band above.
     fn arrow_rects(area: Rect) -> (Rect, Rect) {
         let band = Self::layout(area).dot_row;
-        let size = (Self::ARROW_W, Self::ARROW_H);
-        let left_rect = engine_render::anchor_with_margin(
-            band,
-            size,
-            engine_render::Anchor::CenterLeft,
-            (Self::EDGE_MARGIN, 0),
-        );
-        let right_rect = engine_render::anchor_with_margin(
-            band,
-            size,
-            engine_render::Anchor::CenterRight,
-            (Self::EDGE_MARGIN, 0),
-        );
+        let (group_left, group_right) = Self::dot_cluster_group_bounds(area);
+
+        // Positioned toward the TOP of the `dot_row` band (floor-centered), so
+        // the arrows sit level with the (down-nudged) dot cluster rather than
+        // dropping to the label row. Floor division on the half-row remainder
+        // biases UP: at DOT_H=3 / ARROW_H=2 this lands the arrow on the band's
+        // top two rows (band.y..band.y+2) — one row higher than the prior
+        // `div_ceil` down-bias.
+        let arrow_y = band.y + band.height.saturating_sub(Self::ARROW_H) / 2;
+
+        // Flank the group with `ARROW_DOT_GAP` of clearance, but never closer
+        // to the screen edge than `EDGE_MARGIN` — at narrow widths the widened
+        // label group nearly fills the band, so the flanking arrows settle at
+        // that inset rather than overrunning the edge.
+        let left_x = group_left
+            .saturating_sub(Self::ARROW_DOT_GAP + Self::ARROW_W)
+            .max(band.left() + Self::EDGE_MARGIN);
+        let right_x = (group_right + Self::ARROW_DOT_GAP)
+            .min(band.right().saturating_sub(Self::EDGE_MARGIN + Self::ARROW_W));
+
+        let left_rect = Rect::new(left_x, arrow_y, Self::ARROW_W, Self::ARROW_H);
+        let right_rect = Rect::new(right_x, arrow_y, Self::ARROW_W, Self::ARROW_H);
         (left_rect, right_rect)
     }
 
@@ -504,11 +667,13 @@ impl RosterManager {
         let base_rect = Self::layout(zero_area).sprite;
         let sprite_rect = Rect::new(
             base_rect.x.saturating_add(Self::SPRITE_INSET_LEFT),
-            base_rect.y.saturating_add(Self::SPRITE_INSET_V),
+            base_rect.y.saturating_add(Self::SPRITE_INSET_TOP),
             base_rect
                 .width
                 .saturating_sub(Self::SPRITE_INSET_LEFT + Self::SPRITE_INSET_RIGHT),
-            base_rect.height.saturating_sub(Self::SPRITE_INSET_V * 2),
+            base_rect
+                .height
+                .saturating_sub(Self::SPRITE_INSET_TOP + Self::SPRITE_INSET_BOTTOM),
         );
 
         let creature = &self.creatures[index];
@@ -612,21 +777,35 @@ impl RosterManager {
     /// label_rect)` — sole source of stat-bar geometry; `render_stat_bars`
     /// and `stat_bar_tests` both call it (research.md b1-t6 blueprint).
     /// Mirrors `dot_cluster_rects`'s `engine_render::stack` Horizontal
-    /// pattern, but computes a slice width that FILLS `stat_bar.width`
-    /// (rather than centering a fixed-size group). Each slice reserves its
-    /// bottom `STAT_LABEL_H` row for the label; the rows above become the
-    /// outline, with `fill` inset a full cell on every side of the outline
-    /// so a lit fill cell never shares a cell with (and so never overwrites)
-    /// the outline's border glyphs.
+    /// pattern, but computes a slice width that FILLS the width remaining
+    /// between the left/right margins (rather than centering a fixed-size
+    /// group). Each slice reserves its bottom `STAT_LABEL_H` row for the label
+    /// (immediately below the outline, no gap row); the rows above become the
+    /// outline. `fill` is the middle interior cell of the outline (inset a
+    /// full cell on every side); `render_stat_bars` draws the border box
+    /// hugging THIS `fill` cell (1 dot outside it), so border and fill land in
+    /// separate braille cells and neither overwrites the other.
     fn stat_slice_parts(stat_bar: Rect) -> Vec<(Rect, Rect, Rect)> {
         let n = crate::stats::StatKind::ALL.len() as u16;
-        let slice_w = stat_bar
+        // Reserve `STAT_BAR_LEFT_MARGIN` cells before the first slice and
+        // `STAT_BAR_DETAILS_MARGIN` cells after the last, so the leftmost bar
+        // clears the screen edge and the rightmost bar clears the details
+        // panel's left border. The 4 slices divide the width remaining between
+        // those two margins, so both margins narrow each bar rather than
+        // widening the group past `stat_bar`.
+        let usable_w = stat_bar
             .width
-            .saturating_sub(Self::STAT_BAR_GAP * (n - 1))
-            / n;
+            .saturating_sub(Self::STAT_BAR_LEFT_MARGIN + Self::STAT_BAR_DETAILS_MARGIN);
+        let slice_w = usable_w.saturating_sub(Self::STAT_BAR_GAP * (n - 1)) / n;
         let sizes: Vec<(u16, u16)> = vec![(slice_w, stat_bar.height); n as usize];
+        let stack_area = Rect::new(
+            stat_bar.x + Self::STAT_BAR_LEFT_MARGIN,
+            stat_bar.y,
+            usable_w,
+            stat_bar.height,
+        );
         let slices = engine_render::stack(
-            stat_bar,
+            stack_area,
             &sizes,
             Self::STAT_BAR_GAP,
             engine_render::StackAxis::Horizontal,
@@ -635,10 +814,18 @@ impl RosterManager {
         slices
             .into_iter()
             .map(|s| {
-                let label_h = Self::STAT_LABEL_H.min(s.height);
-                let outline_h = s.height.saturating_sub(label_h);
+                // Fixed, compact outline height at the TOP of the slice (so the
+                // bar sits level with the details box top), then the label on
+                // the row immediately below it (no gap row). Any slice height
+                // beyond that is deliberate bottom breathing room. All
+                // saturating/clamped so a too-short slice degrades gracefully.
+                let outline_h = Self::STAT_BAR_OUTLINE_H.min(s.height);
                 let outline = Rect::new(s.x, s.y, s.width, outline_h);
-                let label = Rect::new(s.x, s.y + outline_h, s.width, label_h);
+                let label_h = Self::STAT_LABEL_H.min(s.height.saturating_sub(outline_h));
+                // Label sits on the row IMMEDIATELY below the outline — no
+                // blank gap row between the bar and its label.
+                let label_y = (s.y + outline_h).min(s.bottom().saturating_sub(label_h));
+                let label = Rect::new(s.x, label_y, s.width, label_h);
                 let fill = Rect::new(
                     outline.x.saturating_add(1),
                     outline.y.saturating_add(1),
@@ -666,44 +853,134 @@ impl RosterManager {
     /// `StatKind::ALL` order) into `rect` — no `col_offset`, so it never
     /// travels with an in-flight sprite slide (b1-t3: static panel, b2-t3).
     /// Geometry comes solely from `stat_slice_parts` (research.md b1-t6
-    /// blueprint). Per slice: an unconditional `draw_dot_border` outline
-    /// (visible even at zero fill), a `STAT_BAR_COLOR` fill proportional to
-    /// `stat_fill_dots` drawn strictly inside the outline's interior (non-
-    /// text chrome, so it renders through the dot pipeline —
-    /// `DotBuffer`/`Dot::Lit`/`dots_to_grid`/`draw_grid`, never
-    /// `engine_render::fill`, CLAUDE.md constraint 4), and a plain-text
-    /// `stat_label(kind)` beneath its own bar.
+    /// blueprint). Per slice the border box AND the proportional
+    /// `STAT_BAR_COLOR` fill are built into ONE `DotBuffer` spanning the
+    /// `outline` rect and drawn with a single `draw_grid` (non-text chrome, so
+    /// they render through the dot pipeline — never `engine_render::fill`,
+    /// CLAUDE.md constraint 4): the border box hugs the fill cell (1 dot
+    /// outside it on every side, via `draw_dot_box`), and the fill lights the
+    /// interior fill cell proportionally to `stat_fill_dots`. Border edges and
+    /// fill dots never share a braille cell, so the border stays visible even
+    /// over the filled portion (visible outline even at zero fill). A
+    /// plain-text `stat_label(kind)` sits on the row immediately beneath.
     fn render_stat_bars(&self, buf: &mut Buffer, rect: Rect) {
         for ((outline, fill, label), kind) in
             Self::stat_slice_parts(rect).into_iter().zip(crate::stats::StatKind::ALL)
         {
-            Self::draw_dot_border(buf, outline, Self::BORDER_COLOR);
-
-            let dot_cols = fill.width as usize * 2;
-            let dot_rows = fill.height as usize * 4;
-            if dot_cols > 0 && dot_rows > 0 {
+            let dot_cols = outline.width as usize * 2;
+            let dot_rows = outline.height as usize * 4;
+            // Need a real interior fill cell for the hugging box to wrap.
+            if dot_cols > 0 && dot_rows > 0 && fill.width > 0 && fill.height > 0 {
                 let mut dots = DotBuffer::new(dot_cols, dot_rows);
-                let n = self.stat_fill_dots(kind, dot_cols);
-                for row in 0..dot_rows {
+
+                // Fill-cell dot bounds within the outline's dot grid.
+                let fx0 = (fill.x - outline.x) as usize * 2;
+                let fy0 = (fill.y - outline.y) as usize * 4;
+                let fill_dot_cols = fill.width as usize * 2;
+                let fill_dot_rows = fill.height as usize * 4;
+
+                // Border box around the fill cell. Left/right hug the fill 1
+                // dot outside (separate cell columns, so no cell mixes
+                // border-grey with fill-green). Top/bottom are pushed
+                // `STAT_BAR_BORDER_RAISE_DOTS` further out — the top edge up
+                // toward the header, the bottom edge down onto the outline's
+                // bottom dot-row so it sits snug against the label cell below
+                // (no empty dot-gap). Clamped to the outline's dot bounds.
+                let box_top = (fy0 - 1).saturating_sub(Self::STAT_BAR_BORDER_RAISE_DOTS);
+                let box_bottom =
+                    (fy0 + fill_dot_rows + Self::STAT_BAR_BORDER_RAISE_DOTS).min(dot_rows - 1);
+                Self::draw_dot_box(
+                    &mut dots,
+                    fx0 - 1,
+                    box_top,
+                    fx0 + fill_dot_cols,
+                    box_bottom,
+                    Self::BORDER_COLOR,
+                );
+
+                let n = self.stat_fill_dots(kind, fill_dot_cols);
+                for row in fy0..fy0 + fill_dot_rows {
                     for col in 0..n {
-                        dots.set(col, row, Dot::Lit(Self::STAT_BAR_COLOR));
+                        dots.set(fx0 + col, row, Dot::Lit(Self::STAT_BAR_COLOR));
                     }
                 }
+
                 let grid = dots_to_grid(&dots);
-                engine_render::draw_grid(buf, fill, &grid);
+                engine_render::draw_grid(buf, outline, &grid);
             }
 
             engine_render::label(buf, label, Self::stat_label(kind), Self::DOT_LABEL_COLOR);
         }
     }
 
-    /// Draws a 1-dot-thick rectangular border filling `rect`'s perimeter via
-    /// the dot pipeline (b1-t4) — the same "light one dot position across
-    /// the whole run" technique as `battle_viewer::draw_board_lines`,
-    /// restricted to the 4 outer edges. Interiors are left `Transparent` by
-    /// `draw_grid` (existing buffer content underneath is preserved). Clips
-    /// (no-ops) on a zero-size rect. Shared by b1-t5 (details panel) and
-    /// b1-t6 (stat-bar outlines) — `FRAME_PANEL` MUST NOT be used for this.
+    /// Border thickness in dots per edge — shared by every procedurally drawn
+    /// border on this screen (details panel + stat-bar outlines).
+    const BORDER_THICKNESS: usize = 1;
+    /// Corner chamfer in dots — the outermost `CHAMFER` dots at each of the 4
+    /// corners are clipped along a 45° diagonal so the corner reads as
+    /// rounded rather than a hard square. At `BORDER_THICKNESS == 1` this
+    /// clips exactly the single corner dot per corner (visually confirmed as
+    /// "rounded enough" against a live prototype; a 2-dot chamfer read as too
+    /// heavy).
+    const CHAMFER: usize = 1;
+
+    /// Lights the chamfered-corner perimeter of the inclusive dot-space box
+    /// `[left..=right] × [top..=bottom]` into `dots` — the shared primitive
+    /// behind BOTH `draw_dot_border` (a box spanning a whole cell rect) and
+    /// the stat bars' fill-hugging box (a sub-region of the outline buffer).
+    /// The same "light one dot position across the whole run" technique as
+    /// `battle_viewer::draw_board_lines`, restricted to the 4 edges, minus the
+    /// outermost corner dots (`CHAMFER`) so the corners read as rounded.
+    /// Because every bordered element routes through here, the SAME
+    /// thickness/chamfer applies consistently and no caller can forget it.
+    fn draw_dot_box(
+        dots: &mut DotBuffer,
+        left: usize,
+        top: usize,
+        right: usize,
+        bottom: usize,
+        color: engine_core::color::Rgba,
+    ) {
+        let thickness = Self::BORDER_THICKNESS;
+        let chamfer = Self::CHAMFER;
+        for row in top..=bottom {
+            for col in left..=right {
+                let d_left = col - left;
+                let d_right = right - col;
+                let d_top = row - top;
+                let d_bottom = bottom - row;
+
+                let in_border = d_left < thickness
+                    || d_right < thickness
+                    || d_top < thickness
+                    || d_bottom < thickness;
+                if !in_border {
+                    continue;
+                }
+
+                // Chamfer clip: a dot within `chamfer` of TWO adjacent edges
+                // (a corner zone) is dropped unless its Manhattan distance sum
+                // clears the threshold — a 45° diagonal cut off each corner.
+                let clipped = (d_left < chamfer && d_top < chamfer && d_left + d_top < chamfer)
+                    || (d_right < chamfer && d_top < chamfer && d_right + d_top < chamfer)
+                    || (d_left < chamfer && d_bottom < chamfer && d_left + d_bottom < chamfer)
+                    || (d_right < chamfer && d_bottom < chamfer && d_right + d_bottom < chamfer);
+                if clipped {
+                    continue;
+                }
+
+                dots.set(col, row, Dot::Lit(color));
+            }
+        }
+    }
+
+    /// Draws a chamfered-corner rectangular border filling `rect`'s perimeter
+    /// via the dot pipeline (b1-t4) — a full-buffer `draw_dot_box`.
+    /// Interiors are left `Transparent` by `draw_grid` (existing buffer
+    /// content underneath is preserved). Clips (no-ops) on a zero-size rect.
+    /// Shared by b1-t5 (details panel) and formerly the stat-bar outlines —
+    /// every bordered element gets the SAME thickness/chamfer via
+    /// `draw_dot_box`. `FRAME_PANEL` MUST NOT be used for this.
     fn draw_dot_border(buf: &mut Buffer, rect: Rect, color: engine_core::color::Rgba) {
         let dot_cols = rect.width as usize * 2;
         let dot_rows = rect.height as usize * 4;
@@ -711,14 +988,7 @@ impl RosterManager {
             return;
         }
         let mut dots = DotBuffer::new(dot_cols, dot_rows);
-        for col in 0..dot_cols {
-            dots.set(col, 0, Dot::Lit(color));
-            dots.set(col, dot_rows - 1, Dot::Lit(color));
-        }
-        for row in 0..dot_rows {
-            dots.set(0, row, Dot::Lit(color));
-            dots.set(dot_cols - 1, row, Dot::Lit(color));
-        }
+        Self::draw_dot_box(&mut dots, 0, 0, dot_cols - 1, dot_rows - 1, color);
         let grid = dots_to_grid(&dots);
         engine_render::draw_grid(buf, rect, &grid);
     }
@@ -785,6 +1055,45 @@ impl RosterManager {
         }
     }
 
+    /// Draws one position-indicator circle (`bytes`) into `slot`, nudged down
+    /// by `DOT_SLOT_DOWN_DOTS` sub-cell dots from `draw_grid`'s default
+    /// cell-centering. Composites the aspect-fitted circle into a slot-sized
+    /// `DotBuffer` at the offset (never a whole-cell round), then blits it
+    /// 1:1 — so the circle keeps its colour/shape but sits a genuine 2 dots
+    /// lower. A zero-fit slot is a no-op.
+    fn draw_dot_slot(buf: &mut Buffer, slot: Rect, bytes: &'static [u8]) {
+        let slot_dc = slot.width as usize * 2;
+        let slot_dr = slot.height as usize * 4;
+        if slot_dc == 0 || slot_dr == 0 {
+            return;
+        }
+        // Aspect-fit cell dims for the circle within the slot (same fit
+        // `convert` would use), then fetch the colour-carrying dots at those
+        // dims (a rasterize-cache hit after `convert`'s own call).
+        let fitted = engine_render::asset_cache::convert(bytes, slot);
+        let (fc, fr) = (fitted.cols(), fitted.rows());
+        if fc == 0 || fr == 0 {
+            return;
+        }
+        let circle = engine_render::asset_cache::sprite_to_dots(bytes, fc as u32 * 2, fr as u32 * 4);
+
+        // Replicate `draw_grid`'s integer cell-centering (top-biased for a
+        // 1-cell circle in a 2-cell slot), then add the sub-cell down nudge.
+        let off_x = (slot.width.saturating_sub(fc as u16) / 2) as usize * 2;
+        let off_y = (slot.height.saturating_sub(fr as u16) / 2) as usize * 4 + Self::DOT_SLOT_DOWN_DOTS;
+
+        let mut target = DotBuffer::new(slot_dc, slot_dr);
+        for r in 0..circle.rows() {
+            for c in 0..circle.cols() {
+                if let Dot::Lit(color) = circle.get(c, r) {
+                    target.set(off_x + c, off_y + r, Dot::Lit(color));
+                }
+            }
+        }
+        let grid = dots_to_grid(&target);
+        engine_render::draw_grid(buf, slot, &grid);
+    }
+
     /// Draws the `squad_role::ROSTER_SIZE`-slot dot row statically into
     /// `dot_row_rect`, filled at `self.current_index` — no `col_offset`, so
     /// it never travels with an in-flight sprite slide (b1-t3). Also paints
@@ -809,8 +1118,7 @@ impl RosterManager {
             } else {
                 crate::assets::DOT_UNFILLED
             };
-            let grid = engine_render::asset_cache::convert(bytes, *slot);
-            engine_render::draw_grid(buf, *slot, &grid);
+            Self::draw_dot_slot(buf, *slot, bytes);
         }
 
         let (dots_band, label_band) = Self::dot_bands(dot_row_rect);
@@ -1034,8 +1342,14 @@ mod layout_tests {
 
     /// `layout(area)` must order its bands top-to-bottom: name < level <
     /// stat_bar/sprite/dot_row, with `level` tight under `name` (no blank
-    /// row) and a blank `HEADER_GAP_H` row between `level` and the body
-    /// (`stat_bar`), and `exhaustion` above `ability_list`.
+    /// row) and `exhaustion` above `ability_list`. `HEADER_GAP_H` is fully
+    /// consumed as a top margin ABOVE `name` (spec 38 item 6), so `level`'s
+    /// bottom edge sits FLUSH against `body_y` (no gap there) — any visible
+    /// space before `stat_bar.y` is incidental spillover from `stat_bar`
+    /// being independently anchored to `details_top`
+    /// (`home_bottom + DETAILS_TOP_GAP`), not a deliberate header-to-body
+    /// gap. Both are still asserted below since `stat_bar` must not overlap
+    /// `level` regardless of which mechanism produces the separation.
     #[test]
     fn layout_rects_ordered_top_to_bottom() {
         let area = Rect::new(0, 0, 80, 30);
@@ -1048,13 +1362,40 @@ mod layout_tests {
             l.name.y, l.name.height, l.level.y
         );
         assert!(
-            l.level.y + l.level.height < l.stat_bar.y,
-            "a blank HEADER_GAP_H row must separate level ({}+{}) from stat_bar.y ({})",
+            l.level.y + l.level.height <= l.stat_bar.y,
+            "stat_bar must not start above level's bottom edge (level {}+{} vs stat_bar.y {}); note this gap comes from \
+             stat_bar's independent details_top anchoring, not from HEADER_GAP_H (which is now a top margin above name)",
             l.level.y, l.level.height, l.stat_bar.y
         );
         assert!(l.exhaustion.y < l.ability_list.y, "exhaustion.y ({}) must be above ability_list.y ({})", l.exhaustion.y, l.ability_list.y);
         assert!(l.stat_bar.y < l.sprite.y, "stat_bar.y ({}) must be above sprite.y ({})", l.stat_bar.y, l.sprite.y);
         assert!(l.sprite.y < l.dot_row.y, "sprite.y ({}) must be above dot_row.y ({})", l.sprite.y, l.dot_row.y);
+    }
+
+    /// spec 38 corrections (item 6): the `name`/`level` header block is
+    /// shifted DOWN by one full cell (`HEADER_GAP_H`) — the blank gap row now
+    /// sits ABOVE the block, not between `level` and the body — while the body
+    /// (`stat_bar`/`sprite`/`dot_row`) stays put. `name` and `level` remain
+    /// tight to each other (no gap between them). Asserted at several sizes.
+    #[test]
+    fn header_block_shifted_down_one_cell_gap_above() {
+        for (w, h) in [(80u16, 30u16), (40u16, 20u16), (60u16, 24u16)] {
+            let area = Rect::new(0, 0, w, h);
+            let l = RosterManager::layout(area);
+            assert_eq!(
+                l.name.y,
+                area.y + RosterManager::HEADER_GAP_H,
+                "w={w},h={h}: name.y must be pushed down by HEADER_GAP_H (blank top-margin row above the header block)"
+            );
+            assert_eq!(
+                l.name.y + l.name.height,
+                l.level.y,
+                "w={w},h={h}: level must stay tight under name (header-block shift moves them together)"
+            );
+            // The body is unchanged by the header shift: stat_bar still opens
+            // at the details-panel top, a real gap below level.
+            assert_eq!(l.stat_bar.y, l.exhaustion.y, "w={w},h={h}: body position unchanged by the header shift");
+        }
     }
 
     /// The details panel (`exhaustion`/`ability_list`) width must equal
@@ -1085,6 +1426,37 @@ mod layout_tests {
         );
     }
 
+    /// spec 38 correction (item 4): the stat bars are no longer positioned
+    /// high up near the header — their band's TOP must sit at the SAME y as
+    /// the details panel's top (`exhaustion.y`, which is the panel border's
+    /// top row), so the bars read as level with the top of the details box.
+    #[test]
+    fn stat_bar_top_aligns_with_details_panel_top() {
+        for (w, h) in [(80u16, 30u16), (40u16, 20u16), (60u16, 24u16)] {
+            let l = RosterManager::layout(Rect::new(0, 0, w, h));
+            assert_eq!(
+                l.stat_bar.y, l.exhaustion.y,
+                "w={w},h={h}: stat_bar.y ({}) must equal the details panel top exhaustion.y ({}) — bars level with the details box top",
+                l.stat_bar.y, l.exhaustion.y
+            );
+        }
+    }
+
+    /// spec 38 correction (item 4/5): the stat bar band no longer starts
+    /// right after the header — a real blank gap separates the header
+    /// (`level`) from the stat bar band, since the band was pushed down to
+    /// the details panel top.
+    #[test]
+    fn real_gap_between_header_and_stat_bar() {
+        let l = RosterManager::layout(Rect::new(0, 0, 80, 30));
+        let gap = l.stat_bar.y.saturating_sub(l.level.y + l.level.height);
+        assert!(
+            gap >= 2,
+            "expected a real blank gap (>=2 rows) between level (bottom={}) and stat_bar (top={}), got {gap}",
+            l.level.y + l.level.height, l.stat_bar.y
+        );
+    }
+
     /// b2-t5 layout fix, updated for the 2:1 column split (b1-t1): the
     /// sprite (LEFT column) and the ability_list (RIGHT column, inset
     /// `EDGE_MARGIN` from `area`'s edge) are forced to share exactly
@@ -1096,10 +1468,41 @@ mod layout_tests {
         for width in [80u16, 60u16] {
             let area = Rect::new(0, 0, width, 30);
             let l = RosterManager::layout(area);
+            // The details panel is pulled `DETAILS_LEFT_SHIFT` further left off
+            // the right edge (spec 38 corrections item 4), so it now shares up
+            // to `EDGE_MARGIN + DETAILS_LEFT_SHIFT` columns with the LEFT
+            // column's sprite band — a nominal-rect overlap only; the actual
+            // inset+centered sprite art never reaches those columns (verified
+            // by render-to-buffer).
+            let tolerance = RosterManager::EDGE_MARGIN + RosterManager::DETAILS_LEFT_SHIFT;
             assert!(
-                l.sprite.right() <= l.ability_list.left() + RosterManager::EDGE_MARGIN,
-                "width={}: sprite ({:?}) must not extend more than EDGE_MARGIN into ability_list ({:?})",
+                l.sprite.right() <= l.ability_list.left() + tolerance,
+                "width={}: sprite ({:?}) must not extend more than {tolerance} cells into ability_list ({:?})",
                 width, l.sprite, l.ability_list
+            );
+        }
+    }
+
+    /// spec 38 corrections (item 4): the details panel is inset from `area`'s
+    /// right edge by `EDGE_MARGIN + DETAILS_LEFT_SHIFT` cells — pulled a
+    /// further `DETAILS_LEFT_SHIFT` (1 cell == 2 dots) LEFT off the edge than
+    /// before — while its width is unchanged (only `details_x` moves).
+    #[test]
+    fn details_panel_pulled_left_off_right_edge() {
+        for width in [60u16, 90u16] {
+            let area = Rect::new(0, 0, width, 30);
+            let l = RosterManager::layout(area);
+            let expected_x = area.right()
+                - (RosterManager::EDGE_MARGIN + RosterManager::DETAILS_LEFT_SHIFT + l.exhaustion.width);
+            assert_eq!(
+                l.exhaustion.x, expected_x,
+                "width={width}: details panel x must be inset EDGE_MARGIN+DETAILS_LEFT_SHIFT from area.right()"
+            );
+            assert_eq!(l.ability_list.x, expected_x, "width={width}: ability_list shares the panel x");
+            assert_eq!(
+                area.right() - l.exhaustion.right(),
+                RosterManager::EDGE_MARGIN + RosterManager::DETAILS_LEFT_SHIFT,
+                "width={width}: panel right edge must sit EDGE_MARGIN+DETAILS_LEFT_SHIFT in from area.right()"
             );
         }
     }
@@ -1223,14 +1626,19 @@ mod sprite_and_name_render_tests {
         let area = Rect::new(0, 0, w, h);
         let l = RosterManager::layout(area);
 
-        // Exclude the rightmost EDGE_MARGIN column: b1-t1's layout intentionally
-        // shares that column with the details-panel border (b1-t5), which always
-        // paints its bottom-left corner at (sprite.right()-1, dot_row.top()-1)
-        // regardless of any SPRITE_INSET value — see
+        // Exclude the rightmost `EDGE_MARGIN + DETAILS_LEFT_SHIFT` columns:
+        // b1-t1's layout intentionally shares those columns with the
+        // details-panel border (b1-t5), which always paints its bottom-left
+        // corner at (details_x, dot_row.top()-1) regardless of any SPRITE_INSET
+        // value — and after spec 38 item 4 the panel is pulled a further
+        // `DETAILS_LEFT_SHIFT` left into the sprite band. See
         // `sprite_and_ability_list_columns_disjoint` for the tolerated overlap.
         // This test only cares about the sprite's OWN content, not that
         // unrelated, already-correct border cell.
-        let sprite_content_right = l.sprite.right().saturating_sub(RosterManager::EDGE_MARGIN);
+        let sprite_content_right = l
+            .sprite
+            .right()
+            .saturating_sub(RosterManager::EDGE_MARGIN + RosterManager::DETAILS_LEFT_SHIFT);
         let row_is_blank = |y: u16| {
             (l.sprite.left()..sprite_content_right).all(|x| buf.cell((x, y)).unwrap().symbol() == " ")
         };
@@ -1246,6 +1654,33 @@ mod sprite_and_name_render_tests {
             "row directly above dot_row (y={gap_row}) must be fully blank within the sprite's \
              column range — b1-t7 requires a real, non-zero gap between the sprite and dot_row, \
              not a flush edge"
+        );
+    }
+
+    /// spec 38 corrections (item 3): the sprite grows UPWARD from a fixed
+    /// baseline and is shifted LEFT, encoded by the inset asymmetry.
+    /// - `SPRITE_INSET_TOP < SPRITE_INSET_BOTTOM`: the top inset is minimal so
+    ///   the render target extends up into the band (taller sprite) while the
+    ///   bottom inset pins the baseline (fixed feet + the mandatory `dot_row`
+    ///   gap). `BOTTOM >= 1` keeps that gap.
+    /// - `SPRITE_INSET_LEFT < SPRITE_INSET_RIGHT`: the centred sprite is biased
+    ///   left of its band centre (leftward shift).
+    #[test]
+    #[allow(clippy::assertions_on_constants)] // deliberate compile-time const-invariant lock
+    fn sprite_insets_grow_up_and_shift_left() {
+        assert!(
+            RosterManager::SPRITE_INSET_TOP < RosterManager::SPRITE_INSET_BOTTOM,
+            "sprite must grow upward: top inset ({}) must be smaller than the baseline-pinning bottom inset ({})",
+            RosterManager::SPRITE_INSET_TOP, RosterManager::SPRITE_INSET_BOTTOM
+        );
+        assert!(
+            RosterManager::SPRITE_INSET_BOTTOM >= 1,
+            "bottom inset must stay >= 1 to preserve the blank gap above dot_row"
+        );
+        assert!(
+            RosterManager::SPRITE_INSET_LEFT < RosterManager::SPRITE_INSET_RIGHT,
+            "sprite must shift left: left inset ({}) must be smaller than right inset ({})",
+            RosterManager::SPRITE_INSET_LEFT, RosterManager::SPRITE_INSET_RIGHT
         );
     }
 }
@@ -1384,6 +1819,74 @@ mod stat_bar_tests {
         s
     }
 
+    /// REGRESSION (spec 38 item 3a): the rightmost stat bar must keep a real
+    /// horizontal gap from the details panel's left border — the bars must
+    /// never touch or overlap the panel. Asserted against the panel border's
+    /// own left column (`exhaustion.x`, which is where `draw_dot_border`
+    /// paints the panel's left edge) at multiple widths.
+    #[test]
+    fn rightmost_stat_bar_clears_details_panel() {
+        // A concrete, visible minimum — not a technically-non-zero hairline.
+        const MIN_GAP: u16 = 2;
+
+        for (w, h) in [(80u16, 30u16), (40u16, 20u16), (60u16, 24u16)] {
+            let l = RosterManager::layout(Rect::new(0, 0, w, h));
+            let slices = RosterManager::stat_slice_parts(l.stat_bar);
+            let (last_outline, _fill, _label) = *slices.last().unwrap();
+            let panel_left = l.exhaustion.x; // details panel border's left column
+
+            assert!(
+                last_outline.right() <= panel_left,
+                "w={w},h={h}: rightmost stat bar (right={}) must not reach the details panel border (left={panel_left})",
+                last_outline.right()
+            );
+            let gap = panel_left.saturating_sub(last_outline.right());
+            assert!(
+                gap >= MIN_GAP,
+                "w={w},h={h}: only {gap} blank column(s) between the rightmost stat bar (right={}) and the details panel border (left={panel_left}) — need >= {MIN_GAP}",
+                last_outline.right()
+            );
+        }
+    }
+
+    /// REGRESSION (spec 38 item 2): each bar's filled portion is compact —
+    /// about 4-5 dot rows, NOT the old 8. The fill interior is exactly one
+    /// braille cell tall (4 dot rows), and there is deliberate vertical
+    /// breathing room around the bar within the stat_bar band (the band is
+    /// taller than one bar outline + its label, so the freed space becomes
+    /// margin, not a stretched bar).
+    #[test]
+    fn stat_bar_fill_is_short_with_breathing_room() {
+        let l = RosterManager::layout(area());
+        let slices = RosterManager::stat_slice_parts(l.stat_bar);
+        for (i, (outline, fill, label)) in slices.iter().enumerate() {
+            let fill_dot_rows = fill.height * 4;
+            assert!(
+                (1..=5).contains(&fill_dot_rows),
+                "slice {i}: fill must be ~4-5 dot rows tall (compact), got {fill_dot_rows} (fill.height={})",
+                fill.height
+            );
+            assert_eq!(
+                outline.height, RosterManager::STAT_BAR_OUTLINE_H,
+                "slice {i}: outline must be the fixed compact height, not stretched to fill the band"
+            );
+            // The band is taller than the bar + its label group, i.e. real
+            // breathing room exists — the freed vertical space is not a
+            // stretched bar.
+            let content_bottom = label.y + label.height;
+            assert!(
+                content_bottom <= l.stat_bar.bottom(),
+                "slice {i}: label bottom ({content_bottom}) must stay within the stat_bar band (bottom={})",
+                l.stat_bar.bottom()
+            );
+            assert!(
+                l.stat_bar.height > outline.height + label.height,
+                "slice {i}: stat_bar band ({}) must be taller than outline+label ({}+{}) — deliberate breathing room, not a stretched bar",
+                l.stat_bar.height, outline.height, label.height
+            );
+        }
+    }
+
     /// DELIVERABLE 1: the 4 slices occupy 4 non-overlapping column ranges,
     /// strictly left-to-right in `StatKind::ALL` order, at both 40- and
     /// 80-wide areas.
@@ -1410,29 +1913,47 @@ mod stat_bar_tests {
         }
     }
 
-    /// DELIVERABLE 2: a slice whose stat is 0 still shows its outline — a
-    /// border-only slice remains visible.
+    /// DELIVERABLE 2: a slice whose stat is 0 still shows its outline — the
+    /// border box remains visible, wrapping the (empty) fill cell on all four
+    /// sides. The box hugs the fill cell (spec 38 refinement), so it is
+    /// asserted relative to that cell — the top/bottom edges span the fill's
+    /// columns one cell-row above/below it, and the left/right edges sit one
+    /// cell-column beside it on the fill's own row.
     #[test]
     fn zero_fill_slice_still_outlined() {
         let buf = render_with_stats(only_stat(StatKind::Strength, 0));
         let l = RosterManager::layout(area());
         let slices = RosterManager::stat_slice_parts(l.stat_bar);
-        let (outline, _fill, _label) = slices[0]; // Strength == StatKind::ALL[0]
+        let (outline, fill, _label) = slices[0]; // Strength == StatKind::ALL[0]
 
-        for x in outline.left()..outline.right() {
+        // Top and bottom edges of the hugging box, directly above/below the
+        // fill cell, across the fill's column span.
+        for x in fill.left()..fill.right() {
             assert_ne!(
-                buf.cell((x, outline.top())).unwrap().symbol(),
+                buf.cell((x, fill.top() - 1)).unwrap().symbol(),
                 " ",
-                "top edge of the zero-fill slice's outline must still be painted"
+                "top edge of the zero-fill slice's border box must still be painted at ({x},{})",
+                fill.top() - 1
+            );
+            assert_ne!(
+                buf.cell((x, fill.bottom())).unwrap().symbol(),
+                " ",
+                "bottom edge of the zero-fill slice's border box must still be painted at ({x},{})",
+                fill.bottom()
             );
         }
-        for y in outline.top()..outline.bottom() {
-            assert_ne!(
-                buf.cell((outline.left(), y)).unwrap().symbol(),
-                " ",
-                "left edge of the zero-fill slice's outline must still be painted"
-            );
-        }
+        // Left and right edges of the hugging box, one cell beside the fill on
+        // the fill's own row.
+        assert_ne!(
+            buf.cell((outline.left(), fill.top())).unwrap().symbol(),
+            " ",
+            "left edge of the zero-fill slice's border box must still be painted"
+        );
+        assert_ne!(
+            buf.cell((outline.right() - 1, fill.top())).unwrap().symbol(),
+            " ",
+            "right edge of the zero-fill slice's border box must still be painted"
+        );
     }
 
     /// DELIVERABLE 3: a higher stat value paints strictly farther right,
@@ -1511,15 +2032,19 @@ mod stat_bar_tests {
     #[test]
     fn stat_bars_do_not_slide_positionally_at_trigger() {
         let stat_bar = RosterManager::layout(area()).stat_bar;
-        // Content region only: excludes the rightmost column, which overlaps
-        // the details panel's own border and is only conditionally painted
-        // (see research.md b1-t6 "Correction" -- the full `stat_bar` rect is
-        // unsatisfiable here since that column differs by design, not by a
-        // stat-bar regression).
+        // Content region only: excludes the rightmost `EDGE_MARGIN +
+        // DETAILS_LEFT_SHIFT` columns, which overlap the details panel's own
+        // border and are only conditionally painted (the panel is hidden
+        // mid-slide). After spec 38 item 4 the panel reaches
+        // `DETAILS_LEFT_SHIFT` further left into these columns, so the
+        // exclusion widened to match -- those columns differ by design, not by
+        // a stat-bar regression.
         let rect = Rect::new(
             stat_bar.x,
             stat_bar.y,
-            stat_bar.width.saturating_sub(RosterManager::EDGE_MARGIN),
+            stat_bar
+                .width
+                .saturating_sub(RosterManager::EDGE_MARGIN + RosterManager::DETAILS_LEFT_SHIFT),
             stat_bar.height,
         );
 
@@ -1585,6 +2110,119 @@ mod stat_bar_tests {
             mid_dots > lo && mid_dots < hi,
             "mid-slide fill ({mid_dots} dots) must lie strictly between the outgoing ({out_rest}) and incoming ({in_rest}) resting dot counts"
         );
+    }
+
+    /// The 8-bit braille mask (codepoint − U+2800) of the glyph at `(x, y)`,
+    /// or `None` if the cell is not a braille glyph. Per the `DOTS` table:
+    /// bits 0 & 3 are the cell's TOP dot-row, bits 6 & 7 its BOTTOM dot-row.
+    fn braille_mask(buf: &ratatui::buffer::Buffer, x: u16, y: u16) -> Option<u32> {
+        let ch = buf.cell((x, y)).unwrap().symbol().chars().next()?;
+        let cp = ch as u32;
+        (0x2800..=0x28FF).contains(&cp).then_some(cp - 0x2800)
+    }
+
+    /// REGRESSION (spec 38 corrections items 1 & 5): the outline box's TOP
+    /// border is raised to the TOP dot-row of its top cell (moving the bar's
+    /// top edge UP ~3 dots toward the header), and its BOTTOM border is dropped
+    /// to the BOTTOM dot-row of its bottom cell — sitting snug against the
+    /// label cell directly below, with NO empty dot-gap between the bar and its
+    /// STR/DEX/INT/VIT text (the "line between them" the owner reported).
+    /// Proven at the dot level via the mid-span border cells' glyph masks; the
+    /// green fill stays in the middle cell (cell-locked). The pre-change design
+    /// lit the top cell's BOTTOM row and the bottom cell's TOP row, so this
+    /// fails on the old layout.
+    #[test]
+    fn stat_box_top_raised_and_bottom_snug_to_label() {
+        // A near-full stat so the fill cell is unambiguously painted green and
+        // the box wraps a real bar.
+        let buf = render_with_stats(only_stat(StatKind::Strength, 40));
+        let l = RosterManager::layout(area());
+        let slices = RosterManager::stat_slice_parts(l.stat_bar);
+        let (outline, fill, label) = slices[0]; // Strength == StatKind::ALL[0]
+
+        // The fill cell paints green, still in the middle cell (unmoved).
+        assert!(has_non_space(&buf, fill), "the fill cell must paint the green bar");
+        assert_eq!(fill.y - 1, outline.top(), "fill cell stays in the middle: one cell below the outline top");
+        assert_eq!(fill.y + 1, outline.bottom() - 1, "fill cell stays in the middle: one cell above the outline bottom");
+
+        const TOP_ROW: u32 = (1 << 0) | (1 << 3);
+        const BOTTOM_ROW: u32 = (1 << 6) | (1 << 7);
+
+        // A cell mid-way along each border edge (avoid the chamfered corners).
+        let cx = outline.left() + outline.width / 2;
+
+        // Item 1: TOP border raised — its cell lights the TOP dot-row, NOT the
+        // bottom. (Old design lit the bottom dot-row; this is the ~3-dot rise.)
+        let top_mask = braille_mask(&buf, cx, outline.top())
+            .expect("mid top-border cell must be a painted braille glyph");
+        assert!(
+            top_mask & TOP_ROW != 0,
+            "top border cell (mask={top_mask:#04x}) must light its TOP dot-row — the bar's top edge raised toward the header"
+        );
+        assert_eq!(
+            top_mask & BOTTOM_ROW, 0,
+            "top border cell (mask={top_mask:#04x}) must NOT light its BOTTOM dot-row — that is the old low-hug position"
+        );
+
+        // Item 5: BOTTOM border dropped to the bottom dot-row of the bottom
+        // cell (bits 6/7), NOT the top — so it sits directly against the label
+        // cell below with no empty dot-gap.
+        let bottom_cell_y = outline.bottom() - 1;
+        let bottom_mask = braille_mask(&buf, cx, bottom_cell_y)
+            .expect("mid bottom-border cell must be a painted braille glyph");
+        assert!(
+            bottom_mask & BOTTOM_ROW != 0,
+            "bottom border cell (mask={bottom_mask:#04x}) must light its BOTTOM dot-row — snug against the label below"
+        );
+        assert_eq!(
+            bottom_mask & TOP_ROW, 0,
+            "bottom border cell (mask={bottom_mask:#04x}) must NOT light its TOP dot-row — that is the old floating-gap look"
+        );
+
+        // The label cell sits immediately below that bottom-border cell — no
+        // blank spacer cell between the bar box and its label.
+        assert_eq!(
+            label.y,
+            bottom_cell_y + 1,
+            "label cell must be directly below the outline's bottom-border cell (snug, no spacer)"
+        );
+    }
+
+    /// REGRESSION (spec 38 refinement — "margin left on the leftmost bar"):
+    /// the first slice starts a deliberate `STAT_BAR_LEFT_MARGIN` in from
+    /// `stat_bar.x`, not flush at the screen's left edge, at multiple widths.
+    #[test]
+    fn first_bar_has_left_margin() {
+        for w in [40u16, 60u16, 80u16] {
+            let l = RosterManager::layout(Rect::new(0, 0, w, 30));
+            let slices = RosterManager::stat_slice_parts(l.stat_bar);
+            let (first_outline, _fill, _label) = slices[0];
+            assert_eq!(
+                first_outline.left(),
+                l.stat_bar.x + RosterManager::STAT_BAR_LEFT_MARGIN,
+                "w={w}: first bar must start STAT_BAR_LEFT_MARGIN in from stat_bar.x, not flush at the edge"
+            );
+            assert!(
+                first_outline.left() > l.stat_bar.x,
+                "w={w}: first bar must have a real, non-zero left margin off the stat_bar edge"
+            );
+        }
+    }
+
+    /// REGRESSION (spec 38 refinement — "labels one line below, no space
+    /// between"): each label sits on the row IMMEDIATELY below its outline,
+    /// with zero blank spacer rows between the bar and its label.
+    #[test]
+    fn label_sits_immediately_below_bar() {
+        let l = RosterManager::layout(area());
+        let slices = RosterManager::stat_slice_parts(l.stat_bar);
+        for (i, (outline, _fill, label)) in slices.iter().enumerate() {
+            assert_eq!(
+                label.y,
+                outline.bottom(),
+                "slice {i}: label must sit on the row immediately below the bar outline (zero blank rows between)"
+            );
+        }
     }
 }
 
@@ -1667,6 +2305,53 @@ mod draw_dot_border_tests {
         RosterManager::draw_dot_border(&mut buf, Rect::new(2, 1, 0, 6), RosterManager::BORDER_COLOR);
         assert_eq!(buf, before, "zero-width rect must leave the buffer unchanged");
     }
+
+    /// The 8-bit braille mask of `cell` (codepoint − U+2800), or `None` if the
+    /// cell is not a braille glyph. Bit 0 is the cell's top-LEFT dot (per the
+    /// `DOTS` table / Unicode braille layout).
+    fn braille_mask(buf: &Buffer, x: u16, y: u16) -> Option<u32> {
+        let ch = buf.cell((x, y)).unwrap().symbol().chars().next()?;
+        let cp = ch as u32;
+        (0x2800..=0x28FF).contains(&cp).then_some(cp - 0x2800)
+    }
+
+    /// spec 38 correction (item 3b): the shared border helper rounds its
+    /// corners via a 1-dot chamfer — the single outermost corner dot of each
+    /// corner is NOT lit, while the edge dots immediately alongside it ARE.
+    /// Proven at the dot level: the top-left CORNER cell's top-left dot (mask
+    /// bit 0) must be CLEAR, whereas a mid-top-edge cell's top-left dot (bit
+    /// 0, an ordinary lit edge dot) must be SET. This is what makes the corner
+    /// read as rounded rather than a hard square — and because it lives in the
+    /// one shared `draw_dot_border`, every bordered element on the screen
+    /// (stat bars + details panel) inherits it.
+    #[test]
+    fn corners_are_chamfered_not_square() {
+        let buf = render();
+        let r = rect(); // (2,1,10,6)
+
+        let corner = braille_mask(&buf, r.left(), r.top())
+            .expect("top-left corner cell must still be a painted braille glyph");
+        assert_eq!(
+            corner & 0x01,
+            0,
+            "top-left corner cell (mask={corner:#04x}) must have its outermost corner dot (bit 0) CLIPPED — a chamfered, rounded corner"
+        );
+        // The corner cell is NOT blanked wholesale — the chamfer only removes
+        // the single corner dot; the rest of the two edges meeting there stay
+        // lit.
+        assert_ne!(corner, 0, "corner cell must still be painted (only the corner dot is clipped, not the whole cell)");
+
+        // A cell mid-way along the top edge (3 cells inboard of the corner)
+        // keeps its top-left dot lit — proving the clip is corner-local, not a
+        // blanket "never light bit 0".
+        let mid = braille_mask(&buf, r.left() + 3, r.top())
+            .expect("mid-top-edge cell must be a painted braille glyph");
+        assert_eq!(
+            mid & 0x01,
+            0x01,
+            "a mid-top-edge cell (mask={mid:#04x}) must keep its top-left dot (bit 0) lit — the chamfer is corner-local only"
+        );
+    }
 }
 
 /// b1-t5: procedural bordered details panel (union of `exhaustion` +
@@ -1739,6 +2424,37 @@ mod details_panel_border_tests {
                 " ",
                 "right edge cell ({},{y}) of details panel border must be painted",
                 r.right() - 1
+            );
+        }
+    }
+
+    /// REGRESSION (spec 38 margin correction): the details-panel border must
+    /// sit a real, generously-sized blank gap below the home button, not
+    /// jammed flush against it (the two share the top-right column). A
+    /// 1-row technically-non-zero gap would NOT read as separated; require a
+    /// concrete, visible minimum. Asserted at multiple sizes.
+    #[test]
+    fn details_panel_has_generous_gap_below_home_button() {
+        // A gap this size or larger reads as deliberate breathing room, not a
+        // hairline. `DETAILS_TOP_GAP` is exactly this value by construction.
+        const MIN_GAP: u16 = 2;
+
+        for (w, h) in [(80u16, 30u16), (40u16, 20u16), (60u16, 24u16)] {
+            let area = Rect::new(0, 0, w, h);
+            let home = RosterManager::home_rect(area);
+            let panel = border_rect(area);
+
+            let gap = panel.top().saturating_sub(home.bottom());
+            assert!(
+                panel.top() >= home.bottom(),
+                "w={w},h={h}: details panel border top ({}) must not sit above/inside the home button (bottom={})",
+                panel.top(), home.bottom()
+            );
+            assert!(
+                gap >= MIN_GAP,
+                "w={w},h={h}: only {gap} blank row(s) between the home button (bottom={}) and the \
+                 details panel border (top={}) — need >= {MIN_GAP} for a visible margin, not a jam",
+                home.bottom(), panel.top()
             );
         }
     }
@@ -2125,6 +2841,34 @@ mod dot_row_render_tests {
             "slot 0 (now unfilled) and slot 3 (now filled) fg must differ"
         );
     }
+
+    /// spec 38 corrections (item 2 — "the roster dots should be moved down"):
+    /// each indicator circle is nudged down by a genuine sub-cell
+    /// `DOT_SLOT_DOWN_DOTS` offset, so it now paints into the BOTTOM cell-row
+    /// of its 2-cell slot. Before the nudge `draw_grid`'s integer cell-centering
+    /// pinned the 1-cell circle to the slot's TOP row, leaving the bottom row
+    /// blank — so this fails on the pre-nudge render.
+    #[test]
+    fn dot_circle_nudged_into_bottom_cell_row() {
+        let scene = RosterManager::new();
+        let (w, h) = (40u16, 20u16);
+        let buf = render_to_buffer(&scene, w, h);
+
+        let area = Rect::new(0, 0, w, h);
+        let dots_rect = RosterManager::layout(area).dot_row;
+        let slots = RosterManager::dot_slots(dots_rect);
+        // Slot 0 is the current (filled) circle; its slot spans 2 cell rows.
+        let slot = slots[0];
+        assert!(slot.height >= 2, "dot slot must be 2 cells tall for a sub-cell nudge to be observable");
+        let bottom_row = slot.bottom() - 1;
+        let painted = (slot.left()..slot.right())
+            .any(|x| buf.cell((x, bottom_row)).unwrap().symbol() != " ");
+        assert!(
+            painted,
+            "the down-nudged circle must paint into its slot's bottom cell-row (y={bottom_row}); \
+             a top-pinned circle would leave it blank"
+        );
+    }
 }
 
 /// b2-t6: the 6-slot dot row is re-laid into 3 role clusters (3 active / 1
@@ -2394,10 +3138,11 @@ mod arrow_button_tests {
     use crate::scenes::test_util::{has_non_space, mouse_event, render_to_buffer};
     use ratatui::crossterm::event::{MouseButton, MouseEventKind};
 
-    /// `render()` paints the left arrow button within its own rect, inset
-    /// from `area`'s left edge by `EDGE_MARGIN`. b1-t2: the button flanks
-    /// `layout().dot_row`, not the sprite — its row range sits within
-    /// `dot_row`'s row range and entirely outside `sprite`'s row range.
+    /// `render()` paints the left arrow button within its own rect,
+    /// immediately left of the centered dot-cluster group (spec 38 arrow
+    /// flanking correction — the arrows flank the actual dots, not the
+    /// screen's left edge). Its row range sits within `dot_row`'s row range
+    /// and entirely outside `sprite`'s row range.
     #[test]
     fn left_button_flanks_dot_row() {
         let scene = RosterManager::new();
@@ -2407,15 +3152,17 @@ mod arrow_button_tests {
         let area = Rect::new(0, 0, w, h);
         let (left_rect, _) = RosterManager::arrow_rects(area);
         let layout = RosterManager::layout(area);
+        let (group_left, _) = RosterManager::dot_cluster_group_bounds(area);
 
         assert!(
             has_non_space(&buf, left_rect),
             "left arrow button must paint at least one non-space cell within its rect"
         );
-        assert_eq!(
-            left_rect.x,
-            area.x + RosterManager::EDGE_MARGIN,
-            "left arrow button rect must be inset from area's left edge by EDGE_MARGIN"
+        assert!(
+            left_rect.right() <= group_left
+                && group_left - left_rect.right() <= RosterManager::ARROW_DOT_GAP,
+            "left arrow button (right={}) must sit immediately left of the dot-cluster group (group_left={group_left}), not at the screen edge",
+            left_rect.right()
         );
         assert!(
             left_rect.top() >= layout.dot_row.top() && left_rect.bottom() <= layout.dot_row.bottom(),
@@ -2431,8 +3178,9 @@ mod arrow_button_tests {
         );
     }
 
-    /// `render()` paints the right arrow button, flanking `layout().dot_row`
-    /// (b1-t2) — not the sprite.
+    /// `render()` paints the right arrow button, immediately right of the
+    /// centered dot-cluster group (spec 38 arrow flanking correction) — not
+    /// the sprite, and not hugging the screen's right edge.
     #[test]
     fn right_button_flanks_dot_row() {
         let scene = RosterManager::new();
@@ -2442,15 +3190,17 @@ mod arrow_button_tests {
         let area = Rect::new(0, 0, w, h);
         let (_, right_rect) = RosterManager::arrow_rects(area);
         let layout = RosterManager::layout(area);
+        let (_, group_right) = RosterManager::dot_cluster_group_bounds(area);
 
         assert!(
             has_non_space(&buf, right_rect),
             "right arrow button must paint at least one non-space cell within its rect"
         );
-        assert_eq!(
-            right_rect.right(),
-            area.right() - RosterManager::EDGE_MARGIN,
-            "right arrow button rect must be inset from area's right edge by EDGE_MARGIN"
+        assert!(
+            right_rect.left() >= group_right
+                && right_rect.left() - group_right <= RosterManager::ARROW_DOT_GAP,
+            "right arrow button (left={}) must sit immediately right of the dot-cluster group (group_right={group_right}), not at the screen edge",
+            right_rect.left()
         );
         assert!(
             right_rect.top() >= layout.dot_row.top() && right_rect.bottom() <= layout.dot_row.bottom(),
@@ -2493,6 +3243,130 @@ mod arrow_button_tests {
                     rect, layout.sprite
                 );
             }
+        }
+    }
+
+    /// REGRESSION (spec 38 arrow-flanking correction): the arrows must be
+    /// anchored to the ACTUAL centered dot-cluster group, sitting immediately
+    /// outside its bounds — not to the full-width `dot_row` band (the old
+    /// bug, which left them hugging the screen edges while the dots floated
+    /// in the middle). Asserted at both 40- and 80-col widths.
+    #[test]
+    fn arrows_immediately_flank_dot_cluster_group() {
+        // Max cells an arrow may sit outside the group's own bounds — a
+        // genuine "flanking" adjacency, not "somewhere in the band".
+        const MAX_FLANK_GAP: u16 = RosterManager::ARROW_DOT_GAP;
+
+        for w in [40u16, 80u16] {
+            let area = Rect::new(0, 0, w, 20);
+            let (left_rect, right_rect) = RosterManager::arrow_rects(area);
+            // The group's true visual extent (dots + the wider role labels) —
+            // the same bounds `arrow_rects` flanks. The arrows must never
+            // overlap this, or they'd overwrite a label glyph.
+            let (group_left, group_right) = RosterManager::dot_cluster_group_bounds(area);
+
+            // Immediately flanking the group, no overlap.
+            assert!(
+                left_rect.right() <= group_left && group_left - left_rect.right() <= MAX_FLANK_GAP,
+                "width={w}: left arrow (right={}) must sit within {MAX_FLANK_GAP} cell(s) left of group_left={group_left}",
+                left_rect.right()
+            );
+            assert!(
+                right_rect.left() >= group_right && right_rect.left() - group_right <= MAX_FLANK_GAP,
+                "width={w}: right arrow (left={}) must sit within {MAX_FLANK_GAP} cell(s) right of group_right={group_right}",
+                right_rect.left()
+            );
+
+            // Regression guard: the old bug anchored the arrows to the
+            // FULL-WIDTH band, pinning them at the screen edges. At 80-col the
+            // group is far narrower than the band, so a correctly group-
+            // anchored arrow lands well inboard of that old edge position.
+            // (At 40-col the widened label group nearly fills the band, so the
+            // flanking arrows legitimately settle at the EDGE_MARGIN inset —
+            // there is no inboard room to assert, so that guard is 80-col only.)
+            if w >= 80 {
+                assert!(
+                    left_rect.x > area.x + RosterManager::EDGE_MARGIN,
+                    "width={w}: left arrow x={} must be inboard of the old edge-hugging position ({})",
+                    left_rect.x,
+                    area.x + RosterManager::EDGE_MARGIN
+                );
+                assert!(
+                    right_rect.right() < area.right() - RosterManager::EDGE_MARGIN,
+                    "width={w}: right arrow right={} must be inboard of the old edge-hugging position ({})",
+                    right_rect.right(),
+                    area.right() - RosterManager::EDGE_MARGIN
+                );
+            }
+        }
+    }
+
+    /// REGRESSION (spec 38 item 1/5): the arrows are shrunk (compact chrome)
+    /// and have GENUINE horizontal breathing room beside the dot group — not
+    /// a 1-cell hairline. Sizes are the shrunk values, and at 80-col (where
+    /// the band has ample room) each arrow sits a real, multi-cell horizontal
+    /// gap from the dot cluster group.
+    #[test]
+    fn arrows_are_shrunk_with_genuine_horizontal_margin() {
+        // The arrows were shrunk ~30% from the original 6x3.
+        assert_eq!(RosterManager::ARROW_W, 4, "arrow width must be shrunk to 4");
+        assert_eq!(RosterManager::ARROW_H, 2, "arrow height must be shrunk to 2");
+        assert_eq!(
+            RosterManager::ARROW_DOT_GAP, 3,
+            "ARROW_DOT_GAP must be a genuine 3-cell margin, not a 1-cell hairline"
+        );
+
+        // A genuine margin, not a hairline.
+        const MIN_MARGIN: u16 = 3;
+        let area = Rect::new(0, 0, 80, 20);
+        let (left_rect, right_rect) = RosterManager::arrow_rects(area);
+        let (group_left, group_right) = RosterManager::dot_cluster_group_bounds(area);
+
+        assert_eq!(left_rect.width, RosterManager::ARROW_W);
+        assert_eq!(left_rect.height, RosterManager::ARROW_H);
+
+        let left_margin = group_left.saturating_sub(left_rect.right());
+        let right_margin = right_rect.left().saturating_sub(group_right);
+        assert!(
+            left_margin >= MIN_MARGIN,
+            "left arrow must have >= {MIN_MARGIN} cells of horizontal clearance from the dot group, got {left_margin}"
+        );
+        assert!(
+            right_margin >= MIN_MARGIN,
+            "right arrow must have >= {MIN_MARGIN} cells of horizontal clearance from the dot group, got {right_margin}"
+        );
+    }
+
+    /// REGRESSION (spec 38 corrections item 2 — "the arrows moved up 1"):
+    /// the arrows are floor-centered against the FULL `dot_row` band, biasing
+    /// them UP onto the band's top two rows (one row higher than the prior
+    /// `div_ceil` down-bias). This lands them level with the (down-nudged) dot
+    /// cluster rather than dropping to the label row. At both 40- and 80-col
+    /// widths.
+    #[test]
+    fn arrows_raised_to_top_of_dot_row_band() {
+        for w in [40u16, 80u16] {
+            let area = Rect::new(0, 0, w, 20);
+            let (left_rect, right_rect) = RosterManager::arrow_rects(area);
+            let band = RosterManager::layout(area).dot_row;
+
+            // Exact round-half-DOWN (floor) center against the full band
+            // height — one row higher than the old div_ceil position.
+            let expected_top = band.y + (band.height - RosterManager::ARROW_H) / 2;
+            assert_eq!(left_rect.top(), expected_top, "w={w}: left arrow top must be the floor-center of the full band");
+            assert_eq!(right_rect.top(), expected_top, "w={w}: right arrow top must be the floor-center of the full band");
+
+            // Raised: at DOT_H=3 / ARROW_H=2 the floor center pins the arrow to
+            // the band's TOP row (no longer reaching the band's bottom row).
+            assert_eq!(
+                left_rect.top(), band.top(),
+                "w={w}: left arrow must sit on the band's top row (raised up 1 from the prior down-bias)"
+            );
+            assert!(
+                left_rect.bottom() < band.bottom(),
+                "w={w}: raised arrow must no longer reach the band's bottom (label) row"
+            );
+            assert_eq!(right_rect.top(), band.top(), "w={w}: right arrow raised to the band's top row too");
         }
     }
 
@@ -2680,28 +3554,16 @@ mod slide_transition_tests {
         })
     }
 
-    /// `layout(area).sprite` narrowed to exclude the static (non-sliding)
-    /// arrow-button columns. As of b1-t1, `sprite` spans the full LEFT
-    /// column with no `ARROW_W` inset, so the left arrow button's fixed
-    /// columns now fall inside the sprite's own column range; without
-    /// excluding them, `leftmost_non_space_in_rect` picks up the static
-    /// button instead of the actually-sliding sprite content. b1-t2 moves
-    /// the arrows off the sprite band entirely (flanking `dot_row`
-    /// instead), which will make this narrowing a no-op.
+    /// The sprite band the slide tests measure. The arrow buttons flank the
+    /// dot-cluster group and so now paint in the MIDDLE columns of the frame,
+    /// but they live entirely within `dot_row`'s row range — disjoint from
+    /// (directly below) the sprite's rows — so scanning `layout(area).sprite`
+    /// never picks up an arrow glyph, and no column-narrowing is needed. (The
+    /// details-panel border shares the sprite's rightmost column at rest, but
+    /// the tests measure the LEFTMOST painted column, which is always sprite
+    /// content, so that right-edge border cell never interferes.)
     fn sprite_measure_rect(area: Rect) -> Rect {
-        let sprite_rect = RosterManager::layout(area).sprite;
-        let (left_arrow, right_arrow) = RosterManager::arrow_rects(area);
-        let left = if left_arrow.left() < sprite_rect.right() && left_arrow.right() > sprite_rect.left() {
-            sprite_rect.left().max(left_arrow.right())
-        } else {
-            sprite_rect.left()
-        };
-        let right = if right_arrow.left() < sprite_rect.right() && right_arrow.right() > sprite_rect.left() {
-            sprite_rect.right().min(right_arrow.left())
-        } else {
-            sprite_rect.right()
-        };
-        Rect::new(left, sprite_rect.y, right.saturating_sub(left), sprite_rect.height)
+        RosterManager::layout(area).sprite
     }
 
     /// A right-nav slides the outgoing creature's SPRITE out to the left and
@@ -3177,3 +4039,5 @@ mod selection_tests {
         );
     }
 }
+
+

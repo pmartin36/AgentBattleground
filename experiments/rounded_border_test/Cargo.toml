@@ -1,0 +1,9 @@
+[package]
+name = "rounded_border_test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+engine-core = { path = "../../crates/engine/core" }
+engine-render = { path = "../../crates/engine/render" }
+ratatui = "0.29"

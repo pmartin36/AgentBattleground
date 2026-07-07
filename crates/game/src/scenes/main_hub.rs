@@ -237,7 +237,7 @@ impl Scene for MainHub {
                     let n = self.buttons.len();
                     self.cursor_index = (self.cursor_index + 1) % n;
                 }
-                KeyCode::Enter => return self.activate(self.cursor_index),
+                KeyCode::Enter | KeyCode::Char(' ') => return self.activate(self.cursor_index),
                 _ => {}
             },
             InputEvent::Mouse(me) => {
@@ -452,6 +452,17 @@ mod keyboard_input_tests {
         let transition = scene.handle_input(key_event(KeyCode::Enter));
         assert!(transition.is_none(), "Exit activation must not return a Transition");
         assert!(scene.quit_requested(), "Exit activation must set quit_requested");
+    }
+
+    /// Space activates the cursored item identically to Enter.
+    #[test]
+    fn space_on_roster_transitions_to_roster_manager() {
+        let mut scene = hub_at(0);
+        let transition = scene
+            .handle_input(key_event(KeyCode::Char(' ')))
+            .expect("Space on Roster must return a Transition");
+        assert_eq!(transition.target, SceneKey::from(SceneId::RosterManager));
+        assert!(!scene.quit_requested(), "Roster activation must not request quit");
     }
 
     /// An unrelated key changes nothing and requests nothing.
