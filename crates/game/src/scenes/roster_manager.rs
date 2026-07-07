@@ -91,6 +91,14 @@ impl RosterManager {
     const ARROW_W: u16 = 4;
     const ARROW_H: u16 = 2;
 
+    /// Sub-cell downward render nudge (in braille dots) applied to the flanking
+    /// arrow buttons on top of `arrow_rects`'s floor-centered rect. A genuine
+    /// dot-level offset (2 dots < one 4-dot cell), applied via
+    /// `Button::set_dot_offset_down` so only the drawn glyph moves — the
+    /// hit-test rect is unchanged. Mirrors the sub-cell precision
+    /// `DOT_SLOT_DOWN_DOTS`/`draw_dot_slot` give the roster indicator circles.
+    const ARROW_NUDGE_DOWN_DOTS: i32 = 2;
+
     /// Width/height of the top-right home button.
     const HOME_W: u16 = 6;
     const HOME_H: u16 = 3;
@@ -185,26 +193,21 @@ impl RosterManager {
     /// Height (in rows) of the `exhaustion` sub-region at the top of the
     /// details panel.
     const PANEL_H: u16 = 5;
-    /// Total height (in rows) of the `stat_bar` band. Sized to hold exactly
-    /// one bar outline + the label row (immediately below the outline, no
-    /// blank gap row) + one row of bottom breathing room — deliberately
-    /// compact so the freed vertical space (vs. the old 8-dot-row-tall bars,
-    /// and vs. the removed bar→label gap) becomes real margin around the bars
-    /// AND extra height for the sprite band below, not a stretched bar or a
-    /// dead empty band.
+    /// Total height (in rows) of the `stat_bar` band: exactly one bar outline
+    /// plus the label row directly below it — no gap row, no padding cell. The
+    /// `sprite` band directly below fills all remaining vertical space down to
+    /// its pinned baseline above `dot_row`.
     const STAT_BAR_BAND_H: u16 =
-        Self::STAT_BAR_OUTLINE_H + Self::STAT_LABEL_H + 1;
-    /// Height (in cells) of each stat-bar OUTLINE. 3 cells = 12 dot rows. The
-    /// fill occupies the MIDDLE cell (dot rows 4-7, 4 dot rows tall — half the
-    /// old 8), and the border box is drawn hugging that fill cell: 1 dot
-    /// outside it on every side (top border at dot row 3, bottom at dot row 8,
-    /// left/right one dot outside the fill's cell columns). Border edges and
-    /// fill dots therefore always land in DIFFERENT braille cells, so no cell
-    /// ever mixes border-grey with fill-green (the adaptive-luma masking in
-    /// `dots_to_grid` would otherwise drop the darker border dots when a
-    /// brighter fill dot shares the cell). This hug is what makes the border
-    /// read as tightly wrapping the bar instead of framing empty space.
-    const STAT_BAR_OUTLINE_H: u16 = 3;
+        Self::STAT_BAR_OUTLINE_H + Self::STAT_LABEL_H;
+    /// Height (in cells) of each stat-bar OUTLINE. 2 cells = 8 dot rows: a
+    /// 1-dot border on all four sides (top row 0, bottom row 7, left/right
+    /// columns) with the proportional green fill occupying the interior (dot
+    /// rows 1-6). The border wraps the fill compactly — top edge level with the
+    /// details-panel border (top-aligned) and bottom edge immediately above the
+    /// label cell. The border and fill share the top/bottom braille cells, so
+    /// those cells render as a muted grey-green blend rather than a distinct
+    /// grey (the per-cell color is the mean of its dots' colors).
+    const STAT_BAR_OUTLINE_H: u16 = 2;
     /// Reserved blank cells on the RIGHT of `stat_bar` that the 4 slices never
     /// occupy, so the rightmost bar keeps genuine horizontal clearance from
     /// the details panel's left border. The panel's left edge sits
@@ -222,17 +225,6 @@ impl RosterManager {
     const STAT_BAR_LEFT_MARGIN: u16 = 2;
     /// Gap (in cells) between adjacent stat-bar slices (b1-t6).
     const STAT_BAR_GAP: u16 = 1;
-    /// Dots by which each stat-bar outline box extends beyond the tight
-    /// 1-dot hug of its fill cell: the TOP border is raised this many dots
-    /// (moving the bar's top edge UP toward the header) and the BOTTOM border
-    /// is lowered this many dots (dropping it to the very bottom of its cell,
-    /// snug against the label cell directly below with no empty dot-gap). At
-    /// the fixed 3-cell `STAT_BAR_OUTLINE_H` this lands the top edge on the
-    /// top dot-row of the outline and the bottom edge on its bottom dot-row.
-    /// Only the grey border moves — the green fill stays cell-aligned in the
-    /// middle cell (a sub-cell fill shift would share a cell with a border
-    /// dot and be dropped by `dots_to_grid`'s adaptive-luma masking).
-    const STAT_BAR_BORDER_RAISE_DOTS: usize = 3;
     /// Height (in rows) of the label row at the bottom of each stat-bar
     /// slice (b1-t6).
     const STAT_LABEL_H: u16 = 1;
@@ -782,9 +774,10 @@ impl RosterManager {
     /// group). Each slice reserves its bottom `STAT_LABEL_H` row for the label
     /// (immediately below the outline, no gap row); the rows above become the
     /// outline. `fill` is the middle interior cell of the outline (inset a
-    /// full cell on every side); `render_stat_bars` draws the border box
-    /// hugging THIS `fill` cell (1 dot outside it), so border and fill land in
-    /// separate braille cells and neither overwrites the other.
+    /// full cell on every side); `render_stat_bars` draws the border box around
+    /// the full outline and lights THIS `fill` cell, so the top/bottom border
+    /// and the fill land in separate braille cells and neither overwrites the
+    /// other.
     fn stat_slice_parts(stat_bar: Rect) -> Vec<(Rect, Rect, Rect)> {
         let n = crate::stats::StatKind::ALL.len() as u16;
         // Reserve `STAT_BAR_LEFT_MARGIN` cells before the first slice and
@@ -826,11 +819,14 @@ impl RosterManager {
                 // blank gap row between the bar and its label.
                 let label_y = (s.y + outline_h).min(s.bottom().saturating_sub(label_h));
                 let label = Rect::new(s.x, label_y, s.width, label_h);
+                // `fill` is the interior column span between the left/right
+                // borders (inset one cell each side), full outline height — the
+                // region the proportional green occupies.
                 let fill = Rect::new(
                     outline.x.saturating_add(1),
-                    outline.y.saturating_add(1),
+                    outline.y,
                     outline.width.saturating_sub(2),
-                    outline.height.saturating_sub(2),
+                    outline.height,
                 );
                 (outline, fill, label)
             })
@@ -857,11 +853,12 @@ impl RosterManager {
     /// `STAT_BAR_COLOR` fill are built into ONE `DotBuffer` spanning the
     /// `outline` rect and drawn with a single `draw_grid` (non-text chrome, so
     /// they render through the dot pipeline — never `engine_render::fill`,
-    /// CLAUDE.md constraint 4): the border box hugs the fill cell (1 dot
-    /// outside it on every side, via `draw_dot_box`), and the fill lights the
-    /// interior fill cell proportionally to `stat_fill_dots`. Border edges and
-    /// fill dots never share a braille cell, so the border stays visible even
-    /// over the filled portion (visible outline even at zero fill). A
+    /// CLAUDE.md constraint 4): a 1-dot chamfered-corner border wraps the whole
+    /// `outline` (via `draw_dot_box`) and the fill lights the interior (dot rows
+    /// 1..dot_rows-1) proportionally to `stat_fill_dots`, starting one dot in
+    /// from the left border. Border and fill share the top/bottom braille cells,
+    /// so those render as a muted grey-green blend; the unfilled remainder of
+    /// the bar shows the border alone (visible outline even at zero fill). A
     /// plain-text `stat_label(kind)` sits on the row immediately beneath.
     fn render_stat_bars(&self, buf: &mut Buffer, rect: Rect) {
         for ((outline, fill, label), kind) in
@@ -869,39 +866,21 @@ impl RosterManager {
         {
             let dot_cols = outline.width as usize * 2;
             let dot_rows = outline.height as usize * 4;
-            // Need a real interior fill cell for the hugging box to wrap.
-            if dot_cols > 0 && dot_rows > 0 && fill.width > 0 && fill.height > 0 {
+            if dot_cols > 2 && dot_rows > 2 && fill.width > 0 {
                 let mut dots = DotBuffer::new(dot_cols, dot_rows);
 
-                // Fill-cell dot bounds within the outline's dot grid.
-                let fx0 = (fill.x - outline.x) as usize * 2;
-                let fy0 = (fill.y - outline.y) as usize * 4;
-                let fill_dot_cols = fill.width as usize * 2;
-                let fill_dot_rows = fill.height as usize * 4;
+                // 1-dot border wrapping the whole outline (rounded corners via
+                // `draw_dot_box`), then the proportional green fill in the
+                // interior (dot rows 1..dot_rows-1), starting one dot in from the
+                // left border. The border and fill share the top/bottom cells, so
+                // those cells render as a muted grey-green blend.
+                Self::draw_dot_box(&mut dots, 0, 0, dot_cols - 1, dot_rows - 1, Self::BORDER_COLOR);
 
-                // Border box around the fill cell. Left/right hug the fill 1
-                // dot outside (separate cell columns, so no cell mixes
-                // border-grey with fill-green). Top/bottom are pushed
-                // `STAT_BAR_BORDER_RAISE_DOTS` further out — the top edge up
-                // toward the header, the bottom edge down onto the outline's
-                // bottom dot-row so it sits snug against the label cell below
-                // (no empty dot-gap). Clamped to the outline's dot bounds.
-                let box_top = (fy0 - 1).saturating_sub(Self::STAT_BAR_BORDER_RAISE_DOTS);
-                let box_bottom =
-                    (fy0 + fill_dot_rows + Self::STAT_BAR_BORDER_RAISE_DOTS).min(dot_rows - 1);
-                Self::draw_dot_box(
-                    &mut dots,
-                    fx0 - 1,
-                    box_top,
-                    fx0 + fill_dot_cols,
-                    box_bottom,
-                    Self::BORDER_COLOR,
-                );
-
-                let n = self.stat_fill_dots(kind, fill_dot_cols);
-                for row in fy0..fy0 + fill_dot_rows {
+                let interior_cols = dot_cols - 2;
+                let n = self.stat_fill_dots(kind, interior_cols);
+                for row in 1..dot_rows - 1 {
                     for col in 0..n {
-                        dots.set(fx0 + col, row, Dot::Lit(Self::STAT_BAR_COLOR));
+                        dots.set(1 + col, row, Dot::Lit(Self::STAT_BAR_COLOR));
                     }
                 }
 
@@ -927,7 +906,7 @@ impl RosterManager {
     /// Lights the chamfered-corner perimeter of the inclusive dot-space box
     /// `[left..=right] × [top..=bottom]` into `dots` — the shared primitive
     /// behind BOTH `draw_dot_border` (a box spanning a whole cell rect) and
-    /// the stat bars' fill-hugging box (a sub-region of the outline buffer).
+    /// the stat bars' border box (a sub-region of the outline buffer).
     /// The same "light one dot position across the whole run" technique as
     /// `battle_viewer::draw_board_lines`, restricted to the 4 edges, minus the
     /// outermost corner dots (`CHAMFER`) so the corners read as rounded.
@@ -1197,11 +1176,13 @@ impl Scene for RosterManager {
         {
             let mut left = self.left_button.borrow_mut();
             left.set_rect(left_rect);
+            left.set_dot_offset_down(Self::ARROW_NUDGE_DOWN_DOTS);
             left.render(frame.buffer_mut());
         }
         {
             let mut right = self.right_button.borrow_mut();
             right.set_rect(right_rect);
+            right.set_dot_offset_down(Self::ARROW_NUDGE_DOWN_DOTS);
             right.render(frame.buffer_mut());
         }
 
@@ -1785,13 +1766,6 @@ mod stat_bar_tests {
         render_to_buffer(&rm, area().width, area().height)
     }
 
-    /// Rightmost non-space column anywhere within `rect`, across all rows.
-    fn rightmost_non_space(buf: &ratatui::buffer::Buffer, rect: Rect) -> Option<u16> {
-        (rect.left()..rect.right()).rev().find(|&x| {
-            (rect.top()..rect.bottom()).any(|y| buf.cell((x, y)).unwrap().symbol() != " ")
-        })
-    }
-
     /// Every cell's (symbol, fg) within `rect`, row-major — an exact-content
     /// snapshot for equality comparisons restricted to one rect (rather than
     /// the whole buffer, since `level` updates immediately with
@@ -1849,40 +1823,74 @@ mod stat_bar_tests {
         }
     }
 
-    /// REGRESSION (spec 38 item 2): each bar's filled portion is compact —
-    /// about 4-5 dot rows, NOT the old 8. The fill interior is exactly one
-    /// braille cell tall (4 dot rows), and there is deliberate vertical
-    /// breathing room around the bar within the stat_bar band (the band is
-    /// taller than one bar outline + its label, so the freed space becomes
-    /// margin, not a stretched bar).
+    /// Each bar is the compact 2-cell `STAT_BAR_OUTLINE_H`, and the stat_bar
+    /// band is exactly `outline + label` tall, reserving no padding cell (see
+    /// `stat_bar_band_is_tight_and_sprite_grows`).
     #[test]
-    fn stat_bar_fill_is_short_with_breathing_room() {
+    fn stat_bar_fill_is_short_and_band_is_tight() {
         let l = RosterManager::layout(area());
         let slices = RosterManager::stat_slice_parts(l.stat_bar);
-        for (i, (outline, fill, label)) in slices.iter().enumerate() {
-            let fill_dot_rows = fill.height * 4;
-            assert!(
-                (1..=5).contains(&fill_dot_rows),
-                "slice {i}: fill must be ~4-5 dot rows tall (compact), got {fill_dot_rows} (fill.height={})",
-                fill.height
-            );
+        for (i, (outline, _fill, label)) in slices.iter().enumerate() {
             assert_eq!(
                 outline.height, RosterManager::STAT_BAR_OUTLINE_H,
                 "slice {i}: outline must be the fixed compact height, not stretched to fill the band"
             );
-            // The band is taller than the bar + its label group, i.e. real
-            // breathing room exists — the freed vertical space is not a
-            // stretched bar.
+            // The band is exactly outline + label — no padding cell.
             let content_bottom = label.y + label.height;
-            assert!(
-                content_bottom <= l.stat_bar.bottom(),
-                "slice {i}: label bottom ({content_bottom}) must stay within the stat_bar band (bottom={})",
+            assert_eq!(
+                content_bottom,
+                l.stat_bar.bottom(),
+                "slice {i}: outline+label ({content_bottom}) must fill the stat_bar band exactly (bottom={})",
                 l.stat_bar.bottom()
             );
-            assert!(
-                l.stat_bar.height > outline.height + label.height,
-                "slice {i}: stat_bar band ({}) must be taller than outline+label ({}+{}) — deliberate breathing room, not a stretched bar",
+            assert_eq!(
+                l.stat_bar.height,
+                outline.height + label.height,
+                "slice {i}: stat_bar band ({}) must be exactly outline+label ({}+{})",
                 l.stat_bar.height, outline.height, label.height
+            );
+        }
+    }
+
+    /// The stat_bar band is exactly `STAT_BAR_OUTLINE_H + STAT_LABEL_H`, and the
+    /// `sprite` band fills every remaining row between the band's bottom and its
+    /// baseline pinned at `dot_row.top()` — so all vertical space not needed by
+    /// the tight bars belongs to the sprite.
+    #[test]
+    fn stat_bar_band_is_tight_and_sprite_grows() {
+        assert_eq!(
+            RosterManager::STAT_BAR_BAND_H,
+            RosterManager::STAT_BAR_OUTLINE_H + RosterManager::STAT_LABEL_H,
+            "STAT_BAR_BAND_H must be exactly outline+label, with no padding cell"
+        );
+
+        for (w, h) in [(80u16, 30u16), (60u16, 24u16), (40u16, 20u16)] {
+            let area = Rect::new(0, 0, w, h);
+            let l = RosterManager::layout(area);
+
+            // The sprite opens directly below the stat_bar band...
+            assert_eq!(
+                l.sprite.y,
+                l.stat_bar.y + l.stat_bar.height,
+                "w={w},h={h}: sprite must open directly below the stat_bar band"
+            );
+            // ...and bottoms out flush against dot_row (baseline pinned).
+            assert_eq!(
+                l.sprite.y + l.sprite.height,
+                l.dot_row.y,
+                "w={w},h={h}: sprite baseline must sit at dot_row.top()"
+            );
+
+            // Every row between the band bottom and the baseline is sprite; a
+            // band carrying one extra padding cell would yield a shorter sprite.
+            let sprite_if_band_padded = l
+                .dot_row
+                .y
+                .saturating_sub(l.stat_bar.y + l.stat_bar.height + 1);
+            assert!(
+                l.sprite.height > sprite_if_band_padded,
+                "w={w},h={h}: sprite ({}) must claim the row a padding cell would otherwise take ({sprite_if_band_padded})",
+                l.sprite.height
             );
         }
     }
@@ -1914,68 +1922,79 @@ mod stat_bar_tests {
     }
 
     /// DELIVERABLE 2: a slice whose stat is 0 still shows its outline — the
-    /// border box remains visible, wrapping the (empty) fill cell on all four
-    /// sides. The box hugs the fill cell (spec 38 refinement), so it is
-    /// asserted relative to that cell — the top/bottom edges span the fill's
-    /// columns one cell-row above/below it, and the left/right edges sit one
-    /// cell-column beside it on the fill's own row.
+    /// border box remains visible on all four sides of the 2-cell bar (top row,
+    /// bottom row, and left/right edges).
     #[test]
     fn zero_fill_slice_still_outlined() {
         let buf = render_with_stats(only_stat(StatKind::Strength, 0));
         let l = RosterManager::layout(area());
         let slices = RosterManager::stat_slice_parts(l.stat_bar);
-        let (outline, fill, _label) = slices[0]; // Strength == StatKind::ALL[0]
+        let (outline, _fill, _label) = slices[0]; // Strength == StatKind::ALL[0]
 
-        // Top and bottom edges of the hugging box, directly above/below the
-        // fill cell, across the fill's column span.
-        for x in fill.left()..fill.right() {
+        // Top and bottom edges of the border box, across the bar's width.
+        for x in outline.left()..outline.right() {
             assert_ne!(
-                buf.cell((x, fill.top() - 1)).unwrap().symbol(),
+                buf.cell((x, outline.top())).unwrap().symbol(),
                 " ",
                 "top edge of the zero-fill slice's border box must still be painted at ({x},{})",
-                fill.top() - 1
+                outline.top()
             );
             assert_ne!(
-                buf.cell((x, fill.bottom())).unwrap().symbol(),
+                buf.cell((x, outline.bottom() - 1)).unwrap().symbol(),
                 " ",
                 "bottom edge of the zero-fill slice's border box must still be painted at ({x},{})",
-                fill.bottom()
+                outline.bottom() - 1
             );
         }
-        // Left and right edges of the hugging box, one cell beside the fill on
-        // the fill's own row.
-        assert_ne!(
-            buf.cell((outline.left(), fill.top())).unwrap().symbol(),
-            " ",
-            "left edge of the zero-fill slice's border box must still be painted"
-        );
-        assert_ne!(
-            buf.cell((outline.right() - 1, fill.top())).unwrap().symbol(),
-            " ",
-            "right edge of the zero-fill slice's border box must still be painted"
-        );
+        // Left and right edges of the border box, down the bar's height.
+        for y in outline.top()..outline.bottom() {
+            assert_ne!(
+                buf.cell((outline.left(), y)).unwrap().symbol(),
+                " ",
+                "left edge of the zero-fill slice's border box must still be painted at ({},{y})",
+                outline.left()
+            );
+            assert_ne!(
+                buf.cell((outline.right() - 1, y)).unwrap().symbol(),
+                " ",
+                "right edge of the zero-fill slice's border box must still be painted at ({},{y})",
+                outline.right() - 1
+            );
+        }
     }
 
-    /// DELIVERABLE 3: a higher stat value paints strictly farther right,
-    /// measured strictly inside its OWN slice's fill-interior rect (not the
-    /// whole stat_bar, since the ever-present border column would mask it).
+    /// DELIVERABLE 3: a higher stat value paints its green fill strictly farther
+    /// right. Measured by the rightmost GREEN-dominant cell (the hollow, unfilled
+    /// remainder of the bar shows only the grey border, so a plain "rightmost
+    /// non-space" would always hit the border edge and never scale).
     #[test]
     fn fill_length_scales_with_stat_value() {
         let l = RosterManager::layout(area());
         let slices = RosterManager::stat_slice_parts(l.stat_bar);
-        let (_outline, fill_rect, _label) = slices[1]; // Dexterity == StatKind::ALL[1]
+        let (outline, _fill, _label) = slices[1]; // Dexterity == StatKind::ALL[1]
+
+        // Rightmost column within `outline` whose fg is green-dominant (the
+        // `STAT_BAR_COLOR` fill blends green-dominant; the grey border does not).
+        fn rightmost_green(buf: &ratatui::buffer::Buffer, rect: Rect) -> Option<u16> {
+            (rect.left()..rect.right()).rev().find(|&x| {
+                (rect.top()..rect.bottom()).any(|y| {
+                    matches!(buf.cell((x, y)).unwrap().fg,
+                        ratatui::style::Color::Rgb(r, g, b) if g > r && g > b)
+                })
+            })
+        }
 
         let buf_low = render_with_stats(only_stat(StatKind::Dexterity, 5));
-        let low_col = rightmost_non_space(&buf_low, fill_rect);
-        assert!(low_col.is_some(), "a non-zero Dexterity value must paint the DEX slice's fill interior");
+        let low_col = rightmost_green(&buf_low, outline);
+        assert!(low_col.is_some(), "a non-zero Dexterity value must paint green in the DEX bar");
 
         let buf_high = render_with_stats(only_stat(StatKind::Dexterity, 35));
-        let high_col = rightmost_non_space(&buf_high, fill_rect);
-        assert!(high_col.is_some(), "a higher Dexterity value must also paint the DEX slice's fill interior");
+        let high_col = rightmost_green(&buf_high, outline);
+        assert!(high_col.is_some(), "a higher Dexterity value must also paint green in the DEX bar");
 
         assert!(
             high_col.unwrap() > low_col.unwrap(),
-            "a higher stat value (35) must paint farther right ({high_col:?}) than a lower one (5) ({low_col:?})"
+            "a higher stat value (35) must fill green farther right ({high_col:?}) than a lower one (5) ({low_col:?})"
         );
     }
 
@@ -2121,29 +2140,19 @@ mod stat_bar_tests {
         (0x2800..=0x28FF).contains(&cp).then_some(cp - 0x2800)
     }
 
-    /// REGRESSION (spec 38 corrections items 1 & 5): the outline box's TOP
-    /// border is raised to the TOP dot-row of its top cell (moving the bar's
-    /// top edge UP ~3 dots toward the header), and its BOTTOM border is dropped
-    /// to the BOTTOM dot-row of its bottom cell — sitting snug against the
-    /// label cell directly below, with NO empty dot-gap between the bar and its
-    /// STR/DEX/INT/VIT text (the "line between them" the owner reported).
-    /// Proven at the dot level via the mid-span border cells' glyph masks; the
-    /// green fill stays in the middle cell (cell-locked). The pre-change design
-    /// lit the top cell's BOTTOM row and the bottom cell's TOP row, so this
-    /// fails on the old layout.
+    /// The 2-cell bar box is top-aligned (its top edge on the outline's TOP
+    /// dot-row, level with the details-panel border) and snug to the label (its
+    /// bottom edge on the outline's BOTTOM dot-row, immediately above the label
+    /// cell). Proven at the dot level via the mid-span border cells' glyph
+    /// masks.
     #[test]
-    fn stat_box_top_raised_and_bottom_snug_to_label() {
-        // A near-full stat so the fill cell is unambiguously painted green and
-        // the box wraps a real bar.
-        let buf = render_with_stats(only_stat(StatKind::Strength, 40));
+    fn stat_bar_box_is_top_aligned_and_snug_to_label() {
+        // A zero stat so the border is fully visible everywhere (no green fill
+        // to luma-blend over the top/bottom border rows).
+        let buf = render_with_stats(only_stat(StatKind::Strength, 0));
         let l = RosterManager::layout(area());
         let slices = RosterManager::stat_slice_parts(l.stat_bar);
-        let (outline, fill, label) = slices[0]; // Strength == StatKind::ALL[0]
-
-        // The fill cell paints green, still in the middle cell (unmoved).
-        assert!(has_non_space(&buf, fill), "the fill cell must paint the green bar");
-        assert_eq!(fill.y - 1, outline.top(), "fill cell stays in the middle: one cell below the outline top");
-        assert_eq!(fill.y + 1, outline.bottom() - 1, "fill cell stays in the middle: one cell above the outline bottom");
+        let (outline, _fill, label) = slices[0]; // Strength == StatKind::ALL[0]
 
         const TOP_ROW: u32 = (1 << 0) | (1 << 3);
         const BOTTOM_ROW: u32 = (1 << 6) | (1 << 7);
@@ -2151,22 +2160,17 @@ mod stat_bar_tests {
         // A cell mid-way along each border edge (avoid the chamfered corners).
         let cx = outline.left() + outline.width / 2;
 
-        // Item 1: TOP border raised — its cell lights the TOP dot-row, NOT the
-        // bottom. (Old design lit the bottom dot-row; this is the ~3-dot rise.)
+        // Top border is top-aligned: the outline's top cell lights its TOP
+        // dot-row (the very top of the stat area).
         let top_mask = braille_mask(&buf, cx, outline.top())
             .expect("mid top-border cell must be a painted braille glyph");
         assert!(
             top_mask & TOP_ROW != 0,
-            "top border cell (mask={top_mask:#04x}) must light its TOP dot-row — the bar's top edge raised toward the header"
-        );
-        assert_eq!(
-            top_mask & BOTTOM_ROW, 0,
-            "top border cell (mask={top_mask:#04x}) must NOT light its BOTTOM dot-row — that is the old low-hug position"
+            "top border cell (mask={top_mask:#04x}) must light its TOP dot-row — the box is top-aligned"
         );
 
-        // Item 5: BOTTOM border dropped to the bottom dot-row of the bottom
-        // cell (bits 6/7), NOT the top — so it sits directly against the label
-        // cell below with no empty dot-gap.
+        // Bottom border is snug to the label: the outline's bottom cell lights
+        // its BOTTOM dot-row, immediately above the label cell.
         let bottom_cell_y = outline.bottom() - 1;
         let bottom_mask = braille_mask(&buf, cx, bottom_cell_y)
             .expect("mid bottom-border cell must be a painted braille glyph");
@@ -2174,17 +2178,20 @@ mod stat_bar_tests {
             bottom_mask & BOTTOM_ROW != 0,
             "bottom border cell (mask={bottom_mask:#04x}) must light its BOTTOM dot-row — snug against the label below"
         );
+
+        // The bar box top sits on the same row as the details-panel border top.
         assert_eq!(
-            bottom_mask & TOP_ROW, 0,
-            "bottom border cell (mask={bottom_mask:#04x}) must NOT light its TOP dot-row — that is the old floating-gap look"
+            outline.top(),
+            l.exhaustion.y,
+            "the stat-bar box top must be level with the details-panel border top"
         );
 
-        // The label cell sits immediately below that bottom-border cell — no
-        // blank spacer cell between the bar box and its label.
+        // The label cell sits immediately below the outline — no gap between the
+        // bar box and its text.
         assert_eq!(
             label.y,
-            bottom_cell_y + 1,
-            "label cell must be directly below the outline's bottom-border cell (snug, no spacer)"
+            outline.bottom(),
+            "label cell must be directly below the outline (no gap between the box and its text)"
         );
     }
 
@@ -2517,7 +2524,7 @@ mod exhaustion_render_tests {
     use super::*;
     use crate::creatures::Creature;
     use crate::exhaustion::Exhaustion;
-    use crate::scenes::test_util::{has_non_space, key_event, render_to_buffer};
+    use crate::scenes::test_util::{key_event, render_to_buffer};
     use crossterm::event::KeyCode;
     use engine_core::scene::EngineCtx;
 
@@ -2580,28 +2587,34 @@ mod exhaustion_render_tests {
     }
 
     /// During an active slide (at trigger and at partial progress), the
-    /// exhaustion rect paints zero non-space cells — the display is entirely
-    /// absent, not cross-faded.
+    /// exhaustion status is entirely absent — no cross-fade. Asserted as the
+    /// absence of any status TEXT (ASCII alphanumerics), which tolerates the
+    /// sliding sprite that legitimately crosses this region: the sprite renders
+    /// as braille dots (never ASCII), so an alphanumeric character in the rect
+    /// can only be exhaustion text.
     #[test]
     fn exhaustion_hidden_during_slide() {
         let (w, h) = (80u16, 30u16);
         let area = Rect::new(0, 0, w, h);
         let rect = RosterManager::layout(area).exhaustion;
+        let has_text = |buf: &ratatui::buffer::Buffer| {
+            rect_text(buf, rect).chars().any(|c| c.is_ascii_alphanumeric())
+        };
 
         let mut scene = RosterManager::new();
         scene.handle_input(key_event(KeyCode::Right)); // trigger slide, no update() yet
         let trigger_buf = render_to_buffer(&scene, w, h);
         assert!(
-            !has_non_space(&trigger_buf, rect),
-            "exhaustion rect must paint nothing at the instant a slide triggers"
+            !has_text(&trigger_buf),
+            "exhaustion rect must show no status text at the instant a slide triggers"
         );
 
         let mut ctx = EngineCtx;
         scene.update(&mut ctx, Duration::from_millis(75)); // ~25% of the 300ms SLIDE_DUR
         let mid_buf = render_to_buffer(&scene, w, h);
         assert!(
-            !has_non_space(&mid_buf, rect),
-            "exhaustion rect must remain empty mid-slide"
+            !has_text(&mid_buf),
+            "exhaustion rect must show no status text mid-slide"
         );
     }
 
@@ -3370,6 +3383,40 @@ mod arrow_button_tests {
         }
     }
 
+    /// The flanking arrow buttons render `ARROW_NUDGE_DOWN_DOTS` (2) sub-cell
+    /// dots below their `arrow_rects` rect, via `Button::set_dot_offset_down`.
+    /// A 2-dot shift is finer than one 4-dot cell, so the drawn button spills
+    /// into the cell-row directly below the rect — asserted here as that row
+    /// being painted. The hit-test rect is unchanged (see
+    /// `arrows_raised_to_top_of_dot_row_band`), so navigation is unaffected.
+    #[test]
+    fn arrows_rendered_nudged_down_into_cell_below_rect() {
+        assert_eq!(
+            RosterManager::ARROW_NUDGE_DOWN_DOTS, 2,
+            "arrows must be nudged down exactly 2 dots (finer than a whole cell)"
+        );
+
+        let scene = RosterManager::new();
+        let (w, h) = (80u16, 20u16);
+        let buf = render_to_buffer(&scene, w, h);
+        let area = Rect::new(0, 0, w, h);
+        let (left_rect, right_rect) = RosterManager::arrow_rects(area);
+
+        for (name, rect) in [("left", left_rect), ("right", right_rect)] {
+            let below_y = rect.bottom(); // first cell-row below the arrow rect
+            assert!(
+                below_y < h,
+                "{name} arrow's below-rect row ({below_y}) must be within the frame"
+            );
+            let painted = (rect.left()..rect.right())
+                .any(|x| buf.cell((x, below_y)).unwrap().symbol() != " ");
+            assert!(
+                painted,
+                "{name} arrow must render into the cell-row directly below its rect (y={below_y})"
+            );
+        }
+    }
+
     /// A completed click on the right button drives the SAME `navigate()`
     /// as the right-arrow key (b4-t1): wraps 5 -> 0.
     #[test]
@@ -4039,5 +4086,3 @@ mod selection_tests {
         );
     }
 }
-
-
