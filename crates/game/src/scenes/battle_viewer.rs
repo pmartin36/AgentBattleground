@@ -15,6 +15,7 @@ use engine_core::SceneKey;
 use serde_json::Value as JsonValue;
 
 use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
+use crate::creatures::{AnimationKind, Creature};
 use crate::scene_id::SceneId;
 
 /// Single source of truth for the board's column count. Every downstream
@@ -570,11 +571,6 @@ pub fn sprite_base_dot_rows(camera: &BattleCamera) -> u32 {
     (camera.sprite_scale_dots() * SPRITE_DOT_RATIO).round() as u32
 }
 
-/// Uniform per-frame playback speed for the bundled wizard idle GIF. The
-/// GIF's own per-frame delays are intentionally ignored by `from_gif`; this
-/// constant is the single source of truth for animation speed.
-const WIZARD_FRAME_DUR: Duration = Duration::from_millis(100);
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Playback event data model (b1-t2). Data shape only — not yet wired into
 // `BattleViewer`/`update()`/`render()` (that starts at b2-t1).
@@ -647,8 +643,11 @@ impl Default for BattleViewerTuning {
 #[derive(Inspectable)]
 pub struct BattleViewer {
     elapsed: f32,
+    /// The 8 bundled creatures (`crate::creatures::all()`), index-matched to
+    /// `Piece.index` (b5-t1). Sourced by `piece_sprite` in `render()`'s draw
+    /// loop instead of a single shared sprite.
     #[inspect(hidden)]
-    sprite: AnimatedSprite,
+    creatures: Vec<Creature>,
     /// Owned piece state, seeded once from `pieces()` at construction.
     /// `render()` reads each piece's own `transform`/`color` fields directly
     /// — mutating an entry here changes what the next `render()` draws.
@@ -689,14 +688,9 @@ pub struct BattleViewer {
 
 impl Default for BattleViewer {
     fn default() -> Self {
-        let sprite = AnimatedSprite::from_gif(
-            include_bytes!("assets/wizard.gif"),
-            WIZARD_FRAME_DUR,
-        )
-        .expect("bundled wizard.gif must decode");
         Self {
             elapsed: 0.0,
-            sprite,
+            creatures: crate::creatures::all(),
             pieces: pieces(),
             // Hand-authored demo sequence (b3-t1); driven each frame by
             // `update()`/`drive_events()`.
@@ -714,6 +708,13 @@ impl BattleViewer {
     /// and `Scene::enter()` so the two can never drift apart (b5-t1).
     fn default_camera_mode() -> BattleCamera {
         BattleCamera::sideline_preset()
+    }
+
+    /// Single source of truth for `index -> idle AnimatedSprite` (b5-t1).
+    /// Used by `render()`'s per-piece draw loop instead of a single shared
+    /// sprite.
+    fn piece_sprite(&self, index: usize) -> Option<&AnimatedSprite> {
+        self.creatures.get(index)?.animation(AnimationKind::Idle)
     }
 
     /// Drives every event whose window has begun and is not yet settled,
@@ -827,15 +828,18 @@ impl Scene for BattleViewer {
             .pieces
             .iter()
             .filter(|p| p.alive)
-            .map(|p| SpriteDraw {
-                content: SpriteContent::Animated {
-                    sprite: &self.sprite,
-                    elapsed: piece_elapsed(elapsed, p.index),
-                    transform: &p.transform,
-                    base_dot_rows,
-                },
-                translate: p.transform.translate,
-                tint: Some(p.color),
+            .filter_map(|p| {
+                let sprite = self.piece_sprite(p.index)?;
+                Some(SpriteDraw {
+                    content: SpriteContent::Animated {
+                        sprite,
+                        elapsed: piece_elapsed(elapsed, p.index),
+                        transform: &p.transform,
+                        base_dot_rows,
+                    },
+                    translate: p.transform.translate,
+                    tint: Some(p.color),
+                })
             })
             .collect();
 
@@ -2470,19 +2474,32 @@ mod battle_viewer_scene_wiring_tests {
 
     /// DELIVERABLE (2)+(3): sprite glyph cells are present in both the top
     /// half (Team A) and bottom half (Team B) of the board, and the two
-    /// halves' sets of glyph colors are disjoint (aside from pure black),
-    /// proving the two teams render with genuinely distinct
-    /// (multiply-blend-tinted) palettes rather than the same untinted sprite
-    /// in both places. Does not assert exact RGB values, since multiply-blend
-    /// against the real (non-uniform) wizard sprite doesn't average to a
-    /// single flat color the way a full color-replace would have. Pure black
-    /// `(0,0,0)` is excluded from the disjointness check: `mul(src, c) =
-    /// floor(src*c/255)` (composite.rs) means a black outline/shadow source
-    /// pixel stays `(0,0,0)` under ANY tint, so it is legitimately shared by
-    /// both teams, not evidence of untinted bleed.
+    /// halves' sets of glyph colors are disjoint aside from near-black
+    /// outline/shadow pixels, proving the two teams render with genuinely
+    /// distinct (multiply-blend-tinted) palettes rather than the same
+    /// untinted sprite in both places. Does not assert exact RGB values,
+    /// since multiply-blend against the real (multi-hued, non-uniform)
+    /// creature art doesn't average to a single flat color the way a full
+    /// color-replace would have.
+    ///
+    /// Near-black source pixels are excluded from the disjointness check:
+    /// `mul(src, c) = floor(src*c/255)` (composite.rs) means for a small
+    /// source value `src`, the output is confined to a narrow band
+    /// (`src*176/255 ..= src`, since both tints' channels fall in
+    /// `176..=255`) regardless of which team's tint is applied — e.g.
+    /// `src=9` maps to `6..=9` under either tint. Such near-black
+    /// outline/shadow pixels are legitimately shared by both teams by
+    /// construction (tint-invariant within rounding), not evidence of
+    /// untinted bleed, so they're excluded by a luma-ish max-channel
+    /// threshold rather than only the exact `(0,0,0)` case.
     #[test]
     fn team_tinted_cells_present_and_banded_by_team() {
         use std::collections::HashSet;
+
+        /// Pixels this dark collapse to near-identical output regardless of
+        /// tint (see doc comment above) and are excluded from the
+        /// disjointness check as tint-invariant, not untinted bleed.
+        const NEAR_BLACK_MAX_CHANNEL: u8 = 24;
 
         let scene = BattleViewer::default();
         let area = Rect::new(0, 0, 100, 50);
@@ -2506,8 +2523,8 @@ mod battle_viewer_scene_wiring_tests {
                     continue; // board grid-line glyph, not piece tint
                 }
                 if let Color::Rgb(r, g, b) = cell.fg {
-                    if (r, g, b) == (0, 0, 0) {
-                        continue; // tint-invariant black outline/shadow, shared by design
+                    if r.max(g).max(b) < NEAR_BLACK_MAX_CHANNEL {
+                        continue; // tint-invariant near-black outline/shadow, shared by design
                     }
                     if y < mid_y {
                         top_colors.insert((r, g, b));
@@ -2522,7 +2539,8 @@ mod battle_viewer_scene_wiring_tests {
         assert!(!bottom_colors.is_empty(), "expected some Team B glyph color in the bottom half");
         assert!(
             top_colors.is_disjoint(&bottom_colors),
-            "top-half (Team A) and bottom-half (Team B) glyph colors must not overlap: \
+            "top-half (Team A) and bottom-half (Team B) glyph colors must not overlap \
+             (aside from near-black outline/shadow pixels, already excluded): \
              top={top_colors:?} bottom={bottom_colors:?}"
         );
     }
@@ -2757,44 +2775,68 @@ mod battle_viewer_scene_wiring_tests {
         false
     }
 
+    /// Whole-board-rect equality check: `true` iff every cell's symbol AND fg
+    /// color match between the two buffers. Used to compare a piece's
+    /// `alive == false` render against a ground-truth render where that piece
+    /// is entirely absent from `pieces` (not just flagged dead) — a strictly
+    /// stronger, geometry-agnostic proof of "contributes NO glyph" than a
+    /// spatial probe window, which (per b5-t1's real bundled creature art)
+    /// can false-positive when a neighboring piece's own, unrelated sprite
+    /// footprint happens to reach into the probed box.
+    fn boards_pixel_identical(a: &Buffer, b: &Buffer, geom: &BoardGeometry) -> bool {
+        for y in geom.board_rect.y..geom.board_rect.bottom() {
+            for x in geom.board_rect.x..geom.board_rect.right() {
+                let ca = a.cell((x, y)).unwrap();
+                let cb = b.cell((x, y)).unwrap();
+                if ca.symbol() != cb.symbol() || ca.fg != cb.fg {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// b2-t4 DELIVERABLE: a piece with `alive == false` contributes NO glyph
-    /// to the composited render, while a still-alive, spatially-disjoint
-    /// sibling's glyphs remain present. `transform` is left intact on the
-    /// dead piece (not driven through a real `Die` event) so the ONLY reason
-    /// it can vanish is `render()`'s new `alive` filter, not a collapsed
+    /// to the composited render — its render is pixel-identical to a scene
+    /// where that piece is removed from `pieces` entirely — while a still-
+    /// alive sibling's glyphs remain present. `transform` is left intact on
+    /// the dead piece (not driven through a real `Die` event) so the ONLY
+    /// reason it can vanish is `render()`'s `alive` filter, not a collapsed
     /// zero scale.
     ///
-    /// Targets the bench pieces (indices 3/7), not the active-row pieces
-    /// (0..3/4..7): under b3-t1's Sideline camera, same-row active pieces are
-    /// deliberately clustered close together on screen (spec 39 Decision 1 —
-    /// team axis, not column, drives screen-x spread), so an active-row piece's
-    /// glyph-presence probe window would also catch its still-alive, same-row
-    /// teammates and produce a false positive unrelated to the `alive` filter
-    /// under test. The bench pieces sit on their own dedicated rows, screen-
-    /// disjoint from every other piece under all three camera presets, making
-    /// them the piece pair whose isolation is guaranteed by the layout itself
-    /// rather than by camera-specific screen math.
+    /// Compares against "piece removed from the list" rather than probing a
+    /// fixed-size window around the dead piece's own center: with real
+    /// bundled creature art (b5-t1), a neighboring piece's sprite can be wide
+    /// enough that its footprint reaches into a window centered on an
+    /// adjacent bench piece, producing a false "glyph still present" positive
+    /// unrelated to the `alive` filter under test. Diffing the FULL board
+    /// against a ground-truth render with the piece entirely absent isolates
+    /// exactly and only that piece's own contribution, regardless of
+    /// neighboring sprites' size.
     #[test]
     fn render_excludes_dead_piece_keeps_alive_sibling() {
         let mut scene = BattleViewer::default();
         let area = Rect::new(0, 0, 100, 50);
         let geom = board_geometry(area, BattleCamera::sideline_preset(), BattleViewerTuning::default());
 
-        let target_center = terminal_center_cell(scene.pieces[3].transform.translate, &geom);
-        let sibling_center = terminal_center_cell(scene.pieces[7].transform.translate, &geom);
         assert_eq!(scene.pieces[3].team, Team::A, "test setup: target must be Team A");
         assert_eq!(scene.pieces[7].team, Team::B, "test setup: sibling must be Team B");
+        let sibling_center = terminal_center_cell(scene.pieces[7].transform.translate, &geom);
+
+        let mut scene_removed = BattleViewer::default();
+        scene_removed.pieces.remove(3);
+        let buf_removed = render_to_buffer(&scene_removed, 100, 50);
 
         scene.pieces[3].alive = false;
-
-        let buf = render_to_buffer(&scene, 100, 50);
+        let buf_dead = render_to_buffer(&scene, 100, 50);
 
         assert!(
-            !has_piece_glyph_near(&buf, &geom, target_center),
-            "no piece glyph should remain near a dead piece's center {target_center:?}"
+            boards_pixel_identical(&buf_dead, &buf_removed, &geom),
+            "a dead piece (alive == false) must render pixel-identical to that piece being \
+             entirely absent from `pieces` — no residual glyph anywhere on the board"
         );
         assert!(
-            has_piece_glyph_near(&buf, &geom, sibling_center),
+            has_piece_glyph_near(&buf_dead, &geom, sibling_center),
             "a still-alive sibling's glyphs must remain present near {sibling_center:?}"
         );
     }
@@ -2805,29 +2847,34 @@ mod battle_viewer_scene_wiring_tests {
     /// change — proving exclusion is a pure per-frame filter on `alive`, not
     /// a one-way/sticky removal.
     ///
-    /// Targets bench piece index 3 — see `render_excludes_dead_piece_keeps_alive_sibling`
-    /// for why an active-row piece's glyph-presence window is unreliable under
-    /// b3-t1's Sideline camera (same-row teammates cluster close together).
+    /// Setup precondition ("dead piece contributes nothing") and the revive
+    /// assertion both use the pixel-identical-to-piece-removed comparison —
+    /// see `render_excludes_dead_piece_keeps_alive_sibling` for why a
+    /// spatial probe window is unreliable against real bundled creature art
+    /// (a neighboring piece's wider sprite can bleed into the window).
     #[test]
     fn render_reincludes_piece_when_alive_flipped_back_true() {
         let mut scene = BattleViewer::default();
         let area = Rect::new(0, 0, 100, 50);
         let geom = board_geometry(area, BattleCamera::sideline_preset(), BattleViewerTuning::default());
 
-        let target_center = terminal_center_cell(scene.pieces[3].transform.translate, &geom);
+        let mut scene_removed = BattleViewer::default();
+        scene_removed.pieces.remove(3);
+        let buf_removed = render_to_buffer(&scene_removed, 100, 50);
 
         scene.pieces[3].alive = false;
         let buf_dead = render_to_buffer(&scene, 100, 50);
         assert!(
-            !has_piece_glyph_near(&buf_dead, &geom, target_center),
-            "test setup: piece must be excluded while alive == false"
+            boards_pixel_identical(&buf_dead, &buf_removed, &geom),
+            "test setup: piece must render pixel-identical to piece-removed while alive == false"
         );
 
         scene.pieces[3].alive = true;
         let buf_revived = render_to_buffer(&scene, 100, 50);
         assert!(
-            has_piece_glyph_near(&buf_revived, &geom, target_center),
-            "piece glyph must reappear near {target_center:?} once alive is flipped back to true"
+            !boards_pixel_identical(&buf_revived, &buf_removed, &geom),
+            "piece glyph must reappear (render must diverge from the piece-removed ground truth) \
+             once alive is flipped back to true"
         );
     }
 
@@ -3071,6 +3118,93 @@ mod handle_input_camera_tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Tests: BattleViewer sources 8 distinct bundled creatures (b5-t1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod creature_sourcing_tests {
+    use super::*;
+
+    /// DELIVERABLE (primary): `BattleViewer::default().creatures` is exactly
+    /// `crate::creatures::all()`, in order — proves each `Piece.index` maps
+    /// 1:1 to a distinct bundled creature, not one shared sprite.
+    #[test]
+    fn default_creatures_match_creatures_all_in_order() {
+        let scene = BattleViewer::default();
+        let expected: Vec<String> = crate::creatures::all()
+            .iter()
+            .map(|c| c.name().to_string())
+            .collect();
+        let actual: Vec<String> = scene.creatures.iter().map(|c| c.name().to_string()).collect();
+
+        assert_eq!(
+            actual, expected,
+            "BattleViewer::default().creatures must equal crate::creatures::all(), in order"
+        );
+    }
+
+    /// DELIVERABLE: `piece_sprite(p.index)` resolves to `Some` (the piece's
+    /// own idle animation) for every piece the scene starts with — the
+    /// per-piece draw loop must have a distinct sprite source for each of
+    /// the 8 seeded pieces, not a shared fallback.
+    #[test]
+    fn piece_sprite_is_some_for_every_seeded_piece_index() {
+        let scene = BattleViewer::default();
+
+        for p in &scene.pieces {
+            assert!(
+                scene.piece_sprite(p.index).is_some(),
+                "piece_sprite({}) must be Some for every seeded piece index",
+                p.index
+            );
+        }
+    }
+
+    /// DELIVERABLE (render-seam distinctness): two different piece indices
+    /// resolve to two different creatures' idle sprites (by name lookup
+    /// through `creatures::all()`), not the same shared sprite instance.
+    #[test]
+    fn piece_sprite_differs_by_index_across_distinct_creatures() {
+        let scene = BattleViewer::default();
+
+        let all = crate::creatures::all();
+        assert_ne!(
+            all[0].name(),
+            all[1].name(),
+            "sanity: creatures::all()[0] and [1] must be distinct creatures"
+        );
+
+        let sprite0 = scene
+            .piece_sprite(0)
+            .expect("piece_sprite(0) must be Some");
+        let sprite1 = scene
+            .piece_sprite(1)
+            .expect("piece_sprite(1) must be Some");
+
+        assert_ne!(
+            sprite0.frame_count(),
+            0,
+            "sanity: index-0 sprite must have at least one frame"
+        );
+        assert_ne!(
+            sprite1.frame_count(),
+            0,
+            "sanity: index-1 sprite must have at least one frame"
+        );
+
+        // The two pieces' underlying creatures must be genuinely distinct
+        // (per `scene.creatures[0].name() != scene.creatures[1].name()`),
+        // proving `piece_sprite` sources per-index art rather than one
+        // shared sprite repeated across every piece.
+        assert_ne!(
+            scene.creatures[0].name(),
+            scene.creatures[1].name(),
+            "piece_sprite(0) and piece_sprite(1) must source from distinct creatures"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tests: `#[derive(Inspectable)]` on Piece/Team/BattleViewer (b5-t1)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -3229,16 +3363,18 @@ mod inspectable_tests {
 
     /// DELIVERABLE: `BattleViewer::schema()` reports `elapsed` as an
     /// editable `Float` and `pieces` as a `List` of `Piece`-shaped elements;
-    /// the `#[inspect(hidden)]` `sprite` field is absent entirely.
+    /// the `#[inspect(hidden)]` `creatures` field (b5-t1's per-piece
+    /// creature catalog, replacing the old shared `sprite`) is absent
+    /// entirely.
     #[test]
-    fn battle_viewer_schema_reports_editable_elapsed_and_pieces_list_hides_sprite() {
+    fn battle_viewer_schema_reports_editable_elapsed_and_pieces_list_hides_creatures() {
         let schema = BattleViewer::schema();
         assert_eq!(schema.tag, FieldTag::Struct);
 
         let names: Vec<&str> = schema.children.iter().map(|c| c.name.as_str()).collect();
         assert!(
-            !names.contains(&"sprite"),
-            "hidden sprite field must be absent from schema: {names:?}"
+            !names.contains(&"creatures"),
+            "hidden creatures field must be absent from schema: {names:?}"
         );
 
         let elapsed = field(&schema, "elapsed");
@@ -3257,16 +3393,16 @@ mod inspectable_tests {
 
     /// DELIVERABLE: the 8-piece layout round-trips through `snapshot()` as a
     /// `pieces` array of exactly 8 Piece-shaped objects, and the hidden
-    /// `sprite` field never appears in the snapshot either.
+    /// `creatures` field (b5-t1) never appears in the snapshot either.
     #[test]
-    fn battle_viewer_default_snapshot_has_eight_piece_shaped_elements_and_hides_sprite() {
+    fn battle_viewer_default_snapshot_has_eight_piece_shaped_elements_and_hides_creatures() {
         let scene = BattleViewer::default();
         let snap = scene.snapshot();
         let obj = snap.as_object().expect("BattleViewer snapshot must be a JSON object");
 
         assert!(
-            !obj.contains_key("sprite"),
-            "hidden sprite field must be absent from snapshot"
+            !obj.contains_key("creatures"),
+            "hidden creatures field must be absent from snapshot"
         );
 
         let pieces = obj
