@@ -102,10 +102,12 @@ fn luma(r: u8, g: u8, b: u8) -> u8 {
 ///   if no `shape` dot is `Lit` → `Cell::Transparent`; otherwise
 ///   `avg = Σluma(shape-visible) / count` (integer); a `shape`-visible dot
 ///   with `luma >= avg` sets its bit; `ch = U+2800 + mask`.
-/// - `color` never influences the mask. Its only role is supplying the RGB
-///   averaged into the output: `Cell::Glyph.color` = integer mean RGB over
+/// - `color` never influences the mask. Its only role is supplying the RGBA
+///   averaged into the output: `Cell::Glyph.color` = integer mean RGBA
+///   (including alpha, so a uniformly-translucent `color` input survives
+///   into the output `Cell` instead of being forced opaque — b4-t2) over
 ///   `color[k]` for every `k` where `shape[k]` is `Lit` (reading `color[k]`'s
-///   RGB when `color[k]` is itself `Lit`; a `color[k]` that is `Transparent`
+///   RGBA when `color[k]` is itself `Lit`; a `color[k]` that is `Transparent`
 ///   at a shape-lit position — only reachable under a topology mismatch — is
 ///   simply excluded from the mean).
 fn cell_from_dots_tinted(shape: &[Dot; 8], color: &[Dot; 8]) -> crate::grid::Cell {
@@ -157,10 +159,10 @@ fn cell_from_dots_tinted(shape: &[Dot; 8], color: &[Dot; 8]) -> crate::grid::Cel
         // `color` has no Lit dot at any shape-lit position.
         return Cell::Transparent;
     }
-    let (r, g, b) = visible_colors.iter().fold((0u32, 0u32, 0u32), |(ar, ag, ab), c| {
-        (ar + c.r as u32, ag + c.g as u32, ab + c.b as u32)
+    let (r, g, b, a) = visible_colors.iter().fold((0u32, 0u32, 0u32, 0u32), |(ar, ag, ab, aa), c| {
+        (ar + c.r as u32, ag + c.g as u32, ab + c.b as u32, aa + c.a as u32)
     });
-    let color = Rgba::rgb((r / n) as u8, (g / n) as u8, (b / n) as u8);
+    let color = Rgba::new((r / n) as u8, (g / n) as u8, (b / n) as u8, (a / n) as u8);
 
     Cell::Glyph { ch, color }
 }

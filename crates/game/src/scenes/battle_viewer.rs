@@ -45,6 +45,10 @@ pub struct BoardGeometry {
     pub board_rect: Rect,
     /// Camera derived from this geometry's dot scale.
     pub camera: BattleCamera,
+    /// Live tuning this geometry was built from (b4-t2: threaded to
+    /// `BattleCamera::grid_line_color` at its sole caller, `draw_board_lines`,
+    /// without churning `draw_board_lines`'s own signature).
+    pub tuning: BattleViewerTuning,
 }
 
 /// Derive the board geometry for a given render `area` under the given
@@ -74,26 +78,35 @@ pub fn board_geometry(area: Rect, mode: BattleCamera, tuning: BattleViewerTuning
         cell_height_rows,
         board_rect,
         camera,
+        tuning,
     }
 }
+
+/// Sample density for `rasterize_grid_line`, in samples per world unit along
+/// a line's length. `4` (spacing `0.25`) lands a sample exactly on every
+/// non-Top-Down preset's half-integer `camera_depth` anchor (Over-shoulder
+/// `6.5`, Sideline `3.5`), so the single `taper_factor` kink at
+/// `camera_depth` is reproduced exactly rather than approximated (b4-t1).
+const GRID_LINE_SAMPLES_PER_UNIT: usize = 4;
 
 /// Draws thin braille grid lines for a `BOARD_COLS x BOARD_ROWS` grid of
 /// `geom.cell_width_cols` x `geom.cell_height_rows`-sized cells, positioned at
 /// `geom.board_rect`. Uses ONLY the fields of the `BoardGeometry` passed in —
 /// no independent re-derivation of cell size/position. Builds a `DotBuffer`
 /// sized `board_rect.width*2 x board_rect.height*4` (the same dot-sizing
-/// convention the piece composite uses), lights one dot-column per vertical
-/// boundary (dx=0 within its terminal cell) and one dot-row per horizontal
-/// boundary (dy=0 within its terminal cell), converts via `dots_to_grid`, and
-/// blits via `draw_grid` — junctions emerge purely as the bitwise union of
-/// overlapping lit dots, no special-cased glyph table. Point-7 fencepost: the
-/// outermost right/bottom boundary would land one dot past the last valid dot
-/// index, so it is clamped to the last valid dot (one dot short) instead.
+/// convention the piece composite uses). Each grid boundary line is defined
+/// by its world-space endpoints, sampled at `GRID_LINE_SAMPLES_PER_UNIT`
+/// samples per world unit, projected through `geom.camera.project()` — the
+/// same projection pieces are placed with (`engine_render::transform::place`)
+/// — and rasterized as connected dot segments (b4-t1: grid lines now track
+/// the active camera instead of a fixed flat index). Converts via
+/// `dots_to_grid` and blits via `draw_grid` — junctions emerge purely as the
+/// bitwise union of overlapping lit dots, no special-cased glyph table.
+/// Point-7 fencepost: a boundary that projects one dot past the last valid
+/// dot index is clamped to the last valid dot (one dot short) instead.
 /// Cell interiors are left `Transparent` (lines only). Clips instead of
 /// panicking on an undersized buffer.
 pub fn draw_board_lines(buf: &mut Buffer, geom: &BoardGeometry) {
-    let cw = geom.cell_width_cols;
-    let chh = geom.cell_height_rows;
     let buf_cols = geom.board_rect.width as usize * 2;
     let buf_rows = geom.board_rect.height as usize * 4;
     if buf_cols == 0 || buf_rows == 0 {
@@ -101,24 +114,107 @@ pub fn draw_board_lines(buf: &mut Buffer, geom: &BoardGeometry) {
     }
 
     let mut dots = DotBuffer::new(buf_cols, buf_rows);
-    let line_color = geom.camera.grid_line_color();
+    let line_color = geom.camera.grid_line_color(&geom.tuning);
 
+    let vertical_samples = GRID_LINE_SAMPLES_PER_UNIT * BOARD_ROWS as usize + 1;
     for i in 0..=BOARD_COLS {
-        let dot_x = ((i * cw) as usize * 2).min(buf_cols - 1);
-        for y in 0..buf_rows {
-            dots.set(dot_x, y, Dot::Lit(line_color));
-        }
+        let x = i as f32;
+        rasterize_grid_line(
+            &mut dots,
+            &geom.camera,
+            WorldPos::new(x, 0.0),
+            WorldPos::new(x, BOARD_ROWS as f32),
+            vertical_samples,
+            line_color,
+        );
     }
 
+    let horizontal_samples = GRID_LINE_SAMPLES_PER_UNIT * BOARD_COLS as usize + 1;
     for j in 0..=BOARD_ROWS {
-        let dot_y = ((j * chh) as usize * 4).min(buf_rows - 1);
-        for x in 0..buf_cols {
-            dots.set(x, dot_y, Dot::Lit(line_color));
-        }
+        let y = j as f32;
+        rasterize_grid_line(
+            &mut dots,
+            &geom.camera,
+            WorldPos::new(0.0, y),
+            WorldPos::new(BOARD_COLS as f32, y),
+            horizontal_samples,
+            line_color,
+        );
     }
 
     let grid = dots_to_grid(&dots);
     draw_grid(buf, geom.board_rect, &grid);
+}
+
+/// Samples the world-space segment `[start, end]` at `samples` evenly-spaced
+/// points (endpoints inclusive), projects each through `camera` (the same
+/// projection `engine_render::transform::place` uses for pieces), clamps
+/// into `[0, dots.cols()-1] x [0, dots.rows()-1]` (point-7 fencepost — see
+/// `draw_board_lines` doc), and plots a connected dot segment between each
+/// pair of consecutive clamped points via `plot_dot_segment` (b4-t1).
+/// `buf_cols`/`buf_rows` are read off `dots` itself (`DotBuffer::cols`/
+/// `rows`) rather than taken as separate parameters — they are always
+/// identical to `dots`' own size at every call site, so a redundant
+/// parameter pair was dropped (keeps this under clippy's argument-count
+/// lint without changing behavior).
+fn rasterize_grid_line<C: Camera>(
+    dots: &mut DotBuffer,
+    camera: &C,
+    start: WorldPos,
+    end: WorldPos,
+    samples: usize,
+    color: Rgba,
+) {
+    let samples = samples.max(2);
+    let max_x = dots.cols() as i32 - 1;
+    let max_y = dots.rows() as i32 - 1;
+
+    let mut prev: Option<(usize, usize)> = None;
+    for s in 0..samples {
+        let t = s as f32 / (samples - 1) as f32;
+        let pos = WorldPos::new(
+            start.x + (end.x - start.x) * t,
+            start.y + (end.y - start.y) * t,
+        );
+        let (px, py) = camera.project(pos);
+        let cx = px.clamp(0, max_x) as usize;
+        let cy = py.clamp(0, max_y) as usize;
+
+        match prev {
+            Some((x0, y0)) => plot_dot_segment(dots, x0, y0, cx, cy, color),
+            None => dots.set(cx, cy, Dot::Lit(color)),
+        }
+        prev = Some((cx, cy));
+    }
+}
+
+/// Integer Bresenham: sets `Dot::Lit(color)` on every dot from `(x0,y0)` to
+/// `(x1,y1)` inclusive. Callers pre-clamp both endpoints in-bounds, so every
+/// interpolated dot stays in-bounds (b4-t1).
+fn plot_dot_segment(dots: &mut DotBuffer, x0: usize, y0: usize, x1: usize, y1: usize, color: Rgba) {
+    let (mut x, mut y) = (x0 as i32, y0 as i32);
+    let (x1, y1) = (x1 as i32, y1 as i32);
+    let dx = (x1 - x).abs();
+    let sx: i32 = if x < x1 { 1 } else { -1 };
+    let dy = -(y1 - y).abs();
+    let sy: i32 = if y < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+
+    loop {
+        dots.set(x as usize, y as usize, Dot::Lit(color));
+        if x == x1 && y == y1 {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y += sy;
+        }
+    }
 }
 
 /// Wraps the three concrete `engine_render::camera::Camera` views usable by
@@ -162,15 +258,17 @@ impl BattleCamera {
         }
     }
 
-    /// Grid-line prominence for `draw_board_lines`: full-strength
-    /// `GRID_LINE_COLOR` for `TopDown`, dimmed `GRID_LINE_COLOR_DIM` for
-    /// `Sideline`/`OverShoulder` (b4-t1). Exhaustive match — no wildcard, so a
-    /// future variant is forced to choose a prominence.
-    pub fn grid_line_color(&self) -> Rgba {
+    /// Grid-line prominence for `draw_board_lines`: full-strength, opaque
+    /// `GRID_LINE_COLOR` for `TopDown`; for `Sideline`/`OverShoulder` a
+    /// translucent `Rgba::new(0xFF,0xFF,0xFF,tuning.grid_dim_alpha)` that
+    /// blends via the real alpha-blit path (b1-t3) rather than a flat dark
+    /// constant. Exhaustive match — no wildcard, so a future variant is
+    /// forced to choose a prominence.
+    pub fn grid_line_color(&self, tuning: &BattleViewerTuning) -> Rgba {
         match self {
             BattleCamera::TopDown(_) => GRID_LINE_COLOR,
-            BattleCamera::Sideline(_) => GRID_LINE_COLOR_DIM,
-            BattleCamera::OverShoulder(_) => GRID_LINE_COLOR_DIM,
+            BattleCamera::Sideline(_) => Rgba::new(0xFF, 0xFF, 0xFF, tuning.grid_dim_alpha),
+            BattleCamera::OverShoulder(_) => Rgba::new(0xFF, 0xFF, 0xFF, tuning.grid_dim_alpha),
         }
     }
 
@@ -441,11 +539,6 @@ pub const TEAM_B_COLOR: Rgba = Rgba::rgb(0xb0, 0xff, 0xe0);
 /// truth referenced by both the drawing code and every test needing the
 /// exact value — never re-hardcoded as a bare `0x55` literal elsewhere.
 pub const GRID_LINE_COLOR: Rgba = Rgba::rgb(0x55, 0x55, 0x55);
-
-/// Dimmed grid-line color for camera modes where board chrome should read as
-/// faint (Sideline/OverShoulder). Strictly darker (each channel) than
-/// `GRID_LINE_COLOR` (0x55) while remaining non-zero/visible — ~half strength.
-pub const GRID_LINE_COLOR_DIM: Rgba = Rgba::rgb(0x2a, 0x2a, 0x2a);
 
 impl Team {
     /// This team's tint color: A -> `TEAM_A_COLOR`, B -> `TEAM_B_COLOR`.
@@ -1064,6 +1157,7 @@ mod draw_board_lines_tests {
             cell_height_rows: 2,
             board_rect: Rect::new(2, 1, 28, 14),
             camera: top_down_at(8.0),
+            tuning: BattleViewerTuning::default(),
         }
     }
 
@@ -1079,14 +1173,16 @@ mod draw_board_lines_tests {
         Color::Rgb(GRID_LINE_COLOR.r, GRID_LINE_COLOR.g, GRID_LINE_COLOR.b)
     }
 
-    /// GRID_LINE_COLOR_DIM converted to the ratatui fg representation
-    /// `draw_grid` writes it as — never a duplicated literal (b4-t1).
+    /// Target dim grid-line fg (b4-t2): `Rgba::new(0xFF,0xFF,0xFF,
+    /// tuning.grid_dim_alpha)` alpha-composited (`Rgba::over`, b1-t1) over
+    /// opaque black — the fallback `draw_grid` (b1-t3) treats `Color::Reset`
+    /// dest as. Never a hardcoded RGB triple and never `GRID_LINE_COLOR_DIM`
+    /// (removed by b4-t2 — a translucent alpha blend replaces the flat dark
+    /// constant).
     fn grid_fg_dim() -> Color {
-        Color::Rgb(
-            GRID_LINE_COLOR_DIM.r,
-            GRID_LINE_COLOR_DIM.g,
-            GRID_LINE_COLOR_DIM.b,
-        )
+        let blended = Rgba::new(0xFF, 0xFF, 0xFF, BattleViewerTuning::default().grid_dim_alpha)
+            .over(Rgba::rgb(0, 0, 0));
+        Color::Rgb(blended.r, blended.g, blended.b)
     }
 
     #[test]
@@ -1202,12 +1298,16 @@ mod draw_board_lines_tests {
     /// Two different BoardGeometry values (from two different areas) must
     /// produce lines at their own, different absolute positions — proves
     /// draw_board_lines consumes the geometry rather than a hardcoded size.
+    /// Uses `top_down_preset()` (not Sideline/OverShoulder) so corner
+    /// positions stay the predictable flat-math positions regardless of
+    /// camera-projection changes (b4-t1) — this test's intent is
+    /// geometry-scaling, not camera-specific projection.
     #[test]
     fn two_geometries_scale() {
         let area_a = Rect::new(0, 0, 128, 64);
         let area_b = Rect::new(5, 5, 200, 100);
-        let ga = board_geometry(area_a, BattleCamera::sideline_preset(), BattleViewerTuning::default());
-        let gb = board_geometry(area_b, BattleCamera::sideline_preset(), BattleViewerTuning::default());
+        let ga = board_geometry(area_a, BattleCamera::top_down_preset(), BattleViewerTuning::default());
+        let gb = board_geometry(area_b, BattleCamera::top_down_preset(), BattleViewerTuning::default());
         assert_ne!(ga.board_rect, gb.board_rect);
 
         let mut buf_a = Buffer::empty(area_a);
@@ -1239,59 +1339,111 @@ mod draw_board_lines_tests {
         );
     }
 
-    /// `GRID_LINE_COLOR_DIM` must be strictly darker (every channel) than
-    /// `GRID_LINE_COLOR` and non-zero — dimmed but still visible (b4-t1).
-    #[test]
-    fn grid_line_color_dim_is_darker_than_full() {
-        // `black_box` hides the fact both sides are `const` from clippy's
-        // constant-comparison lints (assertions_on_constants /
-        // absurd_extreme_comparisons) — the values themselves are still real.
-        let dim = std::hint::black_box(GRID_LINE_COLOR_DIM);
-        let full = std::hint::black_box(GRID_LINE_COLOR);
-        assert!(dim.r < full.r);
-        assert!(dim.g < full.g);
-        assert!(dim.b < full.b);
-        assert!(dim.r > 0 || dim.g > 0 || dim.b > 0);
-    }
-
-    /// `BattleCamera::grid_line_color` per-variant mapping: full strength for
-    /// `TopDown`, dimmed for `Sideline`/`OverShoulder` (b4-t1).
+    /// `BattleCamera::grid_line_color` per-variant mapping (b4-t2): full
+    /// strength, opaque `GRID_LINE_COLOR` for `TopDown`; a translucent
+    /// `Rgba::new(0xFF,0xFF,0xFF,tuning.grid_dim_alpha)` — sourced from the
+    /// live `tuning`, not a hardcoded constant — for `Sideline`/`OverShoulder`.
     #[test]
     fn battle_camera_grid_line_color_per_variant() {
+        let tuning = BattleViewerTuning::default();
+        let expected_dim = Rgba::new(0xFF, 0xFF, 0xFF, tuning.grid_dim_alpha);
+
+        assert_eq!(top_down_at(8.0).grid_line_color(&tuning), GRID_LINE_COLOR);
+        assert_eq!(sideline_at(8.0).grid_line_color(&tuning), expected_dim);
+        assert_eq!(over_shoulder_at(8.0).grid_line_color(&tuning), expected_dim);
+    }
+
+    /// The dim color must be sourced from `tuning.grid_dim_alpha` live, not a
+    /// hardcoded constant (b4-t2): a non-default alpha changes the returned
+    /// dim color's alpha channel accordingly, for both dim variants.
+    #[test]
+    fn grid_line_color_dim_tracks_tuning_alpha() {
+        let default_tuning = BattleViewerTuning::default();
+        let custom_tuning = BattleViewerTuning {
+            grid_dim_alpha: 0x10,
+            ..default_tuning
+        };
+        assert_ne!(
+            custom_tuning.grid_dim_alpha, default_tuning.grid_dim_alpha,
+            "test setup: custom alpha must differ from the default"
+        );
+
         assert_eq!(
-            top_down_at(8.0).grid_line_color(),
-            GRID_LINE_COLOR
+            sideline_at(8.0).grid_line_color(&custom_tuning),
+            Rgba::new(0xFF, 0xFF, 0xFF, custom_tuning.grid_dim_alpha),
+            "Sideline dim color must track a non-default tuning.grid_dim_alpha"
         );
         assert_eq!(
-            sideline_at(8.0).grid_line_color(),
-            GRID_LINE_COLOR_DIM
-        );
-        assert_eq!(
-            over_shoulder_at(8.0).grid_line_color(),
-            GRID_LINE_COLOR_DIM
+            over_shoulder_at(8.0).grid_line_color(&custom_tuning),
+            Rgba::new(0xFF, 0xFF, 0xFF, custom_tuning.grid_dim_alpha),
+            "OverShoulder dim color must track a non-default tuning.grid_dim_alpha"
         );
     }
 
-    /// Sideline mode must render grid lines dimmed (b4-t1).
+    /// Sideline mode must render grid lines dimmed AND the world-(0,0) board
+    /// corner must land wherever `geom.camera.project` says it does (b4-t1) —
+    /// no longer at the old camera-independent flat-math position
+    /// `(board_rect.x, board_rect.y)`. For this fixture (`geom_with_camera`,
+    /// `sideline_at(8.0)`), `project(WorldPos::new(0.0, 0.0)) == (0, 23)`
+    /// (dot coords), which lands in terminal cell (2, 6), not (2, 1).
     #[test]
-    fn sideline_grid_lines_render_dimmed() {
+    fn sideline_grid_line_corner_tracks_camera_projection() {
         let g = geom_with_camera(sideline_at(8.0));
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 20));
         draw_board_lines(&mut buf, &g);
 
-        let cell = buf.cell((2, 1)).unwrap();
-        assert_eq!(cell.fg, grid_fg_dim());
+        assert_ne!(
+            buf.cell((2, 1)).unwrap().symbol(),
+            "\u{284F}",
+            "corner glyph must no longer sit at the old flat-math position under Sideline"
+        );
+
+        let (dot_x, dot_y) = g.camera.project(WorldPos::new(0.0, 0.0));
+        assert_eq!(
+            (dot_x, dot_y),
+            (0, 23),
+            "sanity: camera projection of the world-(0,0) corner for this fixture"
+        );
+        let term_x = g.board_rect.x + (dot_x as u16) / 2;
+        let term_y = g.board_rect.y + (dot_y as u16) / 4;
+        assert_eq!(
+            buf.cell((term_x, term_y)).unwrap().fg,
+            grid_fg_dim(),
+            "grid line must be dim-colored at the camera-projected corner position"
+        );
     }
 
-    /// Over-the-shoulder mode must render grid lines dimmed (b4-t1).
+    /// Over-the-shoulder mode must render grid lines dimmed AND the world-
+    /// (0,0) board corner must land wherever `geom.camera.project` says it
+    /// does (b4-t1) — no longer at the old flat-math position. For this
+    /// fixture (`over_shoulder_at(8.0)`), `project(WorldPos::new(0.0, 0.0))
+    /// == (0, 26)` (dot coords), which lands in terminal cell (2, 7), not
+    /// (2, 1).
     #[test]
-    fn overshoulder_grid_lines_render_dimmed() {
+    fn overshoulder_grid_line_corner_tracks_camera_projection() {
         let g = geom_with_camera(over_shoulder_at(8.0));
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 20));
         draw_board_lines(&mut buf, &g);
 
-        let cell = buf.cell((2, 1)).unwrap();
-        assert_eq!(cell.fg, grid_fg_dim());
+        assert_ne!(
+            buf.cell((2, 1)).unwrap().symbol(),
+            "\u{284F}",
+            "corner glyph must no longer sit at the old flat-math position under OverShoulder"
+        );
+
+        let (dot_x, dot_y) = g.camera.project(WorldPos::new(0.0, 0.0));
+        assert_eq!(
+            (dot_x, dot_y),
+            (0, 26),
+            "sanity: camera projection of the world-(0,0) corner for this fixture"
+        );
+        let term_x = g.board_rect.x + (dot_x as u16) / 2;
+        let term_y = g.board_rect.y + (dot_y as u16) / 4;
+        assert_eq!(
+            buf.cell((term_x, term_y)).unwrap().fg,
+            grid_fg_dim(),
+            "grid line must be dim-colored at the camera-projected corner position"
+        );
     }
 
     /// Top-down mode must render grid lines at full `GRID_LINE_COLOR`
@@ -2245,9 +2397,35 @@ mod battle_viewer_scene_wiring_tests {
     use ratatui::style::Color;
     use engine_render::camera::Camera;
 
+    /// Target dim grid-line fg once b4-t2 lands (mirrors
+    /// `draw_board_lines_tests::grid_fg_dim`, private to that module):
+    /// `Rgba::new(0xFF,0xFF,0xFF,tuning.grid_dim_alpha)` alpha-composited over
+    /// opaque black via the real `Rgba::over` blend primitive — never a
+    /// hardcoded RGB triple, never `GRID_LINE_COLOR_DIM` (removed by b4-t2).
+    fn dim_grid_line_fg() -> Color {
+        let blended = Rgba::new(0xFF, 0xFF, 0xFF, BattleViewerTuning::default().grid_dim_alpha)
+            .over(Rgba::rgb(0, 0, 0));
+        Color::Rgb(blended.r, blended.g, blended.b)
+    }
+
+    /// Whatever `camera.grid_line_color()` + the real alpha-blit currently
+    /// produce, blended the same way `draw_grid` blends it over the
+    /// `Color::Reset` fallback. Used purely to identify/skip grid-line cells
+    /// in the piece-tint assertions below, so those assertions stay correct
+    /// regardless of `grid_line_color`'s implementation state (b4-t2) —
+    /// distinct from `dim_grid_line_fg`, which pins the *target* value.
+    fn actual_grid_line_fg(camera: &BattleCamera, tuning: &BattleViewerTuning) -> Color {
+        let blended = camera.grid_line_color(tuning).over(Rgba::rgb(0, 0, 0));
+        Color::Rgb(blended.r, blended.g, blended.b)
+    }
+
     /// DELIVERABLE (1): a board-line corner glyph is present at the position
-    /// `board_geometry(area)` independently predicts, and is not overwritten
-    /// by a piece (no piece occupies board column 0).
+    /// `geom.camera.project()` predicts for the world-(0,0) board corner
+    /// (b4-t1: grid lines track the active camera, not a fixed flat index),
+    /// and is not overwritten by a piece (no piece occupies board column 0).
+    /// Color assertion (b4-t2): the corner must be the *translucent* dim
+    /// color, alpha-blended via the real `draw_grid` blit path (b1-t3) — not
+    /// a flat opaque dark constant.
     #[test]
     fn board_corner_glyph_present_at_predicted_position() {
         let scene = BattleViewer::default();
@@ -2255,20 +2433,32 @@ mod battle_viewer_scene_wiring_tests {
         let geom = board_geometry(area, BattleCamera::sideline_preset(), BattleViewerTuning::default());
 
         let buf = render_to_buffer(&scene, 100, 50);
+
+        let (dot_x, dot_y) = geom.camera.project(WorldPos::new(0.0, 0.0));
+        assert_eq!(
+            (dot_x, dot_y),
+            (0, 81),
+            "sanity: camera projection of the world-(0,0) board corner for this fixture \
+             (b4-t1 grid-line camera projection)"
+        );
+        let term_x = geom.board_rect.x + (dot_x as u16) / 2;
+        let term_y = geom.board_rect.y + (dot_y as u16) / 4;
+
         let corner = buf
-            .cell((geom.board_rect.x, geom.board_rect.y))
-            .expect("board_rect origin must be within the rendered buffer");
+            .cell((term_x, term_y))
+            .expect("camera-projected board corner must be within the rendered buffer");
         assert!(
             is_braille_glyph(corner.symbol()),
-            "top-left board corner must be a braille grid-line glyph at board_geometry(area)'s \
-             predicted board_rect origin, got {:?}",
+            "top-left board corner must be a braille grid-line glyph at the camera-projected \
+             position, got {:?}",
             corner.symbol()
         );
         assert_eq!(
             corner.fg,
-            Color::Rgb(GRID_LINE_COLOR_DIM.r, GRID_LINE_COLOR_DIM.g, GRID_LINE_COLOR_DIM.b),
-            "top-left board corner must be colored GRID_LINE_COLOR_DIM (default camera is \
-             Sideline, which renders grid lines dimmed per b4-t1)"
+            dim_grid_line_fg(),
+            "top-left board corner must be the translucent dim color, alpha-blended over the \
+             background via the real draw_grid blit path (default camera is Sideline, which \
+             renders grid lines dimmed per b4-t2)"
         );
     }
 
@@ -2305,7 +2495,7 @@ mod battle_viewer_scene_wiring_tests {
         let mut bottom_colors: HashSet<(u8, u8, u8)> = HashSet::new();
 
         // Default scene camera is Sideline, which renders grid lines dimmed (b4-t1).
-        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR_DIM.r, GRID_LINE_COLOR_DIM.g, GRID_LINE_COLOR_DIM.b);
+        let grid_line_fg = actual_grid_line_fg(&geom.camera, &BattleViewerTuning::default());
         for y in geom.board_rect.y..geom.board_rect.bottom() {
             for x in geom.board_rect.x..geom.board_rect.right() {
                 let cell = buf.cell((x, y)).unwrap();
@@ -2398,7 +2588,7 @@ mod battle_viewer_scene_wiring_tests {
 
         let buf = render_to_buffer(&scene, 100, 50);
         // Default scene camera is Sideline, which renders grid lines dimmed (b4-t1).
-        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR_DIM.r, GRID_LINE_COLOR_DIM.g, GRID_LINE_COLOR_DIM.b);
+        let grid_line_fg = actual_grid_line_fg(&geom.camera, &BattleViewerTuning::default());
 
         let mut found_glyph = false;
         for y in geom.board_rect.y..geom.board_rect.bottom() {
@@ -2442,7 +2632,7 @@ mod battle_viewer_scene_wiring_tests {
         let buf_b = render_to_buffer(&scene, 100, 50);
 
         // Default scene camera is Sideline, which renders grid lines dimmed (b4-t1).
-        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR_DIM.r, GRID_LINE_COLOR_DIM.g, GRID_LINE_COLOR_DIM.b);
+        let grid_line_fg = actual_grid_line_fg(&geom.camera, &BattleViewerTuning::default());
         let mut color_diff_found = false;
         for y in geom.board_rect.y..geom.board_rect.bottom() {
             for x in geom.board_rect.x..geom.board_rect.right() {
@@ -2505,7 +2695,7 @@ mod battle_viewer_scene_wiring_tests {
 
         let buf = render_to_buffer(&scene, 100, 50);
         // Default scene camera is Sideline, which renders grid lines dimmed (b4-t1).
-        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR_DIM.r, GRID_LINE_COLOR_DIM.g, GRID_LINE_COLOR_DIM.b);
+        let grid_line_fg = actual_grid_line_fg(&geom.camera, &BattleViewerTuning::default());
 
         let has_piece_glyph_near = |center: (i32, i32)| -> bool {
             const WINDOW: i32 = 8;
@@ -2545,7 +2735,7 @@ mod battle_viewer_scene_wiring_tests {
     /// `render_reflects_mutated_stored_piece_transform_translate`.
     fn has_piece_glyph_near(buf: &Buffer, geom: &BoardGeometry, center: (i32, i32)) -> bool {
         // Default scene camera is Sideline, which renders grid lines dimmed (b4-t1).
-        let grid_line_fg = Color::Rgb(GRID_LINE_COLOR_DIM.r, GRID_LINE_COLOR_DIM.g, GRID_LINE_COLOR_DIM.b);
+        let grid_line_fg = actual_grid_line_fg(&geom.camera, &BattleViewerTuning::default());
         const WINDOW: i32 = 8;
         for dy in -WINDOW..=WINDOW {
             for dx in -WINDOW..=WINDOW {
