@@ -3,7 +3,7 @@ use std::time::Duration;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use engine_render::camera::{Camera, OverShoulderView, SideView, TopDownView, WorldPos};
+use engine_render::camera::{Camera, DepthAxis, ObliqueCamera, WorldPos};
 use engine_render::composite::{composite_scene, SpriteContent, SpriteDraw};
 use engine_render::dots::{dots_to_grid, Dot, DotBuffer};
 use engine_render::transform::{Transform, Vec2};
@@ -22,6 +22,15 @@ use crate::scene_id::SceneId;
 pub const BOARD_COLS: u16 = 7;
 /// Single source of truth for the board's row count.
 pub const BOARD_ROWS: u16 = 7;
+
+/// World-x the Sideline camera anchors on — the board's horizontal center
+/// column, derived from `BOARD_COLS` (never a bare literal `3.5`).
+const BOARD_CENTER_COL: f32 = BOARD_COLS as f32 / 2.0;
+/// Sentinel `camera_depth` for the Top-Down preset. Harmless: at
+/// `elevation_deg = 90.0`, `taper_factor` is exactly `1.0` for any distance,
+/// so this value fully cancels out of `project`/`depth_key` regardless of
+/// its magnitude (spec 39 Decision 1).
+const TOP_DOWN_DEPTH_SENTINEL: f32 = 1000.0;
 
 /// Shared per-frame board/camera geometry, derived once from the render
 /// `area` and consumed identically by board-line rendering and piece
@@ -44,7 +53,9 @@ pub struct BoardGeometry {
 /// minimum of 1. `mode` selects the active camera variant; its dot scale is
 /// always rebuilt from the area-derived scale (see `BattleCamera::with_scale_dots`),
 /// not taken from whatever scale the caller's `mode` happened to carry in.
-pub fn board_geometry(area: Rect, mode: BattleCamera) -> BoardGeometry {
+/// `tuning`'s `grid_taper_*` fields are threaded into the rebuilt camera every
+/// frame, the same way scale is.
+pub fn board_geometry(area: Rect, mode: BattleCamera, tuning: BattleViewerTuning) -> BoardGeometry {
     let cell_height_rows = (area.width / (2 * BOARD_COLS))
         .min(area.height / BOARD_ROWS)
         .max(1);
@@ -56,7 +67,7 @@ pub fn board_geometry(area: Rect, mode: BattleCamera) -> BoardGeometry {
     let by = area.top() + area.height.saturating_sub(bh) / 2;
     let board_rect = Rect::new(bx, by, w, bh);
 
-    let camera = mode.with_scale_dots((cell_height_rows * 4) as f32);
+    let camera = mode.with_scale_dots((cell_height_rows * 4) as f32, &tuning);
 
     BoardGeometry {
         cell_width_cols,
@@ -116,9 +127,9 @@ pub fn draw_board_lines(buf: &mut Buffer, geom: &BoardGeometry) {
 /// recompute at this layer.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum BattleCamera {
-    Sideline(SideView),
-    TopDown(TopDownView),
-    OverShoulder(OverShoulderView),
+    Sideline(ObliqueCamera),
+    TopDown(ObliqueCamera),
+    OverShoulder(ObliqueCamera),
 }
 
 impl Camera for BattleCamera {
@@ -164,18 +175,62 @@ impl BattleCamera {
     }
 
     /// Rebuild the active variant at `scale_dots`, preserving variant-specific
-    /// world params (`OverShoulderView::shoulder_row`). Scale is always
+    /// world params (`depth_axis`/`elevation_deg`/`camera_depth`) while
+    /// threading `tuning`'s live taper constants in. Scale is always
     /// area-derived (see `board_geometry`), so the incoming variant's own
     /// scale is intentionally replaced, not read.
-    /// b3-t2 (code-writer): rebuild each variant via its own `::new`.
-    fn with_scale_dots(self, scale_dots: f32) -> Self {
+    fn with_scale_dots(self, scale_dots: f32, tuning: &BattleViewerTuning) -> Self {
+        let rebuild = |c: ObliqueCamera| ObliqueCamera {
+            scale_dots,
+            taper_per_world_unit: tuning.grid_taper_per_world_unit,
+            taper_min: tuning.grid_taper_min,
+            ..c
+        };
         match self {
-            BattleCamera::Sideline(_) => BattleCamera::Sideline(SideView::new(scale_dots)),
-            BattleCamera::TopDown(_) => BattleCamera::TopDown(TopDownView::new(scale_dots)),
-            BattleCamera::OverShoulder(c) => {
-                BattleCamera::OverShoulder(OverShoulderView::new(scale_dots, c.shoulder_row))
-            }
+            BattleCamera::Sideline(c) => BattleCamera::Sideline(rebuild(c)),
+            BattleCamera::TopDown(c) => BattleCamera::TopDown(rebuild(c)),
+            BattleCamera::OverShoulder(c) => BattleCamera::OverShoulder(rebuild(c)),
         }
+    }
+
+    /// Sideline preset: looks down the column (world-x) axis, mild elevation,
+    /// anchored on the board's horizontal center column.
+    pub fn sideline_preset() -> Self {
+        BattleCamera::Sideline(ObliqueCamera {
+            scale_dots: 0.0,
+            depth_axis: DepthAxis::Col,
+            elevation_deg: 10.0,
+            camera_depth: BOARD_CENTER_COL,
+            taper_per_world_unit: 0.0,
+            taper_min: 0.0,
+        })
+    }
+
+    /// Over-the-shoulder preset: looks down the row (world-y, team-separation)
+    /// axis from behind Team B's bench row.
+    pub fn over_shoulder_preset() -> Self {
+        BattleCamera::OverShoulder(ObliqueCamera {
+            scale_dots: 0.0,
+            depth_axis: DepthAxis::Row,
+            elevation_deg: 30.0,
+            camera_depth: OVER_SHOULDER_ROW,
+            taper_per_world_unit: 0.0,
+            taper_min: 0.0,
+        })
+    }
+
+    /// Top-down preset: straight-down plan view, no convergence
+    /// (`elevation_deg = 90.0` makes `taper_factor` exactly `1.0` for any
+    /// distance, so `camera_depth`'s sentinel value fully cancels out).
+    pub fn top_down_preset() -> Self {
+        BattleCamera::TopDown(ObliqueCamera {
+            scale_dots: 0.0,
+            depth_axis: DepthAxis::Row,
+            elevation_deg: 90.0,
+            camera_depth: TOP_DOWN_DEPTH_SENTINEL,
+            taper_per_world_unit: 0.0,
+            taper_min: 0.0,
+        })
     }
 }
 
@@ -183,20 +238,35 @@ impl BattleCamera {
 mod battle_camera_tests {
     use super::*;
 
-    /// Sideline variant must be an exact passthrough to the wrapped SideView.
+    /// Builds a standalone `ObliqueCamera` with arbitrary taper params
+    /// (values that exercise convergence, not the placeholder `0.0`s the
+    /// presets carry) — used to prove passthrough is exact, not a fresh
+    /// recompute at the `BattleCamera` layer.
+    fn oblique(depth_axis: DepthAxis, elevation_deg: f32, camera_depth: f32, scale: f32) -> ObliqueCamera {
+        ObliqueCamera {
+            scale_dots: scale,
+            depth_axis,
+            elevation_deg,
+            camera_depth,
+            taper_per_world_unit: 0.06,
+            taper_min: 0.4,
+        }
+    }
+
+    /// Sideline variant must be an exact passthrough to the wrapped `ObliqueCamera`.
     #[test]
-    fn sideline_project_and_depth_key_match_wrapped_sideview() {
-        let inner = SideView::new(4.0);
+    fn sideline_project_and_depth_key_match_wrapped_oblique() {
+        let inner = oblique(DepthAxis::Col, 10.0, 3.5, 4.0);
         let cam = BattleCamera::Sideline(inner);
         let pos = WorldPos::new(1.5, 2.5);
         assert_eq!(cam.project(pos), inner.project(pos));
         assert_eq!(cam.depth_key(pos), inner.depth_key(pos));
     }
 
-    /// TopDown variant must be an exact passthrough to the wrapped TopDownView.
+    /// TopDown variant must be an exact passthrough to the wrapped `ObliqueCamera`.
     #[test]
-    fn topdown_project_and_depth_key_match_wrapped_topdownview() {
-        let inner = TopDownView::new(4.0);
+    fn topdown_project_and_depth_key_match_wrapped_oblique() {
+        let inner = oblique(DepthAxis::Row, 90.0, 1000.0, 4.0);
         let cam = BattleCamera::TopDown(inner);
         let pos = WorldPos::new(1.5, 2.5);
         assert_eq!(cam.project(pos), inner.project(pos));
@@ -204,14 +274,15 @@ mod battle_camera_tests {
     }
 
     /// OverShoulder variant must be an exact passthrough to the wrapped
-    /// OverShoulderView, including its construction params (shoulder_row) —
-    /// checked at a position off the shoulder row so the shear/reversed-depth
-    /// terms are actually exercised (proves forwarding, not a fresh recompute).
+    /// `ObliqueCamera`, including its construction params (`camera_depth`) —
+    /// checked at a position off the camera's depth so the taper/reversed-
+    /// depth terms are actually exercised (proves forwarding, not a fresh
+    /// recompute).
     #[test]
-    fn overshoulder_project_and_depth_key_match_wrapped_overshoulderview() {
-        let inner = OverShoulderView::new(4.0, 2.0);
+    fn overshoulder_project_and_depth_key_match_wrapped_oblique() {
+        let inner = oblique(DepthAxis::Row, 30.0, 2.0, 4.0);
         let cam = BattleCamera::OverShoulder(inner);
-        let pos = WorldPos::new(1.5, 5.0); // off the shoulder row (2.0)
+        let pos = WorldPos::new(1.5, 5.0); // off camera_depth (2.0)
         assert_eq!(cam.project(pos), inner.project(pos));
         assert_eq!(cam.depth_key(pos), inner.depth_key(pos));
     }
@@ -549,7 +620,7 @@ impl BattleViewer {
     /// Single source of truth for the starting camera, shared by `Default`
     /// and `Scene::enter()` so the two can never drift apart (b5-t1).
     fn default_camera_mode() -> BattleCamera {
-        BattleCamera::Sideline(SideView::new(0.0))
+        BattleCamera::sideline_preset()
     }
 
     /// Drives every event whose window has begun and is not yet settled,
@@ -654,7 +725,7 @@ impl Scene for BattleViewer {
     }
 
     fn render(&self, frame: &mut Frame, area: Rect) {
-        let geom = board_geometry(area, self.camera_mode);
+        let geom = board_geometry(area, self.camera_mode, self.tuning);
         draw_board_lines(frame.buffer_mut(), &geom);
 
         let elapsed = Duration::from_secs_f32(self.elapsed);
@@ -687,14 +758,9 @@ impl Scene for BattleViewer {
             // Direct selection: each digit always picks the same view,
             // never a next/prev cycle (spec 37). 1=Sideline 2=OverShoulder 3=TopDown.
             match key.code {
-                KeyCode::Char('1') => self.camera_mode = Self::default_camera_mode(),
-                KeyCode::Char('2') => {
-                    self.camera_mode =
-                        BattleCamera::OverShoulder(OverShoulderView::new(0.0, OVER_SHOULDER_ROW));
-                }
-                KeyCode::Char('3') => {
-                    self.camera_mode = BattleCamera::TopDown(TopDownView::new(0.0));
-                }
+                KeyCode::Char('1') => self.camera_mode = BattleCamera::sideline_preset(),
+                KeyCode::Char('2') => self.camera_mode = BattleCamera::over_shoulder_preset(),
+                KeyCode::Char('3') => self.camera_mode = BattleCamera::top_down_preset(),
                 _ => {}
             }
         }
@@ -723,7 +789,12 @@ mod board_geometry_tests {
     /// mode — its inner scale is a throwaway (`board_geometry` always
     /// rebuilds scale from the area, see `BattleCamera::with_scale_dots`).
     fn sideline() -> BattleCamera {
-        BattleCamera::Sideline(SideView::new(0.0))
+        BattleCamera::sideline_preset()
+    }
+
+    /// Default tuning, used by every `board_geometry` call in this module.
+    fn tuning() -> BattleViewerTuning {
+        BattleViewerTuning::default()
     }
 
     /// Exact-fit area: 128x64 against a 7x7 grid — 126x63 is the largest
@@ -732,17 +803,17 @@ mod board_geometry_tests {
     /// byte-for-byte identical geometry/scale to pre-b3-t2 behavior.
     #[test]
     fn exact_fit_area() {
-        let g = board_geometry(Rect::new(0, 0, 128, 64), sideline());
+        let g = board_geometry(Rect::new(0, 0, 128, 64), sideline(), tuning());
         assert_eq!(g.cell_height_rows, 9);
         assert_eq!(g.cell_width_cols, 18);
         assert_eq!(g.board_rect, Rect::new(1, 0, 126, 63));
-        assert_eq!(g.camera, BattleCamera::Sideline(SideView::new(36.0)));
+        assert_eq!(g.camera, sideline().with_scale_dots(36.0, &tuning()));
     }
 
     /// Oversized area: geometry is centered within the larger area.
     #[test]
     fn oversized_area_is_centered() {
-        let g = board_geometry(Rect::new(5, 5, 200, 100), sideline());
+        let g = board_geometry(Rect::new(5, 5, 200, 100), sideline(), tuning());
         assert_eq!(g.cell_height_rows, 14);
         assert_eq!(g.board_rect, Rect::new(7, 6, 196, 98));
     }
@@ -750,7 +821,7 @@ mod board_geometry_tests {
     /// Height-constrained area: height is the limiting dimension.
     #[test]
     fn height_constrained_area() {
-        let g = board_geometry(Rect::new(0, 0, 300, 40), sideline());
+        let g = board_geometry(Rect::new(0, 0, 300, 40), sideline(), tuning());
         assert_eq!(g.cell_height_rows, 5);
         assert_eq!(g.board_rect, Rect::new(115, 2, 70, 35));
     }
@@ -758,7 +829,7 @@ mod board_geometry_tests {
     /// Width-constrained area: width is the limiting dimension.
     #[test]
     fn width_constrained_area() {
-        let g = board_geometry(Rect::new(0, 0, 50, 300), sideline());
+        let g = board_geometry(Rect::new(0, 0, 50, 300), sideline(), tuning());
         assert_eq!(g.cell_height_rows, 3);
         assert_eq!(g.board_rect, Rect::new(4, 139, 42, 21));
     }
@@ -766,7 +837,7 @@ mod board_geometry_tests {
     /// Tiny area clamps to cell_height_rows == 1 and does not panic.
     #[test]
     fn tiny_area_clamps_without_panic() {
-        let g = board_geometry(Rect::new(0, 0, 10, 5), sideline());
+        let g = board_geometry(Rect::new(0, 0, 10, 5), sideline(), tuning());
         assert_eq!(g.cell_height_rows, 1);
     }
 
@@ -782,7 +853,7 @@ mod board_geometry_tests {
             Rect::new(0, 0, 10, 5),
         ];
         for area in areas {
-            let g = board_geometry(area, sideline());
+            let g = board_geometry(area, sideline(), tuning());
             assert_eq!(
                 g.cell_width_cols,
                 2 * g.cell_height_rows,
@@ -798,37 +869,53 @@ mod board_geometry_tests {
     #[test]
     fn top_down_mode_shares_geometry_but_has_topdown_camera() {
         let area = Rect::new(0, 0, 128, 64);
-        let g_side = board_geometry(area, sideline());
-        let g_top = board_geometry(area, BattleCamera::TopDown(TopDownView::new(0.0)));
+        let g_side = board_geometry(area, sideline(), tuning());
+        let g_top = board_geometry(area, BattleCamera::top_down_preset(), tuning());
 
         assert_eq!(g_top.board_rect, g_side.board_rect);
         assert_eq!(g_top.cell_width_cols, g_side.cell_width_cols);
         assert_eq!(g_top.cell_height_rows, g_side.cell_height_rows);
-        assert_eq!(g_top.camera, BattleCamera::TopDown(TopDownView::new(36.0)));
+        assert_eq!(
+            g_top.camera,
+            BattleCamera::top_down_preset().with_scale_dots(36.0, &tuning())
+        );
         assert_ne!(g_top, g_side, "TopDown and Sideline geometries must differ (camera variant)");
     }
 
     /// OverShoulder mode: scale is rebuilt to the area-derived value AND the
-    /// caller-supplied `shoulder_row` is preserved (not reset/discarded).
+    /// caller-supplied `camera_depth` is preserved (not reset/discarded).
     #[test]
-    fn over_shoulder_mode_rebuilds_scale_and_preserves_shoulder_row() {
+    fn over_shoulder_mode_rebuilds_scale_and_preserves_camera_depth() {
         let area = Rect::new(0, 0, 128, 64);
-        let g = board_geometry(area, BattleCamera::OverShoulder(OverShoulderView::new(0.0, 6.0)));
+        let mode = BattleCamera::OverShoulder(ObliqueCamera {
+            scale_dots: 0.0,
+            depth_axis: DepthAxis::Row,
+            elevation_deg: 30.0,
+            camera_depth: 6.0,
+            taper_per_world_unit: 0.0,
+            taper_min: 0.0,
+        });
+        let g = board_geometry(area, mode, tuning());
 
         assert_eq!(
             g.camera,
-            BattleCamera::OverShoulder(OverShoulderView::new(36.0, 6.0)),
-            "scale must be rebuilt to the area-derived value (36.0) while shoulder_row (6.0) is preserved"
+            mode.with_scale_dots(36.0, &tuning()),
+            "scale must be rebuilt to the area-derived value (36.0) while camera_depth (6.0) is preserved"
         );
+        let BattleCamera::OverShoulder(inner) = g.camera else {
+            panic!("expected OverShoulder variant");
+        };
+        assert_eq!(inner.camera_depth, 6.0);
+        assert_eq!(inner.scale_dots, 36.0);
     }
 
     /// No mode ever panics, even against a tiny area.
     #[test]
     fn tiny_area_does_not_panic_for_any_mode() {
         let area = Rect::new(0, 0, 10, 5);
-        let _ = board_geometry(area, sideline());
-        let _ = board_geometry(area, BattleCamera::TopDown(TopDownView::new(0.0)));
-        let _ = board_geometry(area, BattleCamera::OverShoulder(OverShoulderView::new(0.0, 3.0)));
+        let _ = board_geometry(area, sideline(), tuning());
+        let _ = board_geometry(area, BattleCamera::top_down_preset(), tuning());
+        let _ = board_geometry(area, BattleCamera::over_shoulder_preset(), tuning());
     }
 
     /// The board-size constants are exactly 7x7 and must be referenced (not
@@ -901,7 +988,7 @@ mod board_geometry_tests {
     #[test]
     fn board_rect_matches_draw_grid_centering() {
         let area = Rect::new(5, 5, 200, 100);
-        let g = board_geometry(area, sideline());
+        let g = board_geometry(area, sideline(), BattleViewerTuning::default());
 
         let cols = (g.cell_width_cols * BOARD_COLS) as usize;
         let rows = (g.cell_height_rows * BOARD_ROWS) as usize;
@@ -939,6 +1026,22 @@ mod draw_board_lines_tests {
     use ratatui::buffer::Buffer;
     use ratatui::style::Color;
 
+    /// `BattleCamera::top_down_preset()` rebuilt at an arbitrary test `scale`
+    /// (mirrors what `board_geometry`'s `with_scale_dots` does every frame).
+    fn top_down_at(scale: f32) -> BattleCamera {
+        BattleCamera::top_down_preset().with_scale_dots(scale, &BattleViewerTuning::default())
+    }
+
+    /// `BattleCamera::sideline_preset()` rebuilt at an arbitrary test `scale`.
+    fn sideline_at(scale: f32) -> BattleCamera {
+        BattleCamera::sideline_preset().with_scale_dots(scale, &BattleViewerTuning::default())
+    }
+
+    /// `BattleCamera::over_shoulder_preset()` rebuilt at an arbitrary test `scale`.
+    fn over_shoulder_at(scale: f32) -> BattleCamera {
+        BattleCamera::over_shoulder_preset().with_scale_dots(scale, &BattleViewerTuning::default())
+    }
+
     /// Hand-picked geometry used by every case below: board_rect origin
     /// (2,1), cell_width_cols=4, cell_height_rows=2, sized for a 7x7 grid
     /// (board_rect 28x14) in a 40x20 buffer. DotBuffer is
@@ -960,7 +1063,7 @@ mod draw_board_lines_tests {
             cell_width_cols: 4,
             cell_height_rows: 2,
             board_rect: Rect::new(2, 1, 28, 14),
-            camera: BattleCamera::TopDown(TopDownView::new(8.0)),
+            camera: top_down_at(8.0),
         }
     }
 
@@ -1103,8 +1206,8 @@ mod draw_board_lines_tests {
     fn two_geometries_scale() {
         let area_a = Rect::new(0, 0, 128, 64);
         let area_b = Rect::new(5, 5, 200, 100);
-        let ga = board_geometry(area_a, BattleCamera::Sideline(SideView::new(0.0)));
-        let gb = board_geometry(area_b, BattleCamera::Sideline(SideView::new(0.0)));
+        let ga = board_geometry(area_a, BattleCamera::sideline_preset(), BattleViewerTuning::default());
+        let gb = board_geometry(area_b, BattleCamera::sideline_preset(), BattleViewerTuning::default());
         assert_ne!(ga.board_rect, gb.board_rect);
 
         let mut buf_a = Buffer::empty(area_a);
@@ -1156,15 +1259,15 @@ mod draw_board_lines_tests {
     #[test]
     fn battle_camera_grid_line_color_per_variant() {
         assert_eq!(
-            BattleCamera::TopDown(TopDownView::new(8.0)).grid_line_color(),
+            top_down_at(8.0).grid_line_color(),
             GRID_LINE_COLOR
         );
         assert_eq!(
-            BattleCamera::Sideline(SideView::new(8.0)).grid_line_color(),
+            sideline_at(8.0).grid_line_color(),
             GRID_LINE_COLOR_DIM
         );
         assert_eq!(
-            BattleCamera::OverShoulder(OverShoulderView::new(8.0, 3.0)).grid_line_color(),
+            over_shoulder_at(8.0).grid_line_color(),
             GRID_LINE_COLOR_DIM
         );
     }
@@ -1172,7 +1275,7 @@ mod draw_board_lines_tests {
     /// Sideline mode must render grid lines dimmed (b4-t1).
     #[test]
     fn sideline_grid_lines_render_dimmed() {
-        let g = geom_with_camera(BattleCamera::Sideline(SideView::new(8.0)));
+        let g = geom_with_camera(sideline_at(8.0));
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 20));
         draw_board_lines(&mut buf, &g);
 
@@ -1183,7 +1286,7 @@ mod draw_board_lines_tests {
     /// Over-the-shoulder mode must render grid lines dimmed (b4-t1).
     #[test]
     fn overshoulder_grid_lines_render_dimmed() {
-        let g = geom_with_camera(BattleCamera::OverShoulder(OverShoulderView::new(8.0, 3.0)));
+        let g = geom_with_camera(over_shoulder_at(8.0));
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 20));
         draw_board_lines(&mut buf, &g);
 
@@ -1195,7 +1298,7 @@ mod draw_board_lines_tests {
     /// strength (b4-t1).
     #[test]
     fn topdown_grid_lines_render_full_strength() {
-        let g = geom_with_camera(BattleCamera::TopDown(TopDownView::new(8.0)));
+        let g = geom_with_camera(top_down_at(8.0));
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 20));
         draw_board_lines(&mut buf, &g);
 
@@ -1331,6 +1434,12 @@ mod piece_render_tests {
     use super::*;
     use image::{DynamicImage, Rgba as PixelRgba, RgbaImage};
 
+    /// A `BattleCamera` variant rebuilt at an arbitrary test `scale` — only
+    /// `scale_dots` matters for the tests using this helper.
+    fn at_scale(make: fn() -> BattleCamera, scale: f32) -> BattleCamera {
+        make().with_scale_dots(scale, &BattleViewerTuning::default())
+    }
+
     /// A uniform fully-opaque RGBA image (source for the synthetic sprites
     /// below) — deterministic, unlike the real GIF asset.
     fn opaque_image(w: u32, h: u32) -> DynamicImage {
@@ -1439,9 +1548,9 @@ mod piece_render_tests {
     fn sprite_base_dot_rows_matches_ratio_constant() {
         for scale in [8.0f32, 32.0f32, 5.0f32] {
             let cameras = [
-                BattleCamera::Sideline(SideView::new(scale)),
-                BattleCamera::TopDown(TopDownView::new(scale)),
-                BattleCamera::OverShoulder(OverShoulderView::new(scale, 3.0)),
+                at_scale(BattleCamera::sideline_preset, scale),
+                at_scale(BattleCamera::top_down_preset, scale),
+                at_scale(BattleCamera::over_shoulder_preset, scale),
             ];
             let expected = (scale * SPRITE_DOT_RATIO).round() as u32;
             for camera in cameras {
@@ -1459,10 +1568,10 @@ mod piece_render_tests {
     /// `scale_dots`, for every variant.
     #[test]
     fn sprite_scale_dots_matches_active_variant_scale() {
-        assert_eq!(BattleCamera::Sideline(SideView::new(8.0)).sprite_scale_dots(), 8.0);
-        assert_eq!(BattleCamera::TopDown(TopDownView::new(32.0)).sprite_scale_dots(), 32.0);
+        assert_eq!(at_scale(BattleCamera::sideline_preset, 8.0).sprite_scale_dots(), 8.0);
+        assert_eq!(at_scale(BattleCamera::top_down_preset, 32.0).sprite_scale_dots(), 32.0);
         assert_eq!(
-            BattleCamera::OverShoulder(OverShoulderView::new(5.0, 1.0)).sprite_scale_dots(),
+            at_scale(BattleCamera::over_shoulder_preset, 5.0).sprite_scale_dots(),
             5.0
         );
     }
@@ -2143,7 +2252,7 @@ mod battle_viewer_scene_wiring_tests {
     fn board_corner_glyph_present_at_predicted_position() {
         let scene = BattleViewer::default();
         let area = Rect::new(0, 0, 100, 50);
-        let geom = board_geometry(area, BattleCamera::Sideline(SideView::new(0.0)));
+        let geom = board_geometry(area, BattleCamera::sideline_preset(), BattleViewerTuning::default());
 
         let buf = render_to_buffer(&scene, 100, 50);
         let corner = buf
@@ -2187,7 +2296,7 @@ mod battle_viewer_scene_wiring_tests {
 
         let scene = BattleViewer::default();
         let area = Rect::new(0, 0, 100, 50);
-        let geom = board_geometry(area, BattleCamera::Sideline(SideView::new(0.0)));
+        let geom = board_geometry(area, BattleCamera::sideline_preset(), BattleViewerTuning::default());
         let mid_y = geom.board_rect.y + geom.board_rect.height / 2;
 
         let buf = render_to_buffer(&scene, 100, 50);
@@ -2235,7 +2344,7 @@ mod battle_viewer_scene_wiring_tests {
     fn idle_animation_advances_after_update() {
         let mut scene = BattleViewer::default();
         let area = Rect::new(0, 0, 100, 50);
-        let geom = board_geometry(area, BattleCamera::Sideline(SideView::new(0.0)));
+        let geom = board_geometry(area, BattleCamera::sideline_preset(), BattleViewerTuning::default());
 
         let buf_before = render_to_buffer(&scene, 100, 50);
 
@@ -2281,7 +2390,7 @@ mod battle_viewer_scene_wiring_tests {
     fn render_reflects_mutated_stored_piece_color() {
         let mut scene = BattleViewer::default();
         let area = Rect::new(0, 0, 100, 50);
-        let geom = board_geometry(area, BattleCamera::Sideline(SideView::new(0.0)));
+        let geom = board_geometry(area, BattleCamera::sideline_preset(), BattleViewerTuning::default());
 
         for p in &mut scene.pieces {
             p.color = Rgba::rgb(0, 0, 0);
@@ -2325,7 +2434,7 @@ mod battle_viewer_scene_wiring_tests {
         let mut scene = BattleViewer::default();
         scene.pieces.truncate(1);
         let area = Rect::new(0, 0, 100, 50);
-        let geom = board_geometry(area, BattleCamera::Sideline(SideView::new(0.0)));
+        let geom = board_geometry(area, BattleCamera::sideline_preset(), BattleViewerTuning::default());
 
         let buf_a = render_to_buffer(&scene, 100, 50);
 
@@ -2381,7 +2490,7 @@ mod battle_viewer_scene_wiring_tests {
         let mut scene = BattleViewer::default();
         scene.pieces.truncate(1); // isolate to exactly one sprite on the board
         let area = Rect::new(0, 0, 100, 50);
-        let geom = board_geometry(area, BattleCamera::Sideline(SideView::new(0.0)));
+        let geom = board_geometry(area, BattleCamera::sideline_preset(), BattleViewerTuning::default());
 
         let old_translate = scene.pieces[0].transform.translate;
         let old_center = terminal_center_cell(old_translate, &geom);
@@ -2464,18 +2573,29 @@ mod battle_viewer_scene_wiring_tests {
     /// dead piece (not driven through a real `Die` event) so the ONLY reason
     /// it can vanish is `render()`'s new `alive` filter, not a collapsed
     /// zero scale.
+    ///
+    /// Targets the bench pieces (indices 3/7), not the active-row pieces
+    /// (0..3/4..7): under b3-t1's Sideline camera, same-row active pieces are
+    /// deliberately clustered close together on screen (spec 39 Decision 1 —
+    /// team axis, not column, drives screen-x spread), so an active-row piece's
+    /// glyph-presence probe window would also catch its still-alive, same-row
+    /// teammates and produce a false positive unrelated to the `alive` filter
+    /// under test. The bench pieces sit on their own dedicated rows, screen-
+    /// disjoint from every other piece under all three camera presets, making
+    /// them the piece pair whose isolation is guaranteed by the layout itself
+    /// rather than by camera-specific screen math.
     #[test]
     fn render_excludes_dead_piece_keeps_alive_sibling() {
         let mut scene = BattleViewer::default();
         let area = Rect::new(0, 0, 100, 50);
-        let geom = board_geometry(area, BattleCamera::Sideline(SideView::new(0.0)));
+        let geom = board_geometry(area, BattleCamera::sideline_preset(), BattleViewerTuning::default());
 
-        let target_center = terminal_center_cell(scene.pieces[0].transform.translate, &geom);
-        let sibling_center = terminal_center_cell(scene.pieces[6].transform.translate, &geom);
-        assert_eq!(scene.pieces[0].team, Team::A, "test setup: target must be Team A");
-        assert_eq!(scene.pieces[6].team, Team::B, "test setup: sibling must be Team B");
+        let target_center = terminal_center_cell(scene.pieces[3].transform.translate, &geom);
+        let sibling_center = terminal_center_cell(scene.pieces[7].transform.translate, &geom);
+        assert_eq!(scene.pieces[3].team, Team::A, "test setup: target must be Team A");
+        assert_eq!(scene.pieces[7].team, Team::B, "test setup: sibling must be Team B");
 
-        scene.pieces[0].alive = false;
+        scene.pieces[3].alive = false;
 
         let buf = render_to_buffer(&scene, 100, 50);
 
@@ -2494,22 +2614,26 @@ mod battle_viewer_scene_wiring_tests {
     /// its glyphs reappear on the very next `render()`, with no other code
     /// change — proving exclusion is a pure per-frame filter on `alive`, not
     /// a one-way/sticky removal.
+    ///
+    /// Targets bench piece index 3 — see `render_excludes_dead_piece_keeps_alive_sibling`
+    /// for why an active-row piece's glyph-presence window is unreliable under
+    /// b3-t1's Sideline camera (same-row teammates cluster close together).
     #[test]
     fn render_reincludes_piece_when_alive_flipped_back_true() {
         let mut scene = BattleViewer::default();
         let area = Rect::new(0, 0, 100, 50);
-        let geom = board_geometry(area, BattleCamera::Sideline(SideView::new(0.0)));
+        let geom = board_geometry(area, BattleCamera::sideline_preset(), BattleViewerTuning::default());
 
-        let target_center = terminal_center_cell(scene.pieces[0].transform.translate, &geom);
+        let target_center = terminal_center_cell(scene.pieces[3].transform.translate, &geom);
 
-        scene.pieces[0].alive = false;
+        scene.pieces[3].alive = false;
         let buf_dead = render_to_buffer(&scene, 100, 50);
         assert!(
             !has_piece_glyph_near(&buf_dead, &geom, target_center),
             "test setup: piece must be excluded while alive == false"
         );
 
-        scene.pieces[0].alive = true;
+        scene.pieces[3].alive = true;
         let buf_revived = render_to_buffer(&scene, 100, 50);
         assert!(
             has_piece_glyph_near(&buf_revived, &geom, target_center),
@@ -2588,7 +2712,7 @@ mod camera_mode_tests {
     #[test]
     fn enter_resets_camera_mode_from_top_down_to_default() {
         let mut scene = BattleViewer {
-            camera_mode: BattleCamera::TopDown(TopDownView::new(0.0)),
+            camera_mode: BattleCamera::top_down_preset(),
             ..Default::default()
         };
 
@@ -2607,7 +2731,7 @@ mod camera_mode_tests {
     #[test]
     fn enter_resets_camera_mode_from_over_shoulder_to_default() {
         let mut scene = BattleViewer {
-            camera_mode: BattleCamera::OverShoulder(OverShoulderView::new(0.0, 3.0)),
+            camera_mode: BattleCamera::over_shoulder_preset(),
             ..Default::default()
         };
 
@@ -2642,9 +2766,9 @@ mod handle_input_camera_tests {
     #[test]
     fn digit_keys_select_camera_mode_directly_from_every_start() {
         let starts: [BattleCamera; 3] = [
-            BattleCamera::Sideline(SideView::new(0.0)),
-            BattleCamera::OverShoulder(OverShoulderView::new(0.0, 3.0)),
-            BattleCamera::TopDown(TopDownView::new(0.0)),
+            BattleCamera::sideline_preset(),
+            BattleCamera::over_shoulder_preset(),
+            BattleCamera::top_down_preset(),
         ];
 
         for start in starts {
@@ -2682,7 +2806,7 @@ mod handle_input_camera_tests {
     fn non_digit_key_leaves_camera_mode_unchanged() {
         for code in [KeyCode::Char('x'), KeyCode::Char('4')] {
             let mut scene = BattleViewer {
-                camera_mode: BattleCamera::TopDown(TopDownView::new(0.0)),
+                camera_mode: BattleCamera::top_down_preset(),
                 ..Default::default()
             };
 
