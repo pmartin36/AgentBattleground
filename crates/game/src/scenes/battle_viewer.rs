@@ -3318,6 +3318,108 @@ mod contact_shadow_tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Tests: billboarding invariant regression (b8-t1) — every piece's own
+// Animated transform is never camera-rotated and never sheared non-uniformly,
+// across all 3 camera presets, standing still and with active Move/Die events.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod billboarding_invariant_tests {
+    use super::*;
+    use engine_core::scene::{EngineCtx, Scene};
+
+    const EPS: f32 = 1e-5;
+
+    fn all_presets() -> [BattleCamera; 3] {
+        [
+            BattleCamera::sideline_preset(),
+            BattleCamera::over_shoulder_preset(),
+            BattleCamera::top_down_preset(),
+        ]
+    }
+
+    /// Asserts the billboarding invariant on every draw pair produced by
+    /// `build_draws` for one scene/preset combination: the piece's own
+    /// `Animated` transform carries `rotation == 0.0` and
+    /// `|scale.x| == |scale.y|` (within EPS); the shadow entry is always
+    /// `Prerasterized` (carries no `Transform` at all, so its squash can
+    /// never be a sprite shear/rotation). Returns whether any `Animated`
+    /// entry had a negative `scale.x` (team-mirror sign), so callers can
+    /// sanity-check the abs-comparison is non-vacuous.
+    fn assert_billboarding_invariant(scene: &BattleViewer, geom: &BoardGeometry, elapsed: Duration) -> bool {
+        let shadow_bufs = scene.shadow_buffers(geom);
+        let draws = scene.build_draws(geom, &shadow_bufs, elapsed);
+        assert!(draws.len() >= 2, "expected at least one shadow+piece pair");
+
+        let mut saw_negative_scale_x = false;
+        for pair in draws.chunks(2) {
+            let (shadow, piece) = (&pair[0], &pair[1]);
+            assert!(
+                matches!(shadow.content, SpriteContent::Prerasterized(_)),
+                "shadow entry must be SpriteContent::Prerasterized (never carries a Transform)"
+            );
+            match &piece.content {
+                SpriteContent::Animated { transform, .. } => {
+                    assert_eq!(
+                        transform.rotation, 0.0,
+                        "piece's own sprite must never be camera-rotated; got rotation={}",
+                        transform.rotation
+                    );
+                    let (sx, sy) = (transform.scale.x.abs(), transform.scale.y.abs());
+                    assert!(
+                        (sx - sy).abs() < EPS,
+                        "piece's own sprite scale must be uniform in magnitude: |scale.x|={} |scale.y|={}",
+                        sx, sy
+                    );
+                    if transform.scale.x < 0.0 {
+                        saw_negative_scale_x = true;
+                    }
+                }
+                _ => panic!("expected the piece's own draw to be SpriteContent::Animated"),
+            }
+        }
+        saw_negative_scale_x
+    }
+
+    /// PUBLIC_SURFACE: fresh default scene, standing still (`elapsed == 0`),
+    /// across all 3 camera presets — no rotation, uniform scale magnitude.
+    #[test]
+    fn billboard_no_rotation_uniform_scale_all_presets_standing_still() {
+        let scene = BattleViewer::default();
+        let area = Rect::new(0, 0, 100, 50);
+
+        let mut saw_negative_scale_x = false;
+        for camera in all_presets() {
+            let geom = board_geometry(area, camera, BattleViewerTuning::default());
+            saw_negative_scale_x |= assert_billboarding_invariant(&scene, &geom, Duration::ZERO);
+        }
+        assert!(
+            saw_negative_scale_x,
+            "expected at least one Team-B piece with scale.x < 0.0 across presets, \
+             otherwise the abs-magnitude comparison is vacuous"
+        );
+    }
+
+    /// PUBLIC_SURFACE: the invariant must keep holding while events are
+    /// actively driving pieces — `demo_events()`'s `Move` (piece 0, window
+    /// `[1.0, 2.2)`) and `Die` (piece 6, window `[1.6, 2.6)`) are both active
+    /// at `elapsed = 2.0`, so this exercises both a mid-glide translate tween
+    /// and a mid-shrink scale tween, across all 3 camera presets.
+    #[test]
+    fn billboard_invariant_holds_through_active_move_and_die() {
+        let mut ctx = EngineCtx;
+        let mut scene = BattleViewer::default();
+        scene.update(&mut ctx, Duration::from_secs_f32(2.0));
+
+        let area = Rect::new(0, 0, 100, 50);
+        for camera in all_presets() {
+            let geom = board_geometry(area, camera, BattleViewerTuning::default());
+            assert_billboarding_invariant(&scene, &geom, Duration::from_secs_f32(2.0));
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tests: camera_mode default + enter()-reset contract (b5-t1)
 // ─────────────────────────────────────────────────────────────────────────────
 
