@@ -795,3 +795,88 @@ mod render_timing_tests {
         }
     }
 }
+
+/// b1-t2: pre-`flex()`-migration golden-fixture gate. Freezes the CURRENT
+/// (pre-migration, `anchor`/`stack`-based) `MainHub` render at 3
+/// deterministic scenarios into committed fixtures under
+/// `crates/game/tests/fixtures/main_hub/`, decoded through the exact
+/// `decode_braille_cell`/`diff_dots` channel the b2/b3 `flex()` migration is
+/// re-checked against. Mirrors `roster_manager.rs`'s `golden_fixture_tests`
+/// precedent.
+#[cfg(test)]
+mod golden_fixture_tests {
+    use super::*;
+    use crate::scenes::test_util::{
+        buffer_to_art, load_main_hub_fixture, render_to_buffer, serialize_braille_buffer,
+    };
+    use engine_render::diff_dots;
+
+    /// (fixture name, render width, render height, scene-mutation fn).
+    type Scenario = (&'static str, u16, u16, fn(&mut MainHub));
+
+    /// The 3 deterministic scenarios: fixture name, render dims, and the
+    /// mutation applied to a fresh `MainHub::default()` before render.
+    fn scenarios() -> Vec<Scenario> {
+        fn rest(_scene: &mut MainHub) {}
+        fn cursor_exit(scene: &mut MainHub) {
+            scene.cursor_index = 2;
+        }
+
+        vec![
+            ("rest_120x50", 120, 50, rest as fn(&mut MainHub)),
+            ("narrow_40x20", 40, 20, rest as fn(&mut MainHub)),
+            ("cursor_exit_120x50", 120, 50, cursor_exit as fn(&mut MainHub)),
+        ]
+    }
+
+    /// For each of the 3 scenarios, the CURRENT render must dot-for-dot
+    /// match its committed fixture (`diff_dots(&fixture, &actual).is_match()`).
+    /// Pre-migration this is a freeze (green by construction once the
+    /// fixtures are generated); b2/b3 re-run this SAME assertion against the
+    /// `flex()`-migrated code, so this test is the enforced acceptance
+    /// oracle for the whole migration.
+    ///
+    /// Run with `UPDATE_MAIN_HUB_FIXTURES=1` to (re)generate the 3
+    /// `*.fixture` + `*.preview.txt` files from the current render — do the
+    /// manual visual pass over the previews (recorded in
+    /// `crates/game/tests/fixtures/main_hub/README.md`) BEFORE committing
+    /// regenerated fixtures.
+    #[test]
+    fn main_hub_golden_fixtures_match_pre_migration_baseline() {
+        let generate = std::env::var("UPDATE_MAIN_HUB_FIXTURES").is_ok();
+
+        for (name, w, h, build) in scenarios() {
+            let mut scene = MainHub::default();
+            build(&mut scene);
+            let actual = render_to_buffer(&scene, w, h);
+
+            if generate {
+                let fixture_path = format!(
+                    "{}/tests/fixtures/main_hub/{name}.fixture",
+                    env!("CARGO_MANIFEST_DIR")
+                );
+                let preview_path = format!(
+                    "{}/tests/fixtures/main_hub/{name}.preview.txt",
+                    env!("CARGO_MANIFEST_DIR")
+                );
+                std::fs::write(&fixture_path, serialize_braille_buffer(&actual))
+                    .unwrap_or_else(|e| panic!("failed to write {fixture_path}: {e}"));
+                std::fs::write(&preview_path, buffer_to_art(&actual))
+                    .unwrap_or_else(|e| panic!("failed to write {preview_path}: {e}"));
+                continue;
+            }
+
+            let fixture = load_main_hub_fixture(name);
+            let diff = diff_dots(&fixture, &actual);
+            assert!(
+                diff.is_match(),
+                "scenario {name:?}: current render diverges from the committed \
+                 pre-migration fixture ({} dot mismatch(es) of {} compared); \
+                 regenerate with UPDATE_MAIN_HUB_FIXTURES=1 only if the divergence \
+                 is intentional (re-run the manual visual pass first)",
+                diff.mismatches.len(),
+                diff.dots_compared
+            );
+        }
+    }
+}

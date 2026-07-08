@@ -171,17 +171,27 @@ pub(crate) fn buffer_to_art(buf: &Buffer) -> String {
     rows.join("\n")
 }
 
-/// Load a committed fixture by scenario `name` (e.g. `"rest_40x20"`) from
-/// `tests/fixtures/roster/{name}.fixture` and decode it into a `Buffer` via
-/// [`deserialize_braille_buffer`].
-pub(crate) fn load_roster_fixture(name: &str) -> Buffer {
+/// Load a committed fixture from `tests/fixtures/{dir}/{name}.fixture` and
+/// decode it into a `Buffer` via [`deserialize_braille_buffer`].
+fn load_fixture(dir: &str, name: &str) -> Buffer {
     let path = format!(
-        "{}/tests/fixtures/roster/{name}.fixture",
+        "{}/tests/fixtures/{dir}/{name}.fixture",
         env!("CARGO_MANIFEST_DIR")
     );
     let s = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("failed to read fixture {path}: {e}"));
     deserialize_braille_buffer(&s)
+}
+
+/// Load a committed Roster fixture by scenario `name` (e.g. `"rest_40x20"`).
+pub(crate) fn load_roster_fixture(name: &str) -> Buffer {
+    load_fixture("roster", name)
+}
+
+/// Load a committed Main Hub fixture by scenario `name` from
+/// `tests/fixtures/main_hub/{name}.fixture`.
+pub(crate) fn load_main_hub_fixture(name: &str) -> Buffer {
+    load_fixture("main_hub", name)
 }
 
 #[cfg(test)]
