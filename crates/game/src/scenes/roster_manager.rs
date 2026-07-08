@@ -121,6 +121,20 @@ impl RosterManager {
     /// by this amount (shrinking its height), never the button up.
     const DETAILS_TOP_GAP: u16 = 2;
 
+    /// Pure translate (dots) pulling the details panel's whole container
+    /// (top AND bottom) up. Combines with `DETAILS_PANEL_TOP_GROWTH_DOTS`
+    /// (top-only) for a total 2-dot rise of the panel's top — see
+    /// `Self::layout`'s `right_col`. Confirmed by eye against the live
+    /// render, not derived from the stat-bar math (matching `stat_bar`'s
+    /// exact top would require reasoning in dots, not the cell-rounded
+    /// `Rect.y` fields — deliberately not attempted here).
+    const DETAILS_PANEL_TOP_LIFT_DOTS: i32 = 1;
+    /// Height-only, non-aspect-preserving grow (dots) anchored at the
+    /// details panel's (already-translated) top — only the top moves this
+    /// additional distance; the bottom stays where the translate left it.
+    /// See `DETAILS_PANEL_TOP_LIFT_DOTS`.
+    const DETAILS_PANEL_TOP_GROWTH_DOTS: i32 = 1;
+
     /// Duration of the slide transition between roster positions.
     const SLIDE_DUR: Duration = Duration::from_millis(300);
 
@@ -447,13 +461,23 @@ impl RosterManager {
         let sprite = left_col[1].to_cell_rect();
 
         // RIGHT column: exhaustion directly above ability_list (the details
-        // panel), same split shape as the LEFT column.
+        // panel), same split shape as the LEFT column. Two DISTINCT
+        // adjustments to its top, composed: DETAILS_PANEL_TOP_LIFT_DOTS is a
+        // pure translate (shifts the whole container, top AND bottom, up by
+        // that amount), then DETAILS_PANEL_TOP_GROWTH_DOTS is a height-only,
+        // non-aspect-preserving grow anchored at the (already-translated)
+        // top, so only the top moves the extra distance and the bottom
+        // stays exactly where the translate left it. The two must sum to
+        // STAT_BAR_TOP_LIFT_CELLS*4 dots for the panel's top to land exactly
+        // on stat_bar's new top (see left_col above), not approximately.
         let right_col = engine_render::flex(
             engine_render::DotRect {
                 x: details_x_dots,
-                y: details_top as i32 * 4,
+                y: details_top as i32 * 4
+                    - Self::DETAILS_PANEL_TOP_LIFT_DOTS
+                    - Self::DETAILS_PANEL_TOP_GROWTH_DOTS,
                 w: details_w as i32 * 2,
-                h: body_h_dots,
+                h: body_h_dots + Self::DETAILS_PANEL_TOP_GROWTH_DOTS,
             },
             body_style,
             &[
@@ -1718,12 +1742,14 @@ mod layout_tests {
                 l.level.y,
                 "w={w},h={h}: level must stay tight under name (header-block shift moves them together)"
             );
-            // The body is unchanged by the header shift: stat_bar still opens
-            // STAT_BAR_TOP_LIFT_CELLS above the details-panel top, a real
-            // gap below level.
+            // The body is unchanged by the header shift: stat_bar and the
+            // details panel top still land on the same CELL row (their
+            // independent dot-level nudges — STAT_BAR_TOP_LIFT_CELLS vs.
+            // DETAILS_PANEL_TOP_LIFT_DOTS/GROWTH_DOTS — aren't required to
+            // be dot-identical, only close enough to round to the same
+            // cell; see `stat_bar_top_and_details_panel_top_share_a_cell`).
             assert_eq!(
-                l.stat_bar.y,
-                l.exhaustion.y.saturating_sub(RosterManager::STAT_BAR_TOP_LIFT_CELLS),
+                l.stat_bar.y, l.exhaustion.y,
                 "w={w},h={h}: body position unchanged by the header shift"
             );
         }
@@ -1757,19 +1783,21 @@ mod layout_tests {
         );
     }
 
-    /// Follow-up on spec 38 correction (item 4): the stat bars sit
-    /// `STAT_BAR_TOP_LIFT_CELLS` above the details panel's top
-    /// (`exhaustion.y`, the panel border's top row) — one cell higher than
-    /// spec 38's original "level with the details box top," freeing that
-    /// cell for `sprite` (the grow child directly below) to claim.
+    /// Follow-up on spec 38 correction (item 4): `stat_bar`'s top
+    /// (raised by `STAT_BAR_TOP_LIFT_CELLS`, freeing a cell for `sprite`
+    /// below it to claim) and the details panel's top (raised independently
+    /// by `DETAILS_PANEL_TOP_LIFT_DOTS`/`DETAILS_PANEL_TOP_GROWTH_DOTS`,
+    /// tuned by eye, NOT derived to dot-match `stat_bar`) land on the SAME
+    /// cell row. This only proves cell-level agreement — the two use
+    /// different dot-level math and are not guaranteed dot-identical; see
+    /// `Self::layout`'s `right_col` comment.
     #[test]
-    fn stat_bar_top_sits_one_lift_above_details_panel_top() {
+    fn stat_bar_top_and_details_panel_top_share_a_cell() {
         for (w, h) in [(80u16, 30u16), (40u16, 20u16), (60u16, 24u16)] {
             let l = RosterManager::layout(Rect::new(0, 0, w, h));
             assert_eq!(
-                l.stat_bar.y,
-                l.exhaustion.y.saturating_sub(RosterManager::STAT_BAR_TOP_LIFT_CELLS),
-                "w={w},h={h}: stat_bar.y ({}) must sit STAT_BAR_TOP_LIFT_CELLS above the details panel top exhaustion.y ({})",
+                l.stat_bar.y, l.exhaustion.y,
+                "w={w},h={h}: stat_bar.y ({}) and the details panel top exhaustion.y ({}) must share a cell row",
                 l.stat_bar.y, l.exhaustion.y
             );
         }
@@ -2487,12 +2515,12 @@ mod stat_bar_tests {
             "bottom cap cell (mask={bottom_mask:#04x}) must light only its TOP half, hugging the fill above it"
         );
 
-        // The bar box top sits STAT_BAR_TOP_LIFT_CELLS above the
-        // details-panel border top.
+        // The bar box top shares a cell row with the details-panel border
+        // top (see `stat_bar_top_and_details_panel_top_share_a_cell`).
         assert_eq!(
             outline.top(),
-            l.exhaustion.y.saturating_sub(RosterManager::STAT_BAR_TOP_LIFT_CELLS),
-            "the stat-bar box top must sit STAT_BAR_TOP_LIFT_CELLS above the details-panel border top"
+            l.exhaustion.y,
+            "the stat-bar box top must share a cell row with the details-panel border top"
         );
 
         // The label cell sits immediately below the outline — no gap between the
