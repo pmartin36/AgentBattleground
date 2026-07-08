@@ -26,7 +26,7 @@ pub mod tween;
 pub use anim::AnimatedSprite;
 pub use button::{Button, ButtonCore, ButtonState, FrameButton};
 pub use convert::convert;
-pub use debug_grid::{draw_debug_grid, GRID_CONTRAST_BLEND};
+pub use debug_grid::{draw_debug_grid, GRID_SPACING_COLS, GRID_SPACING_ROWS};
 pub use dot_diff::{decode_braille_cell, diff_dots, DotDiff, DotMismatch};
 pub use flex::{flex, Align, Basis, Direction, DotRect, DotRectTween, FlexChild, FlexStyle, Justify};
 pub use grid::{draw_grid, Cell, Grid};
