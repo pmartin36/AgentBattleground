@@ -3,7 +3,11 @@
 //! the sole dot->cell boundary the rest of the engine's `ratatui::Rect`-based
 //! APIs consume.
 
+use std::time::Duration;
+
 use ratatui::layout::Rect;
+
+use crate::tween::Tween;
 
 /// A rectangle in dot space (2 dots wide, 4 dots tall per terminal cell).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -316,6 +320,48 @@ fn clip_to_container(r: DotRect, container: DotRect) -> DotRect {
 /// floor+clamp-into-u16 convention.
 fn floor_to_u16(v: i32, stride: i32) -> u16 {
     v.div_euclid(stride).clamp(0, u16::MAX as i32) as u16
+}
+
+/// Dot-native sibling of `screen_layout::RectTween` — interpolates between
+/// two `DotRect`s (typically an off-screen `from` and a `flex()`-computed
+/// resting `to`) over `dur`, one `Tween` channel per field, at dot
+/// precision. Unlike `RectTween::at`'s `to_u16`, sampling does NOT clamp at
+/// `0` — negative dot coords are the point (an off-screen `from`).
+pub struct DotRectTween {
+    x: Tween,
+    y: Tween,
+    w: Tween,
+    h: Tween,
+}
+
+impl DotRectTween {
+    pub fn new(from: DotRect, to: DotRect, dur: Duration) -> Self {
+        DotRectTween {
+            x: Tween::new(from.x as f32, to.x as f32, dur),
+            y: Tween::new(from.y as f32, to.y as f32, dur),
+            w: Tween::new(from.w as f32, to.w as f32, dur),
+            h: Tween::new(from.h as f32, to.h as f32, dur),
+        }
+    }
+
+    /// Sample the animated `DotRect` at `elapsed`; each field is its
+    /// `Tween`'s eased value rounded to the nearest dot.
+    pub fn at(&self, elapsed: Duration) -> DotRect {
+        DotRect {
+            x: round_dot(self.x.at(elapsed)),
+            y: round_dot(self.y.at(elapsed)),
+            w: round_dot(self.w.at(elapsed)),
+            h: round_dot(self.h.at(elapsed)),
+        }
+    }
+}
+
+/// Round to the nearest dot. Unlike `screen_layout::to_u16`, this does NOT
+/// clamp at `0` — negative dot coords are the point (an off-screen `from`).
+/// `f32 -> i32` `as` casts saturate at the `i32` bounds in Rust, so this
+/// never wraps/panics on extreme inputs.
+fn round_dot(v: f32) -> i32 {
+    v.round() as i32
 }
 
 #[cfg(test)]
@@ -822,5 +868,88 @@ mod tests {
         let container = DotRect { x: 0, y: 0, w: 100, h: 10 };
         let _ = flex(container, style, &children);
         assert_eq!(calls.get(), 3, "Intrinsic invoked exactly once per child");
+    }
+
+    // ------------------------------------------------------- DotRectTween
+
+    #[test]
+    fn dot_rect_tween_hits_endpoints_exactly() {
+        let from = DotRect { x: -20, y: 5, w: 10, h: 4 };
+        let to = DotRect { x: 5, y: 5, w: 30, h: 12 };
+        let dur = Duration::from_secs(2);
+        let tw = DotRectTween::new(from, to, dur);
+
+        assert_eq!(tw.at(Duration::from_secs(0)), from, "at(0) must equal from exactly");
+        assert_eq!(tw.at(dur), to, "at(dur) must equal to exactly");
+        assert_eq!(tw.at(Duration::from_secs(10)), to, "past dur must hold at to");
+    }
+
+    #[test]
+    fn dot_rect_tween_delegates_per_field_independently() {
+        // Distinct from/to on every field so an axis/field swap is caught.
+        let from = DotRect { x: 0, y: 100, w: 4, h: 40 };
+        let to = DotRect { x: 50, y: 0, w: 60, h: 8 };
+        let dur = Duration::from_secs(4);
+        let tw = DotRectTween::new(from, to, dur);
+        let elapsed = Duration::from_secs(1);
+
+        let expected = DotRect {
+            x: Tween::new(from.x as f32, to.x as f32, dur).at(elapsed).round() as i32,
+            y: Tween::new(from.y as f32, to.y as f32, dur).at(elapsed).round() as i32,
+            w: Tween::new(from.w as f32, to.w as f32, dur).at(elapsed).round() as i32,
+            h: Tween::new(from.h as f32, to.h as f32, dur).at(elapsed).round() as i32,
+        };
+
+        assert_eq!(tw.at(elapsed), expected, "each field must match its own independent Tween");
+    }
+
+    #[test]
+    fn dot_rect_tween_slide_in_from_offscreen_is_monotonic_and_lands_on_flex_target() {
+        // `to` is a real flex()-computed resting DotRect, not a hand-picked one.
+        let container = DotRect { x: 0, y: 0, w: 200, h: 40 };
+        let style = FlexStyle {
+            direction: Direction::Row,
+            justify_content: Justify::Center,
+            align_items: Align::Center,
+            gap: 0,
+        };
+        let children = [fixed(40, 0.0, 0.0)];
+        let resting = flex(container, style, &children)[0];
+
+        let from = DotRect { x: -100, ..resting };
+        let dur = Duration::from_secs(2);
+        let tw = DotRectTween::new(from, resting, dur);
+
+        let mut prev_x = tw.at(Duration::from_millis(0)).x;
+        assert_eq!(prev_x, from.x, "at(0) must start exactly at the off-screen from.x");
+        for ms in [200, 500, 1000, 1500, 1999] {
+            let cur_x = tw.at(Duration::from_millis(ms)).x;
+            assert!(cur_x >= prev_x, "x must move monotonically toward resting.x, got {cur_x} after {prev_x}");
+            prev_x = cur_x;
+        }
+
+        assert_eq!(tw.at(dur), resting, "must land exactly on the flex()-computed resting target");
+    }
+
+    #[test]
+    fn dot_rect_tween_negative_from_not_clamped_mid_slide() {
+        let from = DotRect { x: -50, y: -8, w: 10, h: 4 };
+        let to = DotRect { x: 0, y: 0, w: 10, h: 4 };
+        let dur = Duration::from_secs(2);
+        let tw = DotRectTween::new(from, to, dur);
+
+        let early = tw.at(Duration::from_millis(100));
+        assert!(early.x < 0, "x must remain negative early in an off-screen slide-in, not clamp to 0");
+        assert!(early.y < 0, "y must remain negative early in an off-screen slide-in, not clamp to 0");
+    }
+
+    #[test]
+    fn dot_rect_tween_zero_dur_returns_to_immediately() {
+        let from = DotRect { x: 0, y: 0, w: 4, h: 4 };
+        let to = DotRect { x: 42, y: 7, w: 20, h: 8 };
+        let tw = DotRectTween::new(from, to, Duration::from_secs(0));
+
+        assert_eq!(tw.at(Duration::from_secs(0)), to, "zero-duration tween must return to immediately");
+        assert_eq!(tw.at(Duration::from_secs(3)), to, "zero-duration tween must return to regardless of elapsed");
     }
 }
