@@ -1749,20 +1749,7 @@ mod sprite_and_name_render_tests {
 #[cfg(test)]
 mod level_render_tests {
     use super::*;
-    use crate::scenes::test_util::render_to_buffer;
-
-    /// Concatenates every cell's symbol across `rect` into a single `String`
-    /// (row by row, no separators) so a plain-text substring assertion can
-    /// be made regardless of which row within `rect` the text lands on.
-    fn rect_text(buf: &ratatui::buffer::Buffer, rect: Rect) -> String {
-        let mut s = String::new();
-        for y in rect.top()..rect.bottom() {
-            for x in rect.left()..rect.right() {
-                s.push_str(buf.cell((x, y)).unwrap().symbol());
-            }
-        }
-        s
-    }
+    use crate::scenes::test_util::{rect_text, render_to_buffer};
 
     #[test]
     fn level_text_renders_below_name_for_current_creature() {
@@ -1815,7 +1802,9 @@ mod stat_bar_tests {
     use super::*;
     use crate::creatures::Creature;
     use crate::stats::{StatKind, Stats};
-    use crate::scenes::test_util::{has_non_space, key_event, render_to_buffer};
+    use crate::scenes::test_util::{
+        braille_mask, has_non_space, key_event, region_cells, rect_text, render_to_buffer,
+    };
     use crossterm::event::KeyCode;
     use engine_core::scene::EngineCtx;
 
@@ -1842,33 +1831,6 @@ mod stat_bar_tests {
         let mut rm = RosterManager::new();
         rm.creatures[0] = Creature::new("Test").with_stats(stats);
         render_to_buffer(&rm, area().width, area().height)
-    }
-
-    /// Every cell's (symbol, fg) within `rect`, row-major — an exact-content
-    /// snapshot for equality comparisons restricted to one rect (rather than
-    /// the whole buffer, since `level` updates immediately with
-    /// `current_index` even mid-slide and would otherwise make a whole-buffer
-    /// comparison spuriously fail).
-    fn region_cells(buf: &ratatui::buffer::Buffer, rect: Rect) -> Vec<(String, ratatui::style::Color)> {
-        let mut out = Vec::new();
-        for y in rect.top()..rect.bottom() {
-            for x in rect.left()..rect.right() {
-                let cell = buf.cell((x, y)).unwrap();
-                out.push((cell.symbol().to_string(), cell.fg));
-            }
-        }
-        out
-    }
-
-    /// Concatenates every cell's symbol across `rect` into one `String`.
-    fn rect_text(buf: &ratatui::buffer::Buffer, rect: Rect) -> String {
-        let mut s = String::new();
-        for y in rect.top()..rect.bottom() {
-            for x in rect.left()..rect.right() {
-                s.push_str(buf.cell((x, y)).unwrap().symbol());
-            }
-        }
-        s
     }
 
     /// REGRESSION (spec 38 item 3a): the rightmost stat bar must keep a real
@@ -2209,15 +2171,6 @@ mod stat_bar_tests {
         );
     }
 
-    /// The 8-bit braille mask (codepoint − U+2800) of the glyph at `(x, y)`,
-    /// or `None` if the cell is not a braille glyph. Per the `DOTS` table:
-    /// bits 0 & 3 are the cell's TOP dot-row, bits 6 & 7 its BOTTOM dot-row.
-    fn braille_mask(buf: &ratatui::buffer::Buffer, x: u16, y: u16) -> Option<u32> {
-        let ch = buf.cell((x, y)).unwrap().symbol().chars().next()?;
-        let cp = ch as u32;
-        (0x2800..=0x28FF).contains(&cp).then_some(cp - 0x2800)
-    }
-
     /// The 3-cell bar box's OUTLINE rect is top-aligned (level with the
     /// details-panel border) and snug to the label — but the visible hug
     /// bracket is recessed within it: the outline's TOP cell only lights its
@@ -2321,6 +2274,7 @@ mod stat_bar_tests {
 #[cfg(test)]
 mod draw_dot_border_tests {
     use super::*;
+    use crate::scenes::test_util::braille_mask;
     use ratatui::buffer::Buffer;
 
     /// Hand-picked rect used by every case below: origin (2,1), 10x6, inset
@@ -2392,15 +2346,6 @@ mod draw_dot_border_tests {
         let before = buf.clone();
         RosterManager::draw_dot_border(&mut buf, Rect::new(2, 1, 0, 6), RosterManager::BORDER_COLOR);
         assert_eq!(buf, before, "zero-width rect must leave the buffer unchanged");
-    }
-
-    /// The 8-bit braille mask of `cell` (codepoint − U+2800), or `None` if the
-    /// cell is not a braille glyph. Bit 0 is the cell's top-LEFT dot (per the
-    /// `DOTS` table / Unicode braille layout).
-    fn braille_mask(buf: &Buffer, x: u16, y: u16) -> Option<u32> {
-        let ch = buf.cell((x, y)).unwrap().symbol().chars().next()?;
-        let cp = ch as u32;
-        (0x2800..=0x28FF).contains(&cp).then_some(cp - 0x2800)
     }
 
     /// spec 38 correction (item 3b): the shared border helper rounds its
@@ -2605,20 +2550,9 @@ mod exhaustion_render_tests {
     use super::*;
     use crate::creatures::Creature;
     use crate::exhaustion::Exhaustion;
-    use crate::scenes::test_util::{key_event, render_to_buffer};
+    use crate::scenes::test_util::{key_event, rect_text, render_to_buffer};
     use crossterm::event::KeyCode;
     use engine_core::scene::EngineCtx;
-
-    /// Concatenates every cell's symbol across `rect` into a single `String`.
-    fn rect_text(buf: &ratatui::buffer::Buffer, rect: Rect) -> String {
-        let mut s = String::new();
-        for y in rect.top()..rect.bottom() {
-            for x in rect.left()..rect.right() {
-                s.push_str(buf.cell((x, y)).unwrap().symbol());
-            }
-        }
-        s
-    }
 
     /// A rested creature (non-injured, real percent) renders
     /// `"Exhaustion: {N}%"`, never a "days remain" form.
@@ -2739,20 +2673,9 @@ mod ability_list_render_tests {
     use super::*;
     use crate::ability::{Ability, Modifier};
     use crate::creatures::Creature;
-    use crate::scenes::test_util::{key_event, render_to_buffer};
+    use crate::scenes::test_util::{key_event, rect_text, render_to_buffer};
     use crossterm::event::KeyCode;
     use engine_core::scene::EngineCtx;
-
-    /// Concatenates every cell's symbol across `rect` into a single `String`.
-    fn rect_text(buf: &ratatui::buffer::Buffer, rect: Rect) -> String {
-        let mut s = String::new();
-        for y in rect.top()..rect.bottom() {
-            for x in rect.left()..rect.right() {
-                s.push_str(buf.cell((x, y)).unwrap().symbol());
-            }
-        }
-        s
-    }
 
     /// Every ability's description AND every modifier's name must appear
     /// simultaneously inside `ability_list` — full expansion, no progressive
@@ -2866,23 +2789,8 @@ mod ability_list_render_tests {
 #[cfg(test)]
 mod dot_row_render_tests {
     use super::*;
-    use crate::scenes::test_util::render_to_buffer;
+    use crate::scenes::test_util::{render_to_buffer, sample_fg};
     use ratatui::style::Color;
-
-    /// The fg color of the first non-space cell found inside `slot`, or
-    /// `None` if the slot has no painted cell.
-    fn sample_fg(buf: &ratatui::buffer::Buffer, slot: Rect) -> Option<Color> {
-        (slot.top()..slot.bottom())
-            .flat_map(|y| (slot.left()..slot.right()).map(move |x| (x, y)))
-            .find_map(|(x, y)| {
-                let cell = buf.cell((x, y))?;
-                if cell.symbol() != " " {
-                    Some(cell.fg)
-                } else {
-                    None
-                }
-            })
-    }
 
     /// At `current_index == 0` (fresh `new()`), the dot row paints 6 distinct
     /// non-space dot-cell groups — one per `dot_slots` slot on `layout`'s
@@ -2973,24 +2881,10 @@ mod dot_row_render_tests {
 #[cfg(test)]
 mod dot_row_cluster_tests {
     use super::*;
-    use crate::scenes::test_util::render_to_buffer;
+    use crate::scenes::test_util::{key_event, rect_text, render_to_buffer};
     use crate::squad_role::{ACTIVE_SLOTS, BENCH_SLOTS, ROSTER_SIZE};
     use crossterm::event::KeyCode;
-    use crate::scenes::test_util::key_event;
     use engine_core::scene::EngineCtx;
-
-    /// Concatenates every cell's symbol across `rect` into a single `String`
-    /// (row by row) for a plain-text substring assertion, matching the
-    /// `rect_text` pattern used by `level_render_tests` et al.
-    fn rect_text(buf: &ratatui::buffer::Buffer, rect: Rect) -> String {
-        let mut s = String::new();
-        for y in rect.top()..rect.bottom() {
-            for x in rect.left()..rect.right() {
-                s.push_str(buf.cell((x, y)).unwrap().symbol());
-            }
-        }
-        s
-    }
 
     /// Whether every cell in column `x` across `rect`'s full height is blank.
     fn column_is_blank(buf: &ratatui::buffer::Buffer, rect: Rect, x: u16) -> bool {
@@ -3944,27 +3838,10 @@ mod slide_transition_tests {
 #[cfg(test)]
 mod selection_tests {
     use super::*;
-    use crate::scenes::test_util::{key_event, mouse_event, render_to_buffer};
+    use crate::scenes::test_util::{key_event, mouse_event, render_to_buffer, sample_fg};
     use crossterm::event::KeyCode;
     use ratatui::crossterm::event::{MouseButton, MouseEventKind};
-    use ratatui::style::Color;
     use engine_core::scene::EngineCtx;
-
-    /// The fg color of the first non-space cell found inside `slot`, or
-    /// `None` if the slot has no painted cell (mirrors
-    /// `dot_row_render_tests::sample_fg`).
-    fn sample_fg(buf: &ratatui::buffer::Buffer, slot: Rect) -> Option<Color> {
-        (slot.top()..slot.bottom())
-            .flat_map(|y| (slot.left()..slot.right()).map(move |x| (x, y)))
-            .find_map(|(x, y)| {
-                let cell = buf.cell((x, y))?;
-                if cell.symbol() != " " {
-                    Some(cell.fg)
-                } else {
-                    None
-                }
-            })
-    }
 
     /// Space with no prior selection selects the current creature.
     #[test]
