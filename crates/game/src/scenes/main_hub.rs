@@ -100,7 +100,14 @@ impl MainHub {
         let interior_h = (interior_w / (2.0 * Self::LOGO_ASPECT)).max(1.0);
         let h_from_aspect = (interior_h as u16).saturating_add(2);
         let h_cap = ((area.height as f32 * Self::TITLE_H_MAX_FRAC) as u16).max(6);
-        (w, h_from_aspect.min(h_cap))
+        // -1 whole cell shorter than the aspect/cap formula would otherwise
+        // produce. Applied AFTER the `.min(h_cap)` (not to `h_from_aspect`
+        // alone) so the shrink is visible even on short terminals where
+        // `h_cap` (not the aspect ratio) is the binding constraint — shaving
+        // `h_from_aspect` there would be silently absorbed by the cap and
+        // produce no visible change. `.max(6)` keeps a sane floor matching
+        // `h_cap`'s own floor.
+        (w, h_from_aspect.min(h_cap).saturating_sub(1).max(6))
     }
 
     /// Title box rect for `area` — sole place its position/size is
@@ -118,7 +125,11 @@ impl MainHub {
             align_items: Align::Start,
             gap: 0,
         };
-        flex(Self::cell_rect_to_dots(area), style, std::slice::from_ref(&child))[0].to_cell_rect()
+        // Top margin: inset the container by 1 whole text cell (4 dots) off
+        // its top edge before running the flex call, so the title box sits
+        // 1 cell lower than a zero-margin `Align::Start` would place it.
+        let container = Self::cell_rect_to_dots(area).inset(0, 0, 4, 0);
+        flex(container, style, std::slice::from_ref(&child))[0].to_cell_rect()
     }
 
     /// Converts a whole-cell `Rect` into dot space (2 dots wide, 4 dots tall
@@ -698,8 +709,9 @@ mod layout_tests {
     }
 
     /// `title_rect` is exactly a single-child `flex()` Row (Justify::Center,
-    /// Align::Start) over `cell_rect_to_dots(area)`, `.to_cell_rect()`'d —
-    /// the mechanism, not hand-derived arithmetic.
+    /// Align::Start) over `cell_rect_to_dots(area)` inset by 1 cell (4 dots)
+    /// off the top edge, `.to_cell_rect()`'d — the mechanism, not
+    /// hand-derived arithmetic.
     #[test]
     fn title_rect_is_top_center_anchor() {
         let a = area();
@@ -715,9 +727,22 @@ mod layout_tests {
             align_items: Align::Start,
             gap: 0,
         };
-        let expected =
-            flex(MainHub::cell_rect_to_dots(a), style, std::slice::from_ref(&child))[0].to_cell_rect();
+        let container = MainHub::cell_rect_to_dots(a).inset(0, 0, 4, 0);
+        let expected = flex(container, style, std::slice::from_ref(&child))[0].to_cell_rect();
         assert_eq!(MainHub::title_rect(a), expected);
+    }
+
+    /// The title box's top edge sits exactly 1 whole text cell below the
+    /// top of `area` (the new top margin), not flush against it.
+    #[test]
+    fn title_rect_has_one_cell_top_margin() {
+        let a = area();
+        let title = MainHub::title_rect(a);
+        assert_eq!(
+            title.y,
+            a.y + 1,
+            "title box top edge must sit exactly 1 cell below the top of area"
+        );
     }
 
     /// The title box is unmistakably large relative to the screen — a
@@ -967,3 +992,4 @@ mod golden_fixture_tests {
         }
     }
 }
+
