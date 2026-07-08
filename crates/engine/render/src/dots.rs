@@ -79,7 +79,7 @@ impl DotBuffer {
 /// The bit index equals the array index: `DOTS[k].2 == k` for all k.
 /// Moved from `convert.rs` so both `dots_to_grid` and the old convert path
 /// share one definition.
-const DOTS: [(u32, u32, u8); 8] = [
+pub(crate) const DOTS: [(u32, u32, u8); 8] = [
     (0, 0, 0),
     (0, 1, 1),
     (0, 2, 2),
