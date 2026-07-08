@@ -86,7 +86,7 @@ pub enum SpriteContent<'a> {
     Animated {
         sprite: &'a AnimatedSprite,
         elapsed: Duration,
-        transform: &'a Transform,
+        transform: Transform,
         base_dot_rows: u32,
     },
 }
@@ -427,7 +427,7 @@ mod tests {
                 content: SpriteContent::Animated {
                     sprite: &far_sprite,
                     elapsed: Duration::ZERO,
-                    transform: &transform,
+                    transform,
                     base_dot_rows: 4,
                 },
                 translate: WorldPos::new(0.0, 0.0), // depth 0 (far)
@@ -437,7 +437,7 @@ mod tests {
                 content: SpriteContent::Animated {
                     sprite: &near_sprite,
                     elapsed: Duration::ZERO,
-                    transform: &transform,
+                    transform,
                     base_dot_rows: 4,
                 },
                 translate: WorldPos::new(5.0, 0.0), // depth 5 (near)
@@ -478,7 +478,7 @@ mod tests {
                 content: SpriteContent::Animated {
                     sprite: &sprite,
                     elapsed: Duration::ZERO,
-                    transform: &transform,
+                    transform,
                     base_dot_rows: 8,
                 },
                 translate: WorldPos::new(0.0, 0.0),
@@ -520,7 +520,7 @@ mod tests {
                 content: SpriteContent::Animated {
                     sprite: &sprite,
                     elapsed: Duration::ZERO,
-                    transform: &transform,
+                    transform,
                     base_dot_rows: 8,
                 },
                 translate: WorldPos::new(0.0, 0.0),
@@ -567,7 +567,7 @@ mod tests {
                 content: SpriteContent::Animated {
                     sprite: &sprite,
                     elapsed: Duration::ZERO,
-                    transform: &transform,
+                    transform,
                     base_dot_rows: 8,
                 },
                 translate: WorldPos::new(4.0, 8.0), // buffer occupies dot cols [2,6) rows [4,12)
@@ -577,7 +577,7 @@ mod tests {
                 content: SpriteContent::Animated {
                     sprite: &sprite,
                     elapsed: Duration::ZERO,
-                    transform: &transform,
+                    transform,
                     base_dot_rows: 8,
                 },
                 translate: WorldPos::new(24.0, 8.0), // buffer occupies dot cols [22,26) rows [4,12)
@@ -624,7 +624,7 @@ mod tests {
             content: SpriteContent::Animated {
                 sprite: &sprite,
                 elapsed: Duration::ZERO,
-                transform: &transform,
+                transform,
                 base_dot_rows: 8,
             },
             translate,

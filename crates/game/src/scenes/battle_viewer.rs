@@ -3,7 +3,7 @@ use std::time::Duration;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use engine_render::camera::{Camera, DepthAxis, ObliqueCamera, WorldPos};
+use engine_render::camera::{axis_values, Camera, DepthAxis, ObliqueCamera, WorldPos};
 use engine_render::composite::{composite_scene, SpriteContent, SpriteDraw};
 use engine_render::dots::{dots_to_grid, Dot, DotBuffer};
 use engine_render::transform::{Transform, Vec2};
@@ -273,6 +273,16 @@ impl BattleCamera {
         }
     }
 
+    /// The active variant's wrapped `ObliqueCamera`, byte-equal to what was
+    /// constructed — an exhaustive or-pattern (no wildcard) mirroring
+    /// `sprite_scale_dots`'s all-arms accessor pattern, so a future variant
+    /// is forced to be considered. `ObliqueCamera` is `Copy`.
+    pub fn oblique(&self) -> ObliqueCamera {
+        match self {
+            BattleCamera::Sideline(c) | BattleCamera::TopDown(c) | BattleCamera::OverShoulder(c) => *c,
+        }
+    }
+
     /// Rebuild the active variant at `scale_dots`, preserving variant-specific
     /// world params (`depth_axis`/`elevation_deg`/`camera_depth`) while
     /// threading `tuning`'s live taper constants in. Scale is always
@@ -384,6 +394,17 @@ mod battle_camera_tests {
         let pos = WorldPos::new(1.5, 5.0); // off camera_depth (2.0)
         assert_eq!(cam.project(pos), inner.project(pos));
         assert_eq!(cam.depth_key(pos), inner.depth_key(pos));
+    }
+
+    /// b6-t1 DELIVERABLE: `BattleCamera::oblique()` returns the exact wrapped
+    /// `ObliqueCamera` for every variant, byte-equal to what was constructed
+    /// — the accessor `depth_scale_factor` reads through every frame.
+    #[test]
+    fn oblique_returns_wrapped_camera_for_each_variant() {
+        let inner = oblique(DepthAxis::Col, 10.0, 3.5, 4.0);
+        assert_eq!(BattleCamera::Sideline(inner).oblique(), inner);
+        assert_eq!(BattleCamera::TopDown(inner).oblique(), inner);
+        assert_eq!(BattleCamera::OverShoulder(inner).oblique(), inner);
     }
 }
 
@@ -569,6 +590,31 @@ pub fn piece_elapsed(elapsed: Duration, index: usize) -> Duration {
 /// scale: `(camera.sprite_scale_dots() * SPRITE_DOT_RATIO).round() as u32`.
 pub fn sprite_base_dot_rows(camera: &BattleCamera) -> u32 {
     (camera.sprite_scale_dots() * SPRITE_DOT_RATIO).round() as u32
+}
+
+/// Per-piece depth-scale multiplier (spec 39 Decision 1): `1.0` at
+/// `elevation_deg = 90.0` (Top-Down) for any `pos`; otherwise decreases as
+/// `pos` gets farther from `camera.camera_depth` along `camera.depth_axis`,
+/// clamped at `tuning.depth_scale_min`. Reuses `axis_values` (engine) rather
+/// than re-matching on `DepthAxis` inline.
+fn depth_scale_factor(camera: &ObliqueCamera, tuning: &BattleViewerTuning, pos: WorldPos) -> f32 {
+    let (depth, _) = axis_values(camera.depth_axis, pos);
+    let dist = (depth - camera.camera_depth).abs();
+    let k = camera.elevation_deg.to_radians().sin();
+    (1.0 - (1.0 - k) * dist * tuning.depth_scale_per_world_unit).max(tuning.depth_scale_min)
+}
+
+/// Applies `depth_scale_factor` on top of `transform`'s OWN existing scale
+/// (which may already carry a Die-event shrink tween) — multiplies, never
+/// overwrites from `Team::scale_x()`/`1.0`. `translate`/`rotation` pass
+/// through unchanged. The render loop's per-piece draw-construction calls
+/// this same helper (not a second, duplicated inline formula).
+fn depth_scaled_transform(transform: &Transform, camera: &ObliqueCamera, tuning: &BattleViewerTuning) -> Transform {
+    let factor = depth_scale_factor(camera, tuning, transform.translate);
+    Transform {
+        scale: Vec2::new(transform.scale.x * factor, transform.scale.y * factor),
+        ..*transform
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -824,17 +870,19 @@ impl Scene for BattleViewer {
 
         let elapsed = Duration::from_secs_f32(self.elapsed);
         let base_dot_rows = sprite_base_dot_rows(&geom.camera);
+        let oblique = geom.camera.oblique();
         let draws: Vec<SpriteDraw> = self
             .pieces
             .iter()
             .filter(|p| p.alive)
             .filter_map(|p| {
                 let sprite = self.piece_sprite(p.index)?;
+                let transform = depth_scaled_transform(&p.transform, &oblique, &self.tuning);
                 Some(SpriteDraw {
                     content: SpriteContent::Animated {
                         sprite,
                         elapsed: piece_elapsed(elapsed, p.index),
-                        transform: &p.transform,
+                        transform,
                         base_dot_rows,
                     },
                     translate: p.transform.translate,
@@ -1730,6 +1778,184 @@ mod piece_render_tests {
             at_scale(BattleCamera::over_shoulder_preset, 5.0).sprite_scale_dots(),
             5.0
         );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: depth-scale factor + per-piece scale wiring (b6-t1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod depth_scale_tests {
+    use super::*;
+    use image::{DynamicImage, Rgba as PixelRgba, RgbaImage};
+
+    /// Synthetic square sprite — only relative rasterized dimensions matter
+    /// for this module's size-comparison assertions, not pixel content.
+    fn solid_sprite(size: u32) -> AnimatedSprite {
+        let mut raw = RgbaImage::new(size, size);
+        for p in raw.pixels_mut() {
+            *p = PixelRgba([200, 200, 200, 255]);
+        }
+        AnimatedSprite::new(vec![DynamicImage::from(raw)], Duration::from_millis(100))
+    }
+
+    /// At `elevation_deg = 90.0` (Top-Down), `depth_scale_factor` is exactly
+    /// `1.0` for any `pos` — `(1.0 - k) == 0.0` cancels the whole distance
+    /// term regardless of `depth_scale_per_world_unit`/`depth_scale_min`.
+    #[test]
+    fn top_down_factor_always_one() {
+        let BattleCamera::TopDown(camera) = BattleCamera::top_down_preset() else {
+            unreachable!()
+        };
+        let tuning = BattleViewerTuning::default();
+        for pos in [
+            WorldPos::new(0.5, 0.5),
+            WorldPos::new(3.5, 3.5),
+            WorldPos::new(6.5, 6.5),
+            WorldPos::new(-10.0, 40.0),
+        ] {
+            assert_eq!(
+                depth_scale_factor(&camera, &tuning, pos),
+                1.0,
+                "Top-Down depth_scale_factor must be exactly 1.0 at pos {pos:?}"
+            );
+        }
+    }
+
+    /// Under Over-the-shoulder (`elevation_deg = 30.0`, depth axis = Row),
+    /// the factor is exactly `1.0` at zero distance from `camera_depth`,
+    /// strictly decreases as distance grows, then clamps at
+    /// `tuning.depth_scale_min` once the term saturates.
+    #[test]
+    fn over_shoulder_factor_decreases_with_distance_then_clamps() {
+        let BattleCamera::OverShoulder(camera) = BattleCamera::over_shoulder_preset() else {
+            unreachable!()
+        };
+        let tuning = BattleViewerTuning::default();
+
+        let near = depth_scale_factor(&camera, &tuning, WorldPos::new(3.5, camera.camera_depth));
+        let mid = depth_scale_factor(&camera, &tuning, WorldPos::new(3.5, camera.camera_depth - 2.0));
+        let far = depth_scale_factor(&camera, &tuning, WorldPos::new(3.5, camera.camera_depth - 20.0));
+        let very_far = depth_scale_factor(&camera, &tuning, WorldPos::new(3.5, camera.camera_depth - 50.0));
+
+        assert_eq!(near, 1.0, "zero distance from camera_depth must yield exactly 1.0");
+        assert!(mid < near, "factor must strictly decrease as distance grows: mid={mid} near={near}");
+        assert!(far < mid, "factor must keep decreasing as distance grows further: far={far} mid={mid}");
+        assert_eq!(
+            far, tuning.depth_scale_min,
+            "far enough away, the factor must clamp at tuning.depth_scale_min"
+        );
+        assert_eq!(
+            very_far, tuning.depth_scale_min,
+            "even farther away, the factor must not go below tuning.depth_scale_min"
+        );
+    }
+
+    /// A farther piece's rasterized sprite must be smaller than a nearer
+    /// piece's under Over-the-shoulder — the visible depth cue this task
+    /// adds. Only `translate`'s depth coordinate (world-y, since
+    /// Over-the-shoulder's depth axis is Row) differs between the two.
+    #[test]
+    fn depth_scaled_transform_shrinks_farther_piece_under_over_shoulder() {
+        let BattleCamera::OverShoulder(camera) = BattleCamera::over_shoulder_preset() else {
+            unreachable!()
+        };
+        let tuning = BattleViewerTuning::default();
+        let sprite = solid_sprite(20);
+
+        let near_transform = Transform {
+            translate: WorldPos::new(3.5, camera.camera_depth),
+            ..Transform::default()
+        };
+        let far_transform = Transform {
+            translate: WorldPos::new(3.5, camera.camera_depth - 10.0),
+            ..Transform::default()
+        };
+
+        let near_scaled = depth_scaled_transform(&near_transform, &camera, &tuning);
+        let far_scaled = depth_scaled_transform(&far_transform, &camera, &tuning);
+
+        let near_buf = sprite.rasterize_at(Duration::ZERO, &near_scaled, 20);
+        let far_buf = sprite.rasterize_at(Duration::ZERO, &far_scaled, 20);
+
+        assert!(
+            far_buf.cols() < near_buf.cols() && far_buf.rows() < near_buf.rows(),
+            "a farther piece's rasterized sprite must be smaller: near={}x{}, far={}x{}",
+            near_buf.cols(),
+            near_buf.rows(),
+            far_buf.cols(),
+            far_buf.rows()
+        );
+    }
+
+    /// Under Top-Down, no piece is ever depth-scaled smaller than another —
+    /// two pieces at very different depths rasterize to identical sizes.
+    #[test]
+    fn depth_scaled_transform_equal_size_under_top_down() {
+        let BattleCamera::TopDown(camera) = BattleCamera::top_down_preset() else {
+            unreachable!()
+        };
+        let tuning = BattleViewerTuning::default();
+        let sprite = solid_sprite(20);
+
+        let near_transform = Transform { translate: WorldPos::new(3.5, 3.5), ..Transform::default() };
+        let far_transform = Transform { translate: WorldPos::new(3.5, 30.0), ..Transform::default() };
+
+        let near_scaled = depth_scaled_transform(&near_transform, &camera, &tuning);
+        let far_scaled = depth_scaled_transform(&far_transform, &camera, &tuning);
+
+        let near_buf = sprite.rasterize_at(Duration::ZERO, &near_scaled, 20);
+        let far_buf = sprite.rasterize_at(Duration::ZERO, &far_scaled, 20);
+
+        assert_eq!(
+            (near_buf.cols(), near_buf.rows()),
+            (far_buf.cols(), far_buf.rows()),
+            "Top-Down must not apply any depth-based size difference"
+        );
+    }
+
+    /// Load-bearing regression (research.md refinement): `depth_scaled_transform`
+    /// must MULTIPLY the depth factor into `transform`'s OWN existing scale
+    /// (which may already carry a partial Die-shrink tween written by
+    /// `drive_events`), never overwrite it from `Team::scale_x()`/`1.0`. A
+    /// transform with an already-halved scale (simulating a mid-Die tween)
+    /// must come out at exactly half of the untweened result — not silently
+    /// popping back to full size.
+    #[test]
+    fn depth_scaled_transform_preserves_existing_tweened_scale() {
+        let BattleCamera::OverShoulder(camera) = BattleCamera::over_shoulder_preset() else {
+            unreachable!()
+        };
+        let tuning = BattleViewerTuning::default();
+        let pos = WorldPos::new(3.5, camera.camera_depth - 10.0);
+
+        let full_scale_transform = Transform {
+            translate: pos,
+            scale: Vec2::new(1.0, 1.0),
+            ..Transform::default()
+        };
+        let half_scale_transform = Transform {
+            translate: pos,
+            scale: Vec2::new(0.5, 0.5),
+            ..Transform::default()
+        };
+
+        let full_scaled = depth_scaled_transform(&full_scale_transform, &camera, &tuning);
+        let half_scaled = depth_scaled_transform(&half_scale_transform, &camera, &tuning);
+
+        assert_eq!(
+            half_scaled.scale.x,
+            full_scaled.scale.x * 0.5,
+            "a half-tweened scale.x must remain exactly half the untweened result, not be overwritten"
+        );
+        assert_eq!(
+            half_scaled.scale.y,
+            full_scaled.scale.y * 0.5,
+            "a half-tweened scale.y must remain exactly half the untweened result, not be overwritten"
+        );
+        assert_eq!(half_scaled.translate, pos, "translate must pass through unchanged");
+        assert_eq!(half_scaled.rotation, 0.0, "rotation must pass through unchanged (billboarding invariant)");
     }
 }
 
