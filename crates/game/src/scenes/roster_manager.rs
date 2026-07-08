@@ -91,14 +91,6 @@ impl RosterManager {
     const ARROW_W: u16 = 4;
     const ARROW_H: u16 = 2;
 
-    /// Sub-cell downward render nudge (in braille dots) applied to the flanking
-    /// arrow buttons on top of `arrow_rects`'s floor-centered rect. A genuine
-    /// dot-level offset (2 dots < one 4-dot cell), applied via
-    /// `Button::set_dot_offset_down` so only the drawn glyph moves — the
-    /// hit-test rect is unchanged. Mirrors the sub-cell precision
-    /// `DOT_SLOT_DOWN_DOTS`/`draw_dot_slot` give the roster indicator circles.
-    const ARROW_NUDGE_DOWN_DOTS: i32 = 2;
-
     /// Width/height of the top-right home button.
     const HOME_W: u16 = 6;
     const HOME_H: u16 = 3;
@@ -106,11 +98,6 @@ impl RosterManager {
     /// Inset (in whole terminal cells) of the home/arrow buttons from the
     /// edges of `area` they anchor to (spec `Decisions (v1)`).
     const EDGE_MARGIN: u16 = 1;
-
-    /// Sub-cell upward render nudge (in braille dots) applied to the home
-    /// button via `Button::set_dot_offset_down`, on top of its normal
-    /// `EDGE_MARGIN` cell-level position — finer than a whole cell.
-    const HOME_NUDGE_UP_DOTS: i32 = -1;
 
     /// Extra rightward inset (in cells) of the details panel beyond
     /// `EDGE_MARGIN`, pulling the whole panel LEFT off the screen's right edge.
@@ -268,14 +255,6 @@ impl RosterManager {
     /// Height (in rows) of the role-label row at the bottom of `dot_row`
     /// (b2-t6). See `dot_bands`.
     const DOT_LABEL_H: u16 = 1;
-    /// Sub-cell downward nudge (in braille dots) applied to each rendered
-    /// position-indicator circle within its slot, on top of the slot's own
-    /// cell-centering. `draw_grid`'s integer cell-centering pins the circle to
-    /// the TOP of its 2-cell-tall slot; this drops it ~half a cell lower so it
-    /// reads closer to the role labels beneath. A genuine dot-level offset
-    /// (2 dots < one 4-dot cell), applied by compositing the circle into a
-    /// slot-sized `DotBuffer` at the offset rather than rounding to a cell.
-    const DOT_SLOT_DOWN_DOTS: usize = 2;
     /// Width (in cells) of a single dot slot within a cluster (b1-t3/b2-t6).
     /// 2 cells wide × the dots band's 1-cell height = 4×4 dots per
     /// indicator — enough resolution for a recognizable filled/unfilled
@@ -304,36 +283,77 @@ impl RosterManager {
         (crate::squad_role::RESERVE_SLOTS, "Reserve"),
     ];
 
+    /// Converts a whole-cell `Rect` into dot space (2 dots wide, 4 dots tall
+    /// per cell) — the sole cell->dot boundary `layout()` uses on its way
+    /// into `flex()`/`DotRect::inset()`; rounding back to cells happens once,
+    /// via `DotRect::to_cell_rect()`, at each field's assignment below (b8-t1).
+    fn cell_rect_to_dots(r: Rect) -> engine_render::DotRect {
+        engine_render::DotRect {
+            x: r.x as i32 * 2,
+            y: r.y as i32 * 4,
+            w: r.width as i32 * 2,
+            h: r.height as i32 * 4,
+        }
+    }
+
     /// Splits `area` into the 7 named panel rects (b1-t1, research.md
     /// blueprint), top to bottom: `name`, `level` (tight under `name`, no
     /// gap), a blank `HEADER_GAP_H` row, then the body, then `dot_row`. The
     /// body is a 2:1 LEFT/RIGHT column split: LEFT holds `stat_bar` directly
     /// above `sprite` (identical column range, width `area.width * 2 / 3`);
     /// RIGHT holds `exhaustion` directly above `ability_list` (the details
-    /// panel), inset from `area`'s right edge by `EDGE_MARGIN`. Uses
-    /// saturating arithmetic throughout so small `area`s degrade to
-    /// zero-height/width rects instead of panicking.
+    /// panel), inset from `area`'s right edge by `EDGE_MARGIN`. Computed on
+    /// dot-precision `flex()`/`DotRect` (b8-t1); `left_w`/`details_w`/
+    /// `details_top` stay integer-cell math (a `flex`-grow split of the 2:1
+    /// column is NOT equivalent to `width*2/3` floored in cells — see
+    /// research.md's CAVEAT) and are fed into the dot-space calls below as
+    /// cell-aligned `Basis::Fixed` dots. Uses saturating arithmetic
+    /// throughout so small `area`s degrade to zero-height/width rects
+    /// instead of panicking.
     fn layout(area: Rect) -> RosterLayout {
-        let name_h = Self::NAME_H.min(area.height);
-        let level_h = Self::LEVEL_H.min(area.height.saturating_sub(name_h));
-        let gap_h = Self::HEADER_GAP_H.min(area.height.saturating_sub(name_h + level_h));
-        let dot_h = Self::DOT_H.min(area.height.saturating_sub(name_h + level_h + gap_h));
-        let body_h = area
-            .height
-            .saturating_sub(name_h + level_h + gap_h + dot_h);
+        let area_dots = Self::cell_rect_to_dots(area);
 
-        // The `gap_h` blank row now sits ABOVE the header block (a top
-        // margin) rather than between `level` and the body, shifting `name`
-        // and `level` down by `gap_h` while keeping them tight to each other.
-        // `body_y` is unchanged (same total header height), so nothing below
-        // the header moves.
-        let name = Rect::new(area.x, area.y + gap_h, area.width, name_h);
-        let level = Rect::new(area.x, area.y + gap_h + name_h, area.width, level_h);
-
-        let body_y = area.y + name_h + level_h + gap_h;
-        let dot_row = Rect::new(area.x, body_y + body_h, area.width, dot_h);
-
-        let left_w = area.width * 2 / 3;
+        // Top-level vertical bands: a blank `HEADER_GAP_H` top-margin row,
+        // then `name`/`level` tight to each other, a spacer `body` child
+        // that (as the sole grow child) absorbs all leftover main-axis
+        // space, then `dot_row` pinned to the bottom.
+        let top_bands = engine_render::flex(
+            area_dots,
+            engine_render::FlexStyle {
+                direction: engine_render::Direction::Column,
+                justify_content: engine_render::Justify::Start,
+                align_items: engine_render::Align::Stretch,
+                gap: 0,
+            },
+            &[
+                engine_render::FlexChild {
+                    basis: engine_render::Basis::Fixed(Self::HEADER_GAP_H as i32 * 4),
+                    grow: 0.0,
+                    shrink: 0.0,
+                },
+                engine_render::FlexChild {
+                    basis: engine_render::Basis::Fixed(Self::NAME_H as i32 * 4),
+                    grow: 0.0,
+                    shrink: 0.0,
+                },
+                engine_render::FlexChild {
+                    basis: engine_render::Basis::Fixed(Self::LEVEL_H as i32 * 4),
+                    grow: 0.0,
+                    shrink: 0.0,
+                },
+                engine_render::FlexChild { basis: engine_render::Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
+                engine_render::FlexChild {
+                    basis: engine_render::Basis::Fixed(Self::DOT_H as i32 * 4),
+                    grow: 0.0,
+                    shrink: 0.0,
+                },
+            ],
+        );
+        let name = top_bands[1].to_cell_rect();
+        let level = top_bands[2].to_cell_rect();
+        // `top_bands[3]` (the spacer `body` child) is unused — the left/right
+        // columns anchor to `details_top` below, not to this rect.
+        let dot_row = top_bands[4].to_cell_rect();
 
         // RIGHT column (details panel): width = area.width - left_w, right
         // edge inset EDGE_MARGIN from area's edge. Its TOP is pushed below
@@ -341,10 +361,8 @@ impl RosterManager {
         // never jams against the home button in the shared top-right column;
         // it still bottoms out at dot_row's top, so this shrinks the panel's
         // height rather than pushing anything off-screen.
+        let left_w = area.width * 2 / 3;
         let details_w = area.width.saturating_sub(left_w);
-        let details_x = area
-            .right()
-            .saturating_sub(Self::EDGE_MARGIN + Self::DETAILS_LEFT_SHIFT + details_w);
         let home_bottom = area
             .y
             .saturating_add(Self::EDGE_MARGIN)
@@ -353,25 +371,81 @@ impl RosterManager {
             .saturating_add(Self::DETAILS_TOP_GAP)
             .min(dot_row.y);
 
+        // Details panel horizontal placement: inset `area` on the right by
+        // `EDGE_MARGIN + DETAILS_LEFT_SHIFT`, then a Row `flex()` with
+        // `Justify::End` and a single `Fixed(details_w*2)` child yields the
+        // panel's x in dots.
+        let details_x_dots = engine_render::flex(
+            area_dots.inset(0, (Self::EDGE_MARGIN + Self::DETAILS_LEFT_SHIFT) as i32 * 2, 0, 0),
+            engine_render::FlexStyle {
+                direction: engine_render::Direction::Row,
+                justify_content: engine_render::Justify::End,
+                align_items: engine_render::Align::Start,
+                gap: 0,
+            },
+            &[engine_render::FlexChild {
+                basis: engine_render::Basis::Fixed(details_w as i32 * 2),
+                grow: 0.0,
+                shrink: 0.0,
+            }],
+        )[0]
+        .x;
+
+        let body_h_dots = dot_row.y.saturating_sub(details_top) as i32 * 4;
+        let body_style = engine_render::FlexStyle {
+            direction: engine_render::Direction::Column,
+            justify_content: engine_render::Justify::Start,
+            align_items: engine_render::Align::Stretch,
+            gap: 0,
+        };
+
         // LEFT column: stat_bar directly above sprite, both spanning the
         // same column range (no ARROW_W inset — arrows move to dot_row). The
         // stat_bar's TOP is aligned to `details_top` so the bars sit level
         // with the top of the details box (not high up near the header); the
-        // sprite fills the remaining space below it down to dot_row.
-        let stat_bar_h = Self::STAT_BAR_BAND_H.min(dot_row.y.saturating_sub(details_top));
-        let stat_bar = Rect::new(area.x, details_top, left_w, stat_bar_h);
-        let sprite_y = details_top + stat_bar_h;
-        let sprite = Rect::new(area.x, sprite_y, left_w, dot_row.y.saturating_sub(sprite_y));
-
-        let details_h = dot_row.y.saturating_sub(details_top);
-        let exhaustion_h = Self::PANEL_H.min(details_h);
-        let exhaustion = Rect::new(details_x, details_top, details_w, exhaustion_h);
-        let ability_list = Rect::new(
-            details_x,
-            details_top + exhaustion_h,
-            details_w,
-            details_h.saturating_sub(exhaustion_h),
+        // sprite (the sole grow child) fills the remaining space below it
+        // down to dot_row.
+        let left_col = engine_render::flex(
+            engine_render::DotRect {
+                x: area.x as i32 * 2,
+                y: details_top as i32 * 4,
+                w: left_w as i32 * 2,
+                h: body_h_dots,
+            },
+            body_style,
+            &[
+                engine_render::FlexChild {
+                    basis: engine_render::Basis::Fixed(Self::STAT_BAR_BAND_H as i32 * 4),
+                    grow: 0.0,
+                    shrink: 0.0,
+                },
+                engine_render::FlexChild { basis: engine_render::Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
+            ],
         );
+        let stat_bar = left_col[0].to_cell_rect();
+        let sprite = left_col[1].to_cell_rect();
+
+        // RIGHT column: exhaustion directly above ability_list (the details
+        // panel), same split shape as the LEFT column.
+        let right_col = engine_render::flex(
+            engine_render::DotRect {
+                x: details_x_dots,
+                y: details_top as i32 * 4,
+                w: details_w as i32 * 2,
+                h: body_h_dots,
+            },
+            body_style,
+            &[
+                engine_render::FlexChild {
+                    basis: engine_render::Basis::Fixed(Self::PANEL_H as i32 * 4),
+                    grow: 0.0,
+                    shrink: 0.0,
+                },
+                engine_render::FlexChild { basis: engine_render::Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
+            ],
+        );
+        let exhaustion = right_col[0].to_cell_rect();
+        let ability_list = right_col[1].to_cell_rect();
 
         RosterLayout {
             name,
@@ -386,35 +460,63 @@ impl RosterManager {
 
     /// Splits `dot_row_rect` (`layout()`'s `dot_row`) into the top `dots_band`
     /// (where dot slots live) and the bottom `label_band` (one row of static
-    /// role-label text), per `DOT_LABEL_H` (b2-t6). Saturating — never
-    /// panics on a too-short `row`.
+    /// role-label text), per `DOT_LABEL_H` (b2-t6). Built on `engine_render::
+    /// flex()`/`DotRect` (b8-t2) — a Column `flex()` with the dots slot as
+    /// the sole grow child and the label slot `Fixed(DOT_LABEL_H*4)` with
+    /// `shrink: 1.0` so an undersized `row` degrades identically to the
+    /// former `.min()`/`saturating_sub` clamp.
     fn dot_bands(row: Rect) -> (Rect, Rect) {
-        let label_h = Self::DOT_LABEL_H.min(row.height);
-        let dots_h = row.height.saturating_sub(label_h);
-        let dots_band = Rect::new(row.x, row.y, row.width, dots_h);
-        let label_band = Rect::new(row.x, row.y + dots_h, row.width, label_h);
-        (dots_band, label_band)
+        let out = engine_render::flex(
+            Self::cell_rect_to_dots(row),
+            engine_render::FlexStyle {
+                direction: engine_render::Direction::Column,
+                justify_content: engine_render::Justify::Start,
+                align_items: engine_render::Align::Stretch,
+                gap: 0,
+            },
+            &[
+                engine_render::FlexChild {
+                    basis: engine_render::Basis::Fixed(0),
+                    grow: 1.0,
+                    shrink: 0.0,
+                },
+                engine_render::FlexChild {
+                    basis: engine_render::Basis::Fixed(Self::DOT_LABEL_H as i32 * 4),
+                    grow: 0.0,
+                    shrink: 1.0,
+                },
+            ],
+        );
+        (out[0].to_cell_rect(), out[1].to_cell_rect())
     }
 
     /// The 3 role-cluster rects within `dots_band`, in `CLUSTERS` order,
     /// centered as a group with `CLUSTER_GAP` columns between adjacent
-    /// clusters (b2-t6). Built from `engine_render`'s
-    /// `26-screen-space-positioning` primitives — `anchor` (TopCenter, to
-    /// center the whole group) + `stack` (Horizontal, to space the clusters)
-    /// — never hand-rolled x-accumulation.
+    /// clusters (b2-t6). Built on `engine_render::flex()`/`DotRect` (b8-t2) —
+    /// a Row `flex()` with `Justify::Center` and `gap: CLUSTER_GAP` — never
+    /// hand-rolled x-accumulation.
     fn dot_cluster_rects(dots_band: Rect) -> Vec<Rect> {
-        let sizes: Vec<(u16, u16)> = Self::CLUSTERS
+        let children: Vec<engine_render::FlexChild> = Self::CLUSTERS
             .iter()
-            .map(|(count, _label)| (*count as u16 * Self::SLOT_W, dots_band.height))
+            .map(|(count, _label)| engine_render::FlexChild {
+                basis: engine_render::Basis::Fixed(*count as i32 * Self::SLOT_W as i32 * 2),
+                grow: 0.0,
+                shrink: 0.0,
+            })
             .collect();
-        let group_w = sizes.iter().map(|(w, _)| *w).sum::<u16>()
-            + Self::CLUSTER_GAP * (Self::CLUSTERS.len() as u16 - 1);
-        let group_rect = engine_render::anchor(
-            dots_band,
-            (group_w, dots_band.height),
-            engine_render::Anchor::TopCenter,
-        );
-        engine_render::stack(group_rect, &sizes, Self::CLUSTER_GAP, engine_render::StackAxis::Horizontal)
+        engine_render::flex(
+            Self::cell_rect_to_dots(dots_band),
+            engine_render::FlexStyle {
+                direction: engine_render::Direction::Row,
+                justify_content: engine_render::Justify::Center,
+                align_items: engine_render::Align::Stretch,
+                gap: Self::CLUSTER_GAP as i32 * 2,
+            },
+            &children,
+        )
+        .iter()
+        .map(|d| d.to_cell_rect())
+        .collect()
     }
 
     /// The visual left/right column bounds of the centered dot-cluster group
@@ -449,7 +551,9 @@ impl RosterManager {
     /// `0..ACTIVE_SLOTS` active, then `BENCH_SLOTS` bench, then
     /// `RESERVE_SLOTS` reserve, flattened in roster-index order. Signature
     /// stays callable exactly as before (`RosterManager::dot_slots(row)`),
-    /// so existing callers/tests keep working unchanged.
+    /// so existing callers/tests keep working unchanged. Each cluster's slots
+    /// are computed via a per-cluster Row `flex()` (b8-t3), like
+    /// `dot_bands`/`dot_cluster_rects`.
     fn dot_slots(row: Rect) -> [Rect; crate::squad_role::ROSTER_SIZE] {
         let (dots_band, _label_band) = Self::dot_bands(row);
         let clusters = Self::dot_cluster_rects(dots_band);
@@ -457,14 +561,24 @@ impl RosterManager {
         let mut slots = Vec::with_capacity(crate::squad_role::ROSTER_SIZE);
         for (cluster_rect, (count, _label)) in clusters.iter().zip(Self::CLUSTERS.iter()) {
             let slot_w = Self::SLOT_W.min(cluster_rect.width.max(1));
-            for i in 0..*count {
-                slots.push(Rect::new(
-                    cluster_rect.x + i as u16 * slot_w,
-                    cluster_rect.y,
-                    slot_w,
-                    cluster_rect.height,
-                ));
-            }
+            let children: Vec<engine_render::FlexChild> = (0..*count)
+                .map(|_| engine_render::FlexChild {
+                    basis: engine_render::Basis::Fixed(slot_w as i32 * 2),
+                    grow: 0.0,
+                    shrink: 0.0,
+                })
+                .collect();
+            let cluster_slots = engine_render::flex(
+                Self::cell_rect_to_dots(*cluster_rect),
+                engine_render::FlexStyle {
+                    direction: engine_render::Direction::Row,
+                    justify_content: engine_render::Justify::Start,
+                    align_items: engine_render::Align::Stretch,
+                    gap: 0,
+                },
+                &children,
+            );
+            slots.extend(cluster_slots.iter().map(|d| d.to_cell_rect()));
         }
         slots.try_into().unwrap_or_else(|v: Vec<Rect>| {
             panic!(
@@ -502,53 +616,118 @@ impl RosterManager {
     }
 
     /// Left/right arrow button rects flanking the centered dot-cluster group
-    /// within `layout(area).dot_row` — the sole place button positioning is
-    /// computed; `render()` and tests both call this rather than re-deriving
-    /// it. The arrows anchor to the ACTUAL dot-cluster group rect
-    /// (`dot_cluster_rects`, which centers the 6 role-grouped dots as a
-    /// narrower group within the band) — NOT the full-width band — so they
-    /// genuinely flank the dots at any screen width instead of sitting at the
-    /// screen edges while the dots float in the middle. Each arrow sits
-    /// `ARROW_DOT_GAP` cells outside the group, clamped inside the band so it
-    /// never underflows or runs off-screen. `ARROW_H` matches `DOT_H`, so the
-    /// buttons stay within `dot_row`'s rows and entirely outside the sprite
-    /// band above.
+    /// within `layout(area).dot_row`, computed in dot space by
+    /// `arrow_dot_rects` (sole place button positioning is computed) — this
+    /// is a thin `to_cell_rect()` wrapper over it. `render()` calls
+    /// `arrow_dot_rects` directly (it also needs the sub-cell remainder for
+    /// the draw offset, so it reads the `DotRect`s themselves rather than
+    /// this cell-rounded view); this wrapper exists so tests can assert the
+    /// cell-space hit rect without reaching into dot space. The arrows
+    /// anchor to the ACTUAL dot-cluster group rect (`dot_cluster_rects`,
+    /// which centers the 6 role-grouped dots as a narrower group within the
+    /// band) — NOT the full-width band — so they genuinely flank the dots at
+    /// any screen width instead of sitting at the screen edges while the
+    /// dots float in the middle. Each arrow sits `ARROW_DOT_GAP` cells
+    /// outside the group, clamped inside the band so it never underflows or
+    /// runs off-screen. `#[cfg(test)]`: no non-test caller needs the
+    /// cell-rounded view standalone (`render()` needs the `DotRect`s too, so
+    /// it calls `arrow_dot_rects` directly instead).
+    #[cfg(test)]
     fn arrow_rects(area: Rect) -> (Rect, Rect) {
+        let (l, r) = Self::arrow_dot_rects(area);
+        (l.to_cell_rect(), r.to_cell_rect())
+    }
+
+    /// Dot-space arrow geometry backing `arrow_rects` (cell hit-rect) and the
+    /// render site (sub-cell draw offset via `DotRect::cell_remainder`) — the
+    /// single place both read from, so the offset is never a hand-maintained
+    /// constant bolted on top. Vertical: the `ARROW_H`-tall arrow is
+    /// dot-centered in the `DOT_H`-tall `dot_row` band via a single-child
+    /// Column `flex()` with `Justify::Center` (the same 2-dot sub-cell
+    /// remainder a hand-maintained constant used to bolt on now falls out
+    /// of this by construction). Horizontal: the group is flanked
+    /// in dot units with `ARROW_DOT_GAP` clearance, clamped inside the band
+    /// by `EDGE_MARGIN` — the same formula as `dot_cluster_group_bounds`'s
+    /// callers used in cell space, just doubled into dots so the whole rect
+    /// rounds to cells exactly once.
+    fn arrow_dot_rects(area: Rect) -> (engine_render::DotRect, engine_render::DotRect) {
         let band = Self::layout(area).dot_row;
         let (group_left, group_right) = Self::dot_cluster_group_bounds(area);
+        let band_dots = Self::cell_rect_to_dots(band);
+        let arrow_w_dots = Self::ARROW_W as i32 * 2;
+        let arrow_h_dots = Self::ARROW_H as i32 * 4;
 
-        // Positioned toward the TOP of the `dot_row` band (floor-centered), so
-        // the arrows sit level with the (down-nudged) dot cluster rather than
-        // dropping to the label row. Floor division on the half-row remainder
-        // biases UP: at DOT_H=3 / ARROW_H=2 this lands the arrow on the band's
-        // top two rows (band.y..band.y+2) — one row higher than the prior
-        // `div_ceil` down-bias.
-        let arrow_y = band.y + band.height.saturating_sub(Self::ARROW_H) / 2;
+        let y = engine_render::flex(
+            band_dots,
+            engine_render::FlexStyle {
+                direction: engine_render::Direction::Column,
+                justify_content: engine_render::Justify::Center,
+                align_items: engine_render::Align::Start,
+                gap: 0,
+            },
+            &[engine_render::FlexChild {
+                basis: engine_render::Basis::Fixed(arrow_h_dots),
+                grow: 0.0,
+                shrink: 0.0,
+            }],
+        )[0]
+        .y;
 
         // Flank the group with `ARROW_DOT_GAP` of clearance, but never closer
         // to the screen edge than `EDGE_MARGIN` — at narrow widths the widened
         // label group nearly fills the band, so the flanking arrows settle at
         // that inset rather than overrunning the edge.
-        let left_x = group_left
-            .saturating_sub(Self::ARROW_DOT_GAP + Self::ARROW_W)
-            .max(band.left() + Self::EDGE_MARGIN);
-        let right_x = (group_right + Self::ARROW_DOT_GAP)
-            .min(band.right().saturating_sub(Self::EDGE_MARGIN + Self::ARROW_W));
+        let gap_dots = Self::ARROW_DOT_GAP as i32 * 2;
+        let edge_dots = Self::EDGE_MARGIN as i32 * 2;
+        let band_left_dots = band_dots.x;
+        let band_right_dots = band_dots.x + band_dots.w;
+        let left_x = (group_left as i32 * 2 - gap_dots - arrow_w_dots)
+            .max(band_left_dots + edge_dots);
+        let right_x = (group_right as i32 * 2 + gap_dots)
+            .min(band_right_dots - edge_dots - arrow_w_dots);
 
-        let left_rect = Rect::new(left_x, arrow_y, Self::ARROW_W, Self::ARROW_H);
-        let right_rect = Rect::new(right_x, arrow_y, Self::ARROW_W, Self::ARROW_H);
-        (left_rect, right_rect)
+        (
+            engine_render::DotRect { x: left_x, y, w: arrow_w_dots, h: arrow_h_dots },
+            engine_render::DotRect { x: right_x, y, w: arrow_w_dots, h: arrow_h_dots },
+        )
     }
 
-    /// Top-right rect for the home button — sole place its position is
-    /// computed; `render()` and tests both call this.
+    /// Dot-space top-right geometry for the home button — sole place its
+    /// position is computed; `render()` calls this directly, and `home_rect`
+    /// (test-only cell-space view) wraps it. The former sub-cell upward
+    /// render nudge (1 dot up) is folded into the container's top inset
+    /// (`edge*4 - 1`) so it falls out of `cell_remainder` by construction
+    /// rather than being a separate render-only offset constant — the same
+    /// tradeoff `arrow_dot_rects` already makes for the arrow buttons.
+    fn home_dot_rect(area: Rect) -> engine_render::DotRect {
+        let area_dots = Self::cell_rect_to_dots(area);
+        let home_w = Self::HOME_W as i32 * 2;
+        let home_h = Self::HOME_H as i32 * 4;
+        let edge = Self::EDGE_MARGIN as i32;
+        let inner = area_dots.inset(0, edge * 2, edge * 4 - 1, 0);
+        let x = engine_render::flex(
+            inner,
+            engine_render::FlexStyle {
+                direction: engine_render::Direction::Row,
+                justify_content: engine_render::Justify::End,
+                align_items: engine_render::Align::Start,
+                gap: 0,
+            },
+            &[engine_render::FlexChild {
+                basis: engine_render::Basis::Fixed(home_w),
+                grow: 0.0,
+                shrink: 0.0,
+            }],
+        )[0]
+        .x;
+        engine_render::DotRect { x, y: inner.y, w: home_w, h: home_h }
+    }
+
+    /// Cell-space view of `home_dot_rect`, for tests only. `render()` needs
+    /// the `DotRect` too, so it calls `home_dot_rect` directly instead.
+    #[cfg(test)]
     fn home_rect(area: Rect) -> Rect {
-        engine_render::anchor_with_margin(
-            area,
-            (Self::HOME_W, Self::HOME_H),
-            engine_render::Anchor::TopRight,
-            (Self::EDGE_MARGIN, Self::EDGE_MARGIN),
-        )
+        Self::home_dot_rect(area).to_cell_rect()
     }
 
     /// Details-panel geometry (b1-t5): `(border, ex_text, ability_text)`.
@@ -562,24 +741,21 @@ impl RosterManager {
     /// call this rather than re-deriving it.
     fn details_panel_rects(area: Rect) -> (Rect, Rect, Rect) {
         let l = Self::layout(area);
-        let border = Rect::new(
-            l.exhaustion.x,
-            l.exhaustion.y,
-            l.exhaustion.width,
-            l.exhaustion.height + l.ability_list.height,
-        );
-        let ex_text = Rect::new(
-            l.exhaustion.x + 1,
-            l.exhaustion.y + 1,
-            l.exhaustion.width.saturating_sub(2),
-            l.exhaustion.height.saturating_sub(1),
-        );
-        let ability_text = Rect::new(
-            l.ability_list.x + 1,
-            l.ability_list.y,
-            l.ability_list.width.saturating_sub(2),
-            l.ability_list.height.saturating_sub(1),
-        );
+        let ex_dots = Self::cell_rect_to_dots(l.exhaustion);
+        let ab_dots = Self::cell_rect_to_dots(l.ability_list);
+        // `border` is a union (they share x/width and are y-contiguous), not
+        // an inset — no negative-inset API, so build it via struct-update.
+        let border = engine_render::DotRect {
+            h: ex_dots.h + ab_dots.h,
+            ..ex_dots
+        }
+        .to_cell_rect();
+        // 1 cell L/R, 1 cell off the TOP border only — exhaustion/ability
+        // share an un-bordered interior boundary, so no bottom inset.
+        let ex_text = ex_dots.inset(2, 2, 4, 0).to_cell_rect();
+        // 1 cell L/R, 1 cell off the BOTTOM border only — no top inset
+        // (shared boundary with `ex_text` above).
+        let ability_text = ab_dots.inset(2, 2, 0, 4).to_cell_rect();
         (border, ex_text, ability_text)
     }
 
@@ -667,16 +843,14 @@ impl RosterManager {
         let zero_area = Rect::new(0, 0, area.width, area.height);
         let mut tmp = Buffer::empty(zero_area);
         let base_rect = Self::layout(zero_area).sprite;
-        let sprite_rect = Rect::new(
-            base_rect.x.saturating_add(Self::SPRITE_INSET_LEFT),
-            base_rect.y.saturating_add(Self::SPRITE_INSET_TOP),
-            base_rect
-                .width
-                .saturating_sub(Self::SPRITE_INSET_LEFT + Self::SPRITE_INSET_RIGHT),
-            base_rect
-                .height
-                .saturating_sub(Self::SPRITE_INSET_TOP + Self::SPRITE_INSET_BOTTOM),
-        );
+        let sprite_rect = Self::cell_rect_to_dots(base_rect)
+            .inset(
+                Self::SPRITE_INSET_LEFT as i32 * 2,
+                Self::SPRITE_INSET_RIGHT as i32 * 2,
+                Self::SPRITE_INSET_TOP as i32 * 4,
+                Self::SPRITE_INSET_BOTTOM as i32 * 4,
+            )
+            .to_cell_rect();
 
         let creature = &self.creatures[index];
         if let Some(sprite) = creature.animation(crate::creatures::AnimationKind::Idle) {
@@ -778,44 +952,58 @@ impl RosterManager {
     /// left->right), each as `(outline_rect, fill_interior_rect,
     /// label_rect)` — sole source of stat-bar geometry; `render_stat_bars`
     /// and `stat_bar_tests` both call it (research.md b1-t6 blueprint).
-    /// Mirrors `dot_cluster_rects`'s `engine_render::stack` Horizontal
-    /// pattern, but computes a slice width that FILLS the width remaining
-    /// between the left/right margins (rather than centering a fixed-size
-    /// group). Each slice reserves its bottom `STAT_LABEL_H` row for the label
-    /// (immediately below the outline, no gap row); the rows above become the
-    /// outline. `fill` is the middle interior cell of the outline (inset a
-    /// full cell on every side); `render_stat_bars` draws the border box around
-    /// the full outline and lights THIS `fill` cell, so the top/bottom border
-    /// and the fill land in separate braille cells and neither overwrites the
-    /// other.
+    /// Built on `engine_render::flex()`/`DotRect` (b8-t7) — a Row `flex()`
+    /// with `Justify::Start`/`Align::Stretch` over cell-floored `Basis::Fixed`
+    /// slices, never hand-rolled x-accumulation — computing a slice width
+    /// that FILLS the width remaining between the left/right margins (rather
+    /// than centering a fixed-size group). Each slice reserves its bottom
+    /// `STAT_LABEL_H` row for the label (immediately below the outline, no
+    /// gap row); the rows above become the outline. `fill` is the middle
+    /// interior cell of the outline (inset a full cell on every side);
+    /// `render_stat_bars` draws the border box around the full outline and
+    /// lights THIS `fill` cell, so the top/bottom border and the fill land in
+    /// separate braille cells and neither overwrites the other.
     fn stat_slice_parts(stat_bar: Rect) -> Vec<(Rect, Rect, Rect)> {
-        let n = crate::stats::StatKind::ALL.len() as u16;
+        let n = crate::stats::StatKind::ALL.len();
         // Reserve `STAT_BAR_LEFT_MARGIN` cells before the first slice and
         // `STAT_BAR_DETAILS_MARGIN` cells after the last, so the leftmost bar
         // clears the screen edge and the rightmost bar clears the details
         // panel's left border. The 4 slices divide the width remaining between
         // those two margins, so both margins narrow each bar rather than
         // widening the group past `stat_bar`.
-        let usable_w = stat_bar
-            .width
-            .saturating_sub(Self::STAT_BAR_LEFT_MARGIN + Self::STAT_BAR_DETAILS_MARGIN);
-        let slice_w = usable_w.saturating_sub(Self::STAT_BAR_GAP * (n - 1)) / n;
-        let sizes: Vec<(u16, u16)> = vec![(slice_w, stat_bar.height); n as usize];
-        let stack_area = Rect::new(
-            stat_bar.x + Self::STAT_BAR_LEFT_MARGIN,
-            stat_bar.y,
-            usable_w,
-            stat_bar.height,
+        let container = Self::cell_rect_to_dots(stat_bar).inset(
+            Self::STAT_BAR_LEFT_MARGIN as i32 * 2,
+            Self::STAT_BAR_DETAILS_MARGIN as i32 * 2,
+            0,
+            0,
         );
-        let slices = engine_render::stack(
-            stack_area,
-            &sizes,
-            Self::STAT_BAR_GAP,
-            engine_render::StackAxis::Horizontal,
+        // Slice width MUST stay floored at CELL granularity before ×2 to
+        // dots — computing `(container.w - gap_dots*(n-1))/n` directly in
+        // dots rounds differently and would silently change the layout.
+        let usable_cells = container.w / 2;
+        let slice_w_cells =
+            (usable_cells - Self::STAT_BAR_GAP as i32 * (n as i32 - 1)).max(0) / n as i32;
+        let children: Vec<engine_render::FlexChild> = (0..n)
+            .map(|_| engine_render::FlexChild {
+                basis: engine_render::Basis::Fixed(slice_w_cells * 2),
+                grow: 0.0,
+                shrink: 0.0,
+            })
+            .collect();
+        let slices = engine_render::flex(
+            container,
+            engine_render::FlexStyle {
+                direction: engine_render::Direction::Row,
+                justify_content: engine_render::Justify::Start,
+                align_items: engine_render::Align::Stretch,
+                gap: Self::STAT_BAR_GAP as i32 * 2,
+            },
+            &children,
         );
 
         slices
             .into_iter()
+            .map(|s| s.to_cell_rect())
             .map(|s| {
                 // Fixed, compact outline height at the TOP of the slice (so the
                 // bar sits level with the details box top), then the label on
@@ -1111,12 +1299,11 @@ impl RosterManager {
         }
     }
 
-    /// Draws one position-indicator circle (`bytes`) into `slot`, nudged down
-    /// by `DOT_SLOT_DOWN_DOTS` sub-cell dots from `draw_grid`'s default
-    /// cell-centering. Composites the aspect-fitted circle into a slot-sized
-    /// `DotBuffer` at the offset (never a whole-cell round), then blits it
-    /// 1:1 — so the circle keeps its colour/shape but sits a genuine 2 dots
-    /// lower. A zero-fit slot is a no-op.
+    /// Draws one position-indicator circle (`bytes`) into `slot`, centered at
+    /// dot precision — 2 dots lower than `draw_grid`'s default cell-granularity
+    /// centering would place it. Composites the aspect-fitted circle into a
+    /// slot-sized `DotBuffer` at the dot-precise offset (never a whole-cell
+    /// round), then blits it 1:1. A zero-fit slot is a no-op.
     fn draw_dot_slot(buf: &mut Buffer, slot: Rect, bytes: &'static [u8]) {
         let slot_dc = slot.width as usize * 2;
         let slot_dr = slot.height as usize * 4;
@@ -1133,10 +1320,13 @@ impl RosterManager {
         }
         let circle = engine_render::asset_cache::sprite_to_dots(bytes, fc as u32 * 2, fr as u32 * 4);
 
-        // Replicate `draw_grid`'s integer cell-centering (top-biased for a
-        // 1-cell circle in a 2-cell slot), then add the sub-cell down nudge.
+        // `off_x` replicates `draw_grid`'s integer cell-centering (unchanged,
+        // out of scope for this nudge). `off_y` centers at dot precision
+        // instead of rounding to cells first — the same `+2` dot nudge this
+        // used to apply as a separate constant now falls out of centering a
+        // 4-dot-tall circle within an 8-dot-tall slot directly in dot space.
         let off_x = (slot.width.saturating_sub(fc as u16) / 2) as usize * 2;
-        let off_y = (slot.height.saturating_sub(fr as u16) / 2) as usize * 4 + Self::DOT_SLOT_DOWN_DOTS;
+        let off_y = slot_dr.saturating_sub(fr * 4) / 2;
 
         let mut target = DotBuffer::new(slot_dc, slot_dr);
         for r in 0..circle.rows() {
@@ -1249,25 +1439,25 @@ impl Scene for RosterManager {
         }
         self.render_dot_row(frame.buffer_mut(), l.dot_row);
 
-        let (left_rect, right_rect) = Self::arrow_rects(area);
+        let (left_dr, right_dr) = Self::arrow_dot_rects(area);
         {
             let mut left = self.left_button.borrow_mut();
-            left.set_rect(left_rect);
-            left.set_dot_offset_down(Self::ARROW_NUDGE_DOWN_DOTS);
+            left.set_rect(left_dr.to_cell_rect());
+            left.set_dot_offset_down(left_dr.cell_remainder().1);
             left.render(frame.buffer_mut());
         }
         {
             let mut right = self.right_button.borrow_mut();
-            right.set_rect(right_rect);
-            right.set_dot_offset_down(Self::ARROW_NUDGE_DOWN_DOTS);
+            right.set_rect(right_dr.to_cell_rect());
+            right.set_dot_offset_down(right_dr.cell_remainder().1);
             right.render(frame.buffer_mut());
         }
 
-        let home_rect = Self::home_rect(area);
+        let home_dr = Self::home_dot_rect(area);
         {
             let mut home = self.home_button.borrow_mut();
-            home.set_rect(home_rect);
-            home.set_dot_offset_down(Self::HOME_NUDGE_UP_DOTS);
+            home.set_rect(home_dr.to_cell_rect());
+            home.set_dot_offset_down(home_dr.cell_remainder().1);
             home.render(frame.buffer_mut());
         }
     }
@@ -2845,8 +3035,8 @@ mod dot_row_render_tests {
     }
 
     /// spec 38 corrections (item 2 — "the roster dots should be moved down"):
-    /// each indicator circle is nudged down by a genuine sub-cell
-    /// `DOT_SLOT_DOWN_DOTS` offset, so it now paints into the BOTTOM cell-row
+    /// each indicator circle is centered at a genuine sub-cell, dot-precise
+    /// offset (`draw_dot_slot`), so it now paints into the BOTTOM cell-row
     /// of its 2-cell slot. Before the nudge `draw_grid`'s integer cell-centering
     /// pinned the 1-cell circle to the slot's TOP row, leaving the bottom row
     /// blank — so this fails on the pre-nudge render.
@@ -3358,19 +3548,15 @@ mod arrow_button_tests {
         }
     }
 
-    /// The flanking arrow buttons render `ARROW_NUDGE_DOWN_DOTS` (2) sub-cell
-    /// dots below their `arrow_rects` rect, via `Button::set_dot_offset_down`.
+    /// The flanking arrow buttons render 2 sub-cell dots below their
+    /// `arrow_rects` rect, via `Button::set_dot_offset_down` fed a value
+    /// derived from dot-native centering (not a hand-maintained constant).
     /// A 2-dot shift is finer than one 4-dot cell, so the drawn button spills
     /// into the cell-row directly below the rect — asserted here as that row
     /// being painted. The hit-test rect is unchanged (see
     /// `arrows_raised_to_top_of_dot_row_band`), so navigation is unaffected.
     #[test]
     fn arrows_rendered_nudged_down_into_cell_below_rect() {
-        assert_eq!(
-            RosterManager::ARROW_NUDGE_DOWN_DOTS, 2,
-            "arrows must be nudged down exactly 2 dots (finer than a whole cell)"
-        );
-
         let scene = RosterManager::new();
         let (w, h) = (80u16, 20u16);
         let buf = render_to_buffer(&scene, w, h);
@@ -3469,10 +3655,15 @@ mod home_button_tests {
     use ratatui::crossterm::event::{MouseButton, MouseEventKind};
 
     /// `render()` paints the home button, and its rect sits top-right of
-    /// `area` — inset from the top edge and the right edge by
-    /// `RosterManager::EDGE_MARGIN` cells (no longer flush) — distinct from
-    /// the arrow buttons' beside-center position and the dot row's bottom
-    /// position.
+    /// `area` — inset from the right edge by `RosterManager::EDGE_MARGIN`
+    /// cells (no longer flush) — distinct from the arrow buttons'
+    /// beside-center position and the dot row's bottom position. The top
+    /// edge floors to `area.top()`: the button's sub-cell upward nudge is
+    /// now baked into its dot-space position (`home_dot_rect`) rather than
+    /// bolted on at render time via a separate offset constant, so the hit
+    /// rect floors one cell higher than the plain `EDGE_MARGIN` inset while
+    /// the drawn glyph stays byte-identical (same tradeoff `arrow_dot_rects`
+    /// already makes for the arrow buttons).
     #[test]
     fn home_button_renders_top_right() {
         let scene = RosterManager::new();
@@ -3493,10 +3684,10 @@ mod home_button_tests {
         );
         assert_eq!(
             rect.top(),
-            area.top() + RosterManager::EDGE_MARGIN,
-            "home button rect must be inset from the top edge of area by EDGE_MARGIN \
-             (the render-only HOME_NUDGE_UP_DOTS dot offset moves the drawn glyph without \
-             moving this hit-test rect)"
+            area.top(),
+            "home button hit rect must floor to area.top(): the former upward \
+             render nudge is now absorbed into the dot-space position instead \
+             of a separate render-only offset"
         );
     }
 
@@ -4134,6 +4325,35 @@ mod golden_fixture_tests {
                  is intentional (re-run the manual visual pass first)",
                 diff.mismatches.len(),
                 diff.dots_compared
+            );
+        }
+    }
+}
+
+/// b8-t9: enforces the 3 render-time nudge constants the `flex()` migration
+/// deleted (b8-t3/t4/t5) never come back — dot-native positioning must
+/// absorb such offsets into the computed `DotRect`, not a bolted-on
+/// constant.
+#[cfg(test)]
+mod nudge_constant_removal_tests {
+    /// Fragment-assembles each needle at runtime so this test's own source
+    /// text doesn't contain the identifiers literally (else it would find
+    /// its own mention and guard nothing).
+    #[test]
+    fn nudge_constants_absent_after_flex_migration() {
+        let src = include_str!("roster_manager.rs");
+        for (a, b) in [
+            ("ARROW_NUDGE_DOWN", "_DOTS"),
+            ("HOME_NUDGE_UP", "_DOTS"),
+            ("DOT_SLOT_DOWN", "_DOTS"),
+        ] {
+            let needle = format!("{a}{b}");
+            assert!(
+                !src.contains(&needle),
+                "{needle} was reintroduced — the flex() migration deleted this \
+                 render-time nudge (spec 40, b8-t3/t4/t5); dot-native \
+                 positioning must absorb the offset into the computed DotRect, \
+                 not a bolted-on constant"
             );
         }
     }
