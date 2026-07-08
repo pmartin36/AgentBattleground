@@ -551,7 +551,12 @@ pub fn demo_events() -> Vec<Event> {
 /// animate in lockstep).
 pub const PIECE_STAGGER: std::time::Duration = std::time::Duration::from_millis(37);
 /// `sprite_base_dot_rows` = `camera.scale_dots * SPRITE_DOT_RATIO`, rounded.
-pub const SPRITE_DOT_RATIO: f32 = 1.2;
+/// Kept well under `1.0` because the binding constraint is sprite WIDTH, not
+/// height: idle GIFs are not square (widest real asset, frost_lizard, is
+/// ~1.58:1 width:height), and width is derived downstream from
+/// `base_dot_rows` by the raster aspect formula. `0.6` keeps both the height
+/// and the width of every idle sprite inside its own square-in-dots cell.
+pub const SPRITE_DOT_RATIO: f32 = 0.6;
 /// Team A tint (pale gold).
 pub const TEAM_A_COLOR: Rgba = Rgba::rgb(0xff, 0xe8, 0xb0);
 /// Team B tint (pale mint).
@@ -676,7 +681,7 @@ pub struct BattleViewerTuning {
 impl Default for BattleViewerTuning {
     fn default() -> Self {
         Self {
-            grid_dim_alpha: 0x60,
+            grid_dim_alpha: 0x28,
             depth_scale_per_world_unit: 0.05,
             depth_scale_min: 0.6,
             grid_taper_per_world_unit: 0.06,
@@ -807,26 +812,30 @@ impl BattleViewer {
         alpha
     }
 
-    /// b7-t1: one team-colored `rasterize_shape(ShapeKind::Ellipse, ...)`
+    /// b7-t1/b1-t4: one team-colored `rasterize_shape(ShapeKind::Ring, ...)`
     /// buffer per drawable piece, same iteration order `build_draws` shares
     /// (`drawable_pieces`). Width is `geom.cell_width_cols * 2` dots; height
     /// squashes by the camera's elevation sine (`k`) so a low, oblique camera
-    /// flattens the ellipse while Top-Down (`k=1`) keeps it round.
+    /// flattens the annulus while Top-Down (`k=1`) keeps it round. The Ring's
+    /// exact center is the alpha-0 hole; alpha peaks in a mid band and falls
+    /// back to 0 at the outer edge.
     fn shadow_buffers(&self, geom: &BoardGeometry) -> Vec<DotBuffer> {
         let k = geom.camera.oblique().elevation_deg.to_radians().sin();
         // `cell_width_cols` is always `2 * cell_height_rows` (even), so a bare
         // `* 2` width is always even and `rasterize_shape`'s center
-        // (`(width-1)/2`) never lands on an integer dot — no dot can ever
-        // reach the shape's true center/full alpha. `+ 1` (spec: "roughly"
+        // (`(width-1)/2`) never lands on an integer dot. `+ 1` (spec: "roughly"
         // `cell_width_cols * 2` dots wide) keeps the width odd so the
-        // geometric center always coincides with a real dot.
+        // geometric center always coincides with a real dot — for `Ring` that
+        // center dot is the alpha-0 hole. `| 1` forces height odd the same way
+        // (a no-op for Top-Down, where `k == 1` and `h == w` already), so the
+        // hole lands on a real dot at every preset's squash factor.
         let w = geom.cell_width_cols as usize * 2 + 1;
-        let h = ((w as f32) * k).round().max(1.0) as usize;
+        let h = ((((w as f32) * k).round().max(1.0)) as usize) | 1;
         self.drawable_pieces()
             .map(|(p, _)| {
                 let alpha = self.shadow_alpha(p.index);
                 let col = Rgba::new(p.color.r, p.color.g, p.color.b, (255.0 * alpha).round() as u8);
-                rasterize_shape(ShapeKind::Ellipse, w, h, col)
+                rasterize_shape(ShapeKind::Ring, w, h, col)
             })
             .collect()
     }
@@ -1319,6 +1328,25 @@ mod draw_board_lines_tests {
         let blended = Rgba::new(0xFF, 0xFF, 0xFF, BattleViewerTuning::default().grid_dim_alpha)
             .over(Rgba::rgb(0, 0, 0));
         Color::Rgb(blended.r, blended.g, blended.b)
+    }
+
+    /// DELIVERABLE (b1-t2): the real production blend (`Rgba::new(0xFF,0xFF,
+    /// 0xFF,tuning.grid_dim_alpha).over(black)`, exactly what `draw_grid`
+    /// composites over an empty board cell) must read as *meaningfully*
+    /// dimmer than opaque `GRID_LINE_COLOR` — brightness sum <= ~60% of
+    /// GRID_LINE_COLOR's. This is an invariant on the ratio, never a pinned
+    /// "the new alpha is X" value (feature guardrail: no pinned-constant
+    /// tests for visual-tuning values).
+    #[test]
+    fn dim_grid_reads_meaningfully_dimmer_than_opaque() {
+        let dim = Rgba::new(0xFF, 0xFF, 0xFF, BattleViewerTuning::default().grid_dim_alpha)
+            .over(Rgba::rgb(0, 0, 0));
+        let dim_sum = dim.r as u32 + dim.g as u32 + dim.b as u32;
+        let opaque_sum = GRID_LINE_COLOR.r as u32 + GRID_LINE_COLOR.g as u32 + GRID_LINE_COLOR.b as u32;
+        assert!(
+            dim_sum * 100 <= opaque_sum * 60,
+            "dim grid brightness sum {dim_sum} must be <= 60% of opaque brightness sum {opaque_sum}"
+        );
     }
 
     #[test]
@@ -1862,6 +1890,42 @@ mod piece_render_tests {
             at_scale(BattleCamera::over_shoulder_preset, 5.0).sprite_scale_dots(),
             5.0
         );
+    }
+
+    /// b1-t3 DELIVERABLE: a Top-Down piece sprite's rasterized dot footprint
+    /// (height AND width) must be contained within its own cell's dot bounds.
+    /// At today's `SPRITE_DOT_RATIO = 1.2` this overflows (height already
+    /// exceeds `cell_height_rows*4`, and width overflows further for
+    /// non-square idle GIFs, e.g. frost_lizard's ~1.58 aspect) — this is an
+    /// invariant on containment, never a pinned "ratio is now X" value.
+    #[test]
+    fn top_down_sprite_footprint_fits_cell() {
+        let area = Rect::new(0, 0, 80, 40);
+        let geom = board_geometry(area, BattleCamera::top_down_preset(), BattleViewerTuning::default());
+        let cell_h = geom.cell_height_rows as u32 * 4;
+        let cell_w = geom.cell_width_cols as u32 * 2;
+        let base = sprite_base_dot_rows(&geom.camera);
+
+        assert!(
+            base <= cell_h,
+            "sprite_base_dot_rows ({base}) must fit within the cell's dot height ({cell_h}) \
+             at SPRITE_DOT_RATIO={SPRITE_DOT_RATIO}"
+        );
+
+        for creature in crate::creatures::all() {
+            let sprite = creature
+                .animation(AnimationKind::Idle)
+                .expect("every creature must have an Idle animation registered");
+            let buf = sprite.rasterize_at(Duration::ZERO, &Transform::default(), base);
+            assert!(
+                buf.rows() as u32 <= cell_h && buf.cols() as u32 <= cell_w,
+                "{}'s idle sprite footprint ({}x{} dots) must fit within the cell's dot bounds \
+                 ({cell_w}x{cell_h}) at SPRITE_DOT_RATIO={SPRITE_DOT_RATIO} (base_dot_rows={base})",
+                creature.name(),
+                buf.cols(),
+                buf.rows(),
+            );
+        }
     }
 }
 
@@ -3175,36 +3239,66 @@ mod contact_shadow_tests {
         );
     }
 
-    /// PUBLIC_SURFACE case 1 (shadow_buffers, standing-still): the shadow
-    /// ellipse's center dot alpha must equal the piece's own `color.a`
-    /// (full-alpha shadow) when no event fades it. This is the "team color
-    /// now lives on the shadow" contract that replaces the removed
-    /// `render_reflects_mutated_stored_piece_color` sprite-tint assertion
-    /// (b7-t1 detints the piece sprite).
+    /// Helper (b1-t4): scan `buf` for its highest-alpha `Lit` dot, returning
+    /// `(col, row, color)`. Used to locate `ShapeKind::Ring`'s off-center
+    /// peak band without pinning `RING_PEAK` or any exact alpha value.
+    fn max_alpha_dot(buf: &DotBuffer) -> (usize, usize, Rgba) {
+        let mut best: Option<(usize, usize, Rgba)> = None;
+        for row in 0..buf.rows() {
+            for col in 0..buf.cols() {
+                if let Dot::Lit(c) = buf.get(col, row) {
+                    if best.is_none_or(|(_, _, b)| c.a > b.a) {
+                        best = Some((col, row, c));
+                    }
+                }
+            }
+        }
+        best.expect("expected at least one Lit dot in the shadow buffer")
+    }
+
+    /// PUBLIC_SURFACE case 1 (shadow_buffers, all presets — b1-t4): the
+    /// shadow buffer is a team-colored `ShapeKind::Ring` — the exact
+    /// geometric-center dot is the transparent hole (never `Lit`), and the
+    /// buffer's max-alpha dot sits off-center in the mid band. Replaces
+    /// `shadow_center_dot_full_alpha_when_standing_still`'s Ellipse-shaped
+    /// contract (full alpha at dead center), which no longer holds once the
+    /// shadow's primitive swaps from `Ellipse` to `Ring`.
     #[test]
-    fn shadow_center_dot_full_alpha_when_standing_still() {
+    fn shadow_is_ring_signature_all_presets() {
         let scene = BattleViewer::default();
         let area = Rect::new(0, 0, 100, 50);
-        let geom = board_geometry(area, BattleCamera::sideline_preset(), BattleViewerTuning::default());
-
-        let bufs = scene.shadow_buffers(&geom);
-        assert!(!bufs.is_empty(), "expected at least one shadow buffer for a drawable piece");
-        let buf = &bufs[0];
-        let (cx, cy) = (buf.cols() / 2, buf.rows() / 2);
-        match buf.get(cx, cy) {
-            Dot::Lit(c) => assert_eq!(
-                c.a, scene.pieces[0].color.a,
-                "standing-still shadow center dot alpha must equal the piece's own color.a"
-            ),
-            Dot::Transparent => panic!("expected the shadow ellipse's center dot to be Lit"),
+        for camera in [
+            BattleCamera::top_down_preset(),
+            BattleCamera::sideline_preset(),
+            BattleCamera::over_shoulder_preset(),
+        ] {
+            let geom = board_geometry(area, camera, BattleViewerTuning::default());
+            let bufs = scene.shadow_buffers(&geom);
+            assert!(!bufs.is_empty(), "expected at least one shadow buffer for a drawable piece");
+            let buf = &bufs[0];
+            let (cx, cy) = (buf.cols() / 2, buf.rows() / 2);
+            assert_eq!(
+                buf.get(cx, cy),
+                Dot::Transparent,
+                "Ring's exact geometric center must be the transparent hole, not Lit"
+            );
+            let (peak_col, peak_row, peak) = max_alpha_dot(buf);
+            assert!(peak.a > 0, "expected the shadow's peak dot to be Lit with alpha > 0");
+            assert_ne!(
+                (peak_col, peak_row),
+                (cx, cy),
+                "the max-alpha dot must be off-center (the mid band), not the hole"
+            );
         }
     }
 
-    /// Replaces `render_reflects_mutated_stored_piece_color` (b3-t2): after
-    /// this task detints the piece sprite, team color lives ONLY on the
-    /// shadow — mutating a stored `piece.color` must change what
-    /// `shadow_buffers` bakes into the ellipse's center dot RGB, proving the
-    /// shadow reads live stored state instead of a fixed team default.
+    /// Replaces `render_reflects_mutated_stored_piece_color` (b3-t2), rewritten
+    /// for `ShapeKind::Ring` (b1-t4): after this task detints the piece
+    /// sprite, team color lives ONLY on the shadow — mutating a stored
+    /// `piece.color` must change what `shadow_buffers` bakes into the Ring's
+    /// off-center peak dot RGB (the center is now the transparent hole and
+    /// can carry no RGB), proving the shadow reads live stored state instead
+    /// of a fixed team default.
     #[test]
     fn shadow_buffers_reflect_mutated_stored_piece_color() {
         let mut scene = BattleViewer::default();
@@ -3218,14 +3312,17 @@ mod contact_shadow_tests {
         assert!(!bufs.is_empty(), "expected at least one shadow buffer for a drawable piece");
         let buf = &bufs[0];
         let (cx, cy) = (buf.cols() / 2, buf.rows() / 2);
-        match buf.get(cx, cy) {
-            Dot::Lit(c) => assert_eq!(
-                (c.r, c.g, c.b),
-                (11, 22, 33),
-                "shadow center dot RGB must reflect the mutated stored piece.color, not a team default"
-            ),
-            Dot::Transparent => panic!("expected the shadow ellipse's center dot to be Lit"),
-        }
+        assert_eq!(
+            buf.get(cx, cy),
+            Dot::Transparent,
+            "Ring's exact geometric center must be the transparent hole and can carry no RGB"
+        );
+        let (_, _, peak) = max_alpha_dot(buf);
+        assert_eq!(
+            (peak.r, peak.g, peak.b),
+            (11, 22, 33),
+            "shadow's off-center peak dot RGB must reflect the mutated stored piece.color, not a team default"
+        );
     }
 
     /// PUBLIC_SURFACE case 4: the piece's own `SpriteDraw.tint` must be
@@ -3275,7 +3372,7 @@ mod contact_shadow_tests {
                 matches!(shadow.content, SpriteContent::Prerasterized(_)),
                 "shadow entry must be SpriteContent::Prerasterized"
             );
-            assert_eq!(shadow.tint, None, "shadow entry's tint must be None (color is baked into the ellipse)");
+            assert_eq!(shadow.tint, None, "shadow entry's tint must be None (color is baked into the shadow shape)");
             assert_eq!(
                 shadow.translate, piece.translate,
                 "shadow must share the very next entry's (its own piece's) translate"
@@ -3795,11 +3892,13 @@ mod inspectable_tests {
     }
 
     /// DELIVERABLE (b2-t1): `BattleViewerTuning::default()` returns exactly
-    /// the 6 spec Decision 1 values.
+    /// the spec Decision 1 values. `grid_dim_alpha` is excluded (b1-t2): it
+    /// is a visual-tuning value chosen by rendering, guarded instead by
+    /// `dim_grid_reads_meaningfully_dimmer_than_opaque`'s invariant, never a
+    /// pinned constant here.
     #[test]
     fn battle_viewer_tuning_default_matches_spec_values() {
         let tuning = BattleViewerTuning::default();
-        assert_eq!(tuning.grid_dim_alpha, 0x60);
         assert_eq!(tuning.depth_scale_per_world_unit, 0.05);
         assert_eq!(tuning.depth_scale_min, 0.6);
         assert_eq!(tuning.grid_taper_per_world_unit, 0.06);
@@ -3858,7 +3957,7 @@ mod inspectable_tests {
         );
         assert_eq!(
             tuning.get("grid_dim_alpha").and_then(|v| v.as_u64()),
-            Some(0x60),
+            Some(u64::from(BattleViewerTuning::default().grid_dim_alpha)),
             "grid_dim_alpha must be untouched by a depth_scale_min patch"
         );
     }
@@ -3925,11 +4024,15 @@ mod inspectable_tests {
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests: Top-Down golden fixture lock (b0-t1)
 //
-// Freezes Top-Down's current rendered output BEFORE any other task in this
-// feature touches `board_geometry`/`place`/`BattleCamera`/shadow/sprite-ratio
-// code. Every later task in this feature that touches shared code must
-// re-assert byte-identity against this same fixture for Top-Down. Mirrors
-// `main_hub.rs`'s `golden_fixture_tests` precedent one-for-one.
+// Locks Top-Down's rendered output for the camera rework: Top-Down's
+// PROJECTION (`board_geometry`/`place`/`BattleCamera`'s formula) is frozen for
+// the whole feature. Top-Down's rendered PIXELS are legitimately re-baselined
+// at b1's two intentional global visual-tuning changes (b1-t3 sprite-dot
+// ratio, b1-t4 shadow shape) — both repaint Top-Down without touching its
+// projection. From b2 onward this fixture is locked byte-for-byte: every task
+// that touches shared code must re-assert byte-identity against it for
+// Top-Down, and any divergence is a regression. Mirrors `main_hub.rs`'s
+// `golden_fixture_tests` precedent one-for-one.
 // ─────────────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod golden_fixture_tests {
@@ -3940,11 +4043,13 @@ mod golden_fixture_tests {
     use engine_render::diff_dots;
 
     /// Top-Down, demo `pieces()` layout, `elapsed = 0.0`, rendered 80x40.
-    /// Must dot-for-dot match the committed pre-rework fixture. Run with
-    /// `UPDATE_BATTLE_VIEWER_FIXTURES=1` to (re)generate the `.fixture` +
-    /// `.preview.txt` from the current render — only do this before any
-    /// shared-code task lands, and only after a manual visual pass over the
-    /// preview (see `crates/game/tests/fixtures/battle_viewer/README.md`).
+    /// Must dot-for-dot match the committed baseline fixture (re-baselined at
+    /// b1-t3 sprite-ratio and b1-t4 shadow-shape; locked byte-for-byte from b2
+    /// onward). Run with `UPDATE_BATTLE_VIEWER_FIXTURES=1` to (re)generate the
+    /// `.fixture` + `.preview.txt` from the current render — only do this at
+    /// one of the two designated b1 re-baseline points, and only after a
+    /// manual visual pass over the preview (see
+    /// `crates/game/tests/fixtures/battle_viewer/README.md`).
     #[test]
     fn top_down_golden_matches_baseline() {
         let generate = std::env::var("UPDATE_BATTLE_VIEWER_FIXTURES").is_ok();
@@ -3984,10 +4089,12 @@ mod golden_fixture_tests {
         assert!(
             diff.is_match(),
             "Top-Down's current render diverges from the committed golden \
-             fixture ({} dot mismatch(es) of {} compared); no task in this \
-             feature may change Top-Down's rendered dots — regenerate with \
-             UPDATE_BATTLE_VIEWER_FIXTURES=1 only if this is bucket b0 \
-             itself (re-run the manual visual pass first)",
+             fixture ({} dot mismatch(es) of {} compared); Top-Down's \
+             projection is frozen for this feature and no task from b2 \
+             onward may change its rendered dots — regenerate with \
+             UPDATE_BATTLE_VIEWER_FIXTURES=1 only at a designated b1 \
+             re-baseline point (b1-t3 sprite ratio, b1-t4 shadow shape), \
+             and only after re-running the manual visual pass",
             diff.mismatches.len(),
             diff.dots_compared
         );

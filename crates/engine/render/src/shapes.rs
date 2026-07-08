@@ -1,32 +1,41 @@
 //! Shape rasterization for the braille dot pipeline — soft-edged primitive
-//! shapes (currently just an ellipse) rendered into a fresh [`DotBuffer`].
+//! shapes (an ellipse and an annulus/ring) rendered into a fresh
+//! [`DotBuffer`].
 
 use crate::dots::{Dot, DotBuffer};
 use engine_core::color::Rgba;
 
-/// The kind of shape to rasterize. Single-variant extension point — add
-/// variants only when a real caller needs them.
+/// The kind of shape to rasterize. Extension point — add variants only when
+/// a real caller needs them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShapeKind {
     Ellipse,
+    Ring,
 }
 
+/// Normalized radius (`0 < PEAK < 1`) at which `ShapeKind::Ring`'s alpha
+/// profile peaks. A rendering-tuned constant, not a design pin — see
+/// `specs/41-battle-viewer-perspective-camera-rework.md`.
+const RING_PEAK: f32 = 0.5;
+
 /// Rasterize `kind` into a fresh `width_dots × height_dots` [`DotBuffer`],
-/// with `color`'s RGB held constant and alpha falling off radially from the
-/// center (`color.a`) to the edge (`0`) via a linear `1 - d` profile, where
-/// `d` is the normalized distance from center (`d >= 1.0` at/beyond the
-/// outermost dot). Dots whose scaled alpha rounds to `0` are emitted as
-/// `Dot::Transparent` rather than `Lit(a=0)`.
+/// with `color`'s RGB held constant and alpha varying radially by `kind`'s
+/// profile, where `d` is the normalized distance from center (`d >= 1.0` at/
+/// beyond the outermost dot):
+/// - `Ellipse`: alpha falls off linearly from the center (`color.a`) to the
+///   edge (`0`) via `1 - d`.
+/// - `Ring`: an annulus — alpha is `0` at the exact center (the hole), rises
+///   to the peak (`color.a`) at `d == RING_PEAK`, then falls back to `0` at
+///   the outer edge (`d >= 1.0`).
+///
+/// Dots whose scaled alpha rounds to `0` are emitted as `Dot::Transparent`
+/// rather than `Lit(a=0)`.
 pub fn rasterize_shape(
     kind: ShapeKind,
     width_dots: usize,
     height_dots: usize,
     color: Rgba,
 ) -> DotBuffer {
-    match kind {
-        ShapeKind::Ellipse => {}
-    }
-
     let mut buf = DotBuffer::new(width_dots, height_dots);
     if width_dots == 0 || height_dots == 0 {
         return buf;
@@ -47,7 +56,18 @@ pub fn rasterize_shape(
                 continue; // already Transparent
             }
 
-            let a = (color.a as f32 * (1.0 - d)).round() as u8;
+            let alpha_factor = match kind {
+                ShapeKind::Ellipse => 1.0 - d,
+                ShapeKind::Ring => {
+                    if d <= RING_PEAK {
+                        d / RING_PEAK
+                    } else {
+                        (1.0 - d) / (1.0 - RING_PEAK)
+                    }
+                }
+            };
+
+            let a = (color.a as f32 * alpha_factor).round() as u8;
             if a == 0 {
                 continue; // already Transparent
             }
@@ -196,6 +216,155 @@ mod tests {
     #[test]
     fn degenerate_zero_width_no_panic() {
         let buf = rasterize_shape(ShapeKind::Ellipse, 0, 5, Rgba::new(255, 255, 255, 255));
+        assert_eq!(buf.cols(), 0, "zero width_dots must produce cols()==0");
+        assert_eq!(buf.rows(), 5, "height_dots must still be honored");
+    }
+
+    // ── Ring ────────────────────────────────────────────────────────────────
+    // `Ring` is an annulus: alpha 0 at the exact center (the hole), 0 at/
+    // beyond the outer edge, peaking somewhere in a mid band. This is the
+    // opposite of `Ellipse`'s center-max-alpha profile, so these tests
+    // deliberately do NOT reuse Ellipse's center/monotonic-from-center
+    // assertions.
+
+    fn ring_alpha_at(buf: &DotBuffer, col: usize, row: usize) -> u8 {
+        match buf.get(col, row) {
+            Dot::Lit(c) => c.a,
+            Dot::Transparent => 0,
+        }
+    }
+
+    #[test]
+    fn ring_dims_match_request() {
+        let buf = rasterize_shape(ShapeKind::Ring, 8, 4, Rgba::new(255, 0, 0, 200));
+        assert_eq!(buf.cols(), 8, "cols must equal width_dots");
+        assert_eq!(buf.rows(), 4, "rows must equal height_dots");
+    }
+
+    #[test]
+    fn ring_center_is_transparent() {
+        let color = Rgba::new(10, 20, 30, 200);
+        let buf = rasterize_shape(ShapeKind::Ring, 9, 9, color);
+        let (cx, cy) = (4, 4); // (9-1)/2
+        assert_eq!(
+            buf.get(cx, cy),
+            Dot::Transparent,
+            "ring's exact center (the hole) must be Transparent, not max-alpha like Ellipse"
+        );
+    }
+
+    #[test]
+    fn ring_corners_are_transparent() {
+        let buf = rasterize_shape(ShapeKind::Ring, 9, 9, Rgba::new(255, 255, 255, 255));
+        let (last_col, last_row) = (buf.cols() - 1, buf.rows() - 1);
+        for (col, row) in [(0, 0), (last_col, 0), (0, last_row), (last_col, last_row)] {
+            assert_eq!(
+                buf.get(col, row),
+                Dot::Transparent,
+                "corner ({col},{row}) must be Transparent (at/beyond outer edge)"
+            );
+        }
+    }
+
+    #[test]
+    fn ring_edge_of_center_row_is_transparent() {
+        let buf = rasterize_shape(ShapeKind::Ring, 9, 9, Rgba::new(255, 255, 255, 255));
+        let center_row = 4; // (9-1)/2
+        assert_eq!(
+            buf.get(0, center_row),
+            Dot::Transparent,
+            "outermost dot on the center row must be Transparent"
+        );
+    }
+
+    /// The band peak must land strictly between the center column and the
+    /// edge column — neither at the center (that's the hole) nor at the
+    /// edge (that's outside the annulus).
+    #[test]
+    fn ring_peak_is_off_center() {
+        let color = Rgba::new(255, 255, 255, 255);
+        let buf = rasterize_shape(ShapeKind::Ring, 9, 9, color);
+        let center_row = 4;
+        let center_col = 4;
+        let last_col = buf.cols() - 1;
+
+        let (peak_col, peak_alpha) = (0..buf.cols())
+            .map(|col| (col, ring_alpha_at(&buf, col, center_row)))
+            .max_by_key(|&(_, a)| a)
+            .expect("center row has at least one dot");
+
+        assert_ne!(peak_col, center_col, "peak must not be at the center (that's the hole)");
+        assert_ne!(peak_col, 0, "peak must not be at the left edge");
+        assert_ne!(peak_col, last_col, "peak must not be at the right edge");
+        assert!(
+            peak_alpha > ring_alpha_at(&buf, center_col, center_row),
+            "peak alpha ({peak_alpha}) must exceed the center's alpha ({})",
+            ring_alpha_at(&buf, center_col, center_row)
+        );
+        assert!(
+            peak_alpha > ring_alpha_at(&buf, 0, center_row),
+            "peak alpha ({peak_alpha}) must exceed the edge's alpha"
+        );
+    }
+
+    /// From the peak column outward to the edge, alpha must be
+    /// monotonically non-increasing (Ring rises then falls — do not assert
+    /// monotonic-from-center like Ellipse's test, which would be false here).
+    #[test]
+    fn ring_monotonic_outward_from_peak() {
+        let color = Rgba::new(255, 255, 255, 255);
+        let buf = rasterize_shape(ShapeKind::Ring, 9, 9, color);
+        let center_row = 4;
+
+        let (peak_col, _) = (0..buf.cols())
+            .map(|col| (col, ring_alpha_at(&buf, col, center_row)))
+            .max_by_key(|&(_, a)| a)
+            .expect("center row has at least one dot");
+
+        let mut prev = ring_alpha_at(&buf, peak_col, center_row);
+        for col in (peak_col + 1)..buf.cols() {
+            let cur = ring_alpha_at(&buf, col, center_row);
+            assert!(
+                cur <= prev,
+                "alpha at col {col} ({cur}) must not exceed alpha at previous col ({prev}), moving outward from the peak"
+            );
+            prev = cur;
+        }
+    }
+
+    #[test]
+    fn ring_rgb_preserved() {
+        let color = Rgba::new(12, 34, 56, 255);
+        let buf = rasterize_shape(ShapeKind::Ring, 9, 9, color);
+        let center_row = 4;
+        let mut saw_lit = false;
+        for col in 0..buf.cols() {
+            if let Dot::Lit(c) = buf.get(col, center_row) {
+                saw_lit = true;
+                assert_eq!(c.r, color.r, "red must be preserved");
+                assert_eq!(c.g, color.g, "green must be preserved");
+                assert_eq!(c.b, color.b, "blue must be preserved");
+            }
+        }
+        assert!(saw_lit, "center row must contain at least one Lit dot (the band peak)");
+    }
+
+    #[test]
+    fn ring_degenerate_1x1_no_panic() {
+        let color = Rgba::new(1, 2, 3, 77);
+        let buf = rasterize_shape(ShapeKind::Ring, 1, 1, color);
+        assert_eq!(buf.cols(), 1);
+        assert_eq!(buf.rows(), 1);
+        assert_eq!(
+            buf.get(0, 0),
+            Dot::Transparent,
+            "1x1 buffer's sole dot is the center (the hole) — must be Transparent, unlike Ellipse"
+        );
+    }
+
+    #[test]
+    fn ring_degenerate_zero_width_no_panic() {
+        let buf = rasterize_shape(ShapeKind::Ring, 0, 5, Rgba::new(255, 255, 255, 255));
         assert_eq!(buf.cols(), 0, "zero width_dots must produce cols()==0");
         assert_eq!(buf.rows(), 5, "height_dots must still be honored");
     }
