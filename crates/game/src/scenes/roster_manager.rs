@@ -73,11 +73,6 @@ struct RosterLayout {
     name: Rect,
     level: Rect,
     stat_bar: Rect,
-    exhaustion: Rect,
-    /// Full ability + modifier list for the current creature (b2-t5), sitting
-    /// directly below `exhaustion` and sharing its column (the details panel,
-    /// RIGHT column of the body).
-    ability_list: Rect,
     sprite: Rect,
     dot_row: Rect,
 }
@@ -327,6 +322,122 @@ impl RosterManager {
         }
     }
 
+    /// Dot-precise geometry for the RIGHT column (exhaustion directly above
+    /// ability_list, the details panel) — factored out of `layout()` into
+    /// its own function so `details_panel_rects` can draw the panel's
+    /// border at genuine dot precision, instead of re-deriving dots from
+    /// `RosterLayout`'s already-cell-floored `exhaustion`/`ability_list`
+    /// fields (which have permanently lost any sub-cell remainder the
+    /// instant `layout()` calls `.to_cell_rect()` on them — re-expanding a
+    /// floored cell value back into dots via `cell_rect_to_dots` cannot
+    /// recover what `.to_cell_rect()` already threw away). This was the
+    /// actual cause of the details panel's border rendering 2 dots off
+    /// from `stat_bar`'s — not a wrong lift/growth amount.
+    ///
+    /// Width = `area.width - left_w`, right edge inset `EDGE_MARGIN` from
+    /// `area`'s edge. Its TOP is pushed below the home button plus a
+    /// deliberate `DETAILS_TOP_GAP` so the panel never jams against the
+    /// home button in the shared top-right column; it still bottoms out at
+    /// `dot_row`'s top. Two further, distinct adjustments compose on top of
+    /// that: `DETAILS_PANEL_TOP_LIFT_DOTS` is a pure translate (shifts the
+    /// whole container, top AND bottom, up by that amount), then
+    /// `DETAILS_PANEL_TOP_GROWTH_DOTS` is a height-only, non-aspect-
+    /// preserving grow anchored at the already-translated top, so only the
+    /// top moves the extra distance and the bottom stays exactly where the
+    /// translate left it.
+    fn right_col_dots(area: Rect) -> [engine_render::DotRect; 2] {
+        let area_dots = Self::cell_rect_to_dots(area);
+
+        let top_bands = engine_render::flex(
+            area_dots,
+            engine_render::FlexStyle {
+                direction: engine_render::Direction::Column,
+                justify_content: engine_render::Justify::Start,
+                align_items: engine_render::Align::Stretch,
+                gap: 0,
+            },
+            &[
+                engine_render::FlexChild {
+                    basis: engine_render::Basis::Fixed(Self::HEADER_GAP_H as i32 * 4),
+                    grow: 0.0,
+                    shrink: 0.0,
+                },
+                engine_render::FlexChild {
+                    basis: engine_render::Basis::Fixed(Self::NAME_H as i32 * 4),
+                    grow: 0.0,
+                    shrink: 0.0,
+                },
+                engine_render::FlexChild {
+                    basis: engine_render::Basis::Fixed(Self::LEVEL_H as i32 * 4),
+                    grow: 0.0,
+                    shrink: 0.0,
+                },
+                engine_render::FlexChild { basis: engine_render::Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
+                engine_render::FlexChild {
+                    basis: engine_render::Basis::Fixed(Self::DOT_H as i32 * 4),
+                    grow: 0.0,
+                    shrink: 0.0,
+                },
+            ],
+        );
+        let dot_row = top_bands[4].to_cell_rect();
+
+        let left_w = area.width * 2 / 3;
+        let details_w = area.width.saturating_sub(left_w);
+        let home_bottom = area
+            .y
+            .saturating_add(Self::EDGE_MARGIN)
+            .saturating_add(Self::HOME_H);
+        let details_top = home_bottom
+            .saturating_add(Self::DETAILS_TOP_GAP)
+            .min(dot_row.y);
+
+        let details_x_dots = engine_render::flex(
+            area_dots.inset(0, (Self::EDGE_MARGIN + Self::DETAILS_LEFT_SHIFT) as i32 * 2, 0, 0),
+            engine_render::FlexStyle {
+                direction: engine_render::Direction::Row,
+                justify_content: engine_render::Justify::End,
+                align_items: engine_render::Align::Start,
+                gap: 0,
+            },
+            &[engine_render::FlexChild {
+                basis: engine_render::Basis::Fixed(details_w as i32 * 2),
+                grow: 0.0,
+                shrink: 0.0,
+            }],
+        )[0]
+        .x;
+
+        let body_h_dots = dot_row.y.saturating_sub(details_top) as i32 * 4;
+        let body_style = engine_render::FlexStyle {
+            direction: engine_render::Direction::Column,
+            justify_content: engine_render::Justify::Start,
+            align_items: engine_render::Align::Stretch,
+            gap: 0,
+        };
+
+        let right_col = engine_render::flex(
+            engine_render::DotRect {
+                x: details_x_dots,
+                y: details_top as i32 * 4
+                    - Self::DETAILS_PANEL_TOP_LIFT_DOTS
+                    - Self::DETAILS_PANEL_TOP_GROWTH_DOTS,
+                w: details_w as i32 * 2,
+                h: body_h_dots + Self::DETAILS_PANEL_TOP_GROWTH_DOTS,
+            },
+            body_style,
+            &[
+                engine_render::FlexChild {
+                    basis: engine_render::Basis::Fixed(Self::PANEL_H as i32 * 4),
+                    grow: 0.0,
+                    shrink: 0.0,
+                },
+                engine_render::FlexChild { basis: engine_render::Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
+            ],
+        );
+        [right_col[0], right_col[1]]
+    }
+
     /// Splits `area` into the 7 named panel rects (b1-t1, research.md
     /// blueprint), top to bottom: `name`, `level` (tight under `name`, no
     /// gap), a blank `HEADER_GAP_H` row, then the body, then `dot_row`. The
@@ -393,7 +504,6 @@ impl RosterManager {
         // it still bottoms out at dot_row's top, so this shrinks the panel's
         // height rather than pushing anything off-screen.
         let left_w = area.width * 2 / 3;
-        let details_w = area.width.saturating_sub(left_w);
         let home_bottom = area
             .y
             .saturating_add(Self::EDGE_MARGIN)
@@ -401,26 +511,6 @@ impl RosterManager {
         let details_top = home_bottom
             .saturating_add(Self::DETAILS_TOP_GAP)
             .min(dot_row.y);
-
-        // Details panel horizontal placement: inset `area` on the right by
-        // `EDGE_MARGIN + DETAILS_LEFT_SHIFT`, then a Row `flex()` with
-        // `Justify::End` and a single `Fixed(details_w*2)` child yields the
-        // panel's x in dots.
-        let details_x_dots = engine_render::flex(
-            area_dots.inset(0, (Self::EDGE_MARGIN + Self::DETAILS_LEFT_SHIFT) as i32 * 2, 0, 0),
-            engine_render::FlexStyle {
-                direction: engine_render::Direction::Row,
-                justify_content: engine_render::Justify::End,
-                align_items: engine_render::Align::Start,
-                gap: 0,
-            },
-            &[engine_render::FlexChild {
-                basis: engine_render::Basis::Fixed(details_w as i32 * 2),
-                grow: 0.0,
-                shrink: 0.0,
-            }],
-        )[0]
-        .x;
 
         let body_h_dots = dot_row.y.saturating_sub(details_top) as i32 * 4;
         let body_style = engine_render::FlexStyle {
@@ -460,44 +550,18 @@ impl RosterManager {
         let stat_bar = left_col[0].to_cell_rect();
         let sprite = left_col[1].to_cell_rect();
 
-        // RIGHT column: exhaustion directly above ability_list (the details
-        // panel), same split shape as the LEFT column. Two DISTINCT
-        // adjustments to its top, composed: DETAILS_PANEL_TOP_LIFT_DOTS is a
-        // pure translate (shifts the whole container, top AND bottom, up by
-        // that amount), then DETAILS_PANEL_TOP_GROWTH_DOTS is a height-only,
-        // non-aspect-preserving grow anchored at the (already-translated)
-        // top, so only the top moves the extra distance and the bottom
-        // stays exactly where the translate left it. The two must sum to
-        // STAT_BAR_TOP_LIFT_CELLS*4 dots for the panel's top to land exactly
-        // on stat_bar's new top (see left_col above), not approximately.
-        let right_col = engine_render::flex(
-            engine_render::DotRect {
-                x: details_x_dots,
-                y: details_top as i32 * 4
-                    - Self::DETAILS_PANEL_TOP_LIFT_DOTS
-                    - Self::DETAILS_PANEL_TOP_GROWTH_DOTS,
-                w: details_w as i32 * 2,
-                h: body_h_dots + Self::DETAILS_PANEL_TOP_GROWTH_DOTS,
-            },
-            body_style,
-            &[
-                engine_render::FlexChild {
-                    basis: engine_render::Basis::Fixed(Self::PANEL_H as i32 * 4),
-                    grow: 0.0,
-                    shrink: 0.0,
-                },
-                engine_render::FlexChild { basis: engine_render::Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
-            ],
-        );
-        let exhaustion = right_col[0].to_cell_rect();
-        let ability_list = right_col[1].to_cell_rect();
-
+        // RIGHT column (exhaustion/ability_list, the details panel): NOT
+        // computed here — `RosterLayout` no longer carries cell-floored
+        // copies of them (nothing in production code read them; the real
+        // consumer, `details_panel_rects`, calls `Self::right_col_dots`
+        // directly to get dot precision `layout()`'s own `.to_cell_rect()`
+        // calls would throw away — see `right_col_dots`'s doc comment).
+        // Callers needing these two rects at cell precision call
+        // `Self::right_col_dots(area)` and `.to_cell_rect()` themselves.
         RosterLayout {
             name,
             level,
             stat_bar,
-            exhaustion,
-            ability_list,
             sprite,
             dot_row,
         }
@@ -775,26 +839,47 @@ impl RosterManager {
         Self::home_dot_rect(area).to_cell_rect()
     }
 
+    /// Cell-space view of `right_col_dots(area)[0]` (`exhaustion`), for
+    /// tests only — production code that needs dot precision calls
+    /// `right_col_dots` directly instead (see its doc comment).
+    #[cfg(test)]
+    fn exhaustion_rect(area: Rect) -> Rect {
+        Self::right_col_dots(area)[0].to_cell_rect()
+    }
+
+    /// Cell-space view of `right_col_dots(area)[1]` (`ability_list`), for
+    /// tests only — production code that needs dot precision calls
+    /// `right_col_dots` directly instead (see its doc comment).
+    #[cfg(test)]
+    fn ability_list_rect(area: Rect) -> Rect {
+        Self::right_col_dots(area)[1].to_cell_rect()
+    }
+
     /// Details-panel geometry (b1-t5): `(border, ex_text, ability_text)`.
-    /// `border` is the 1-cell-perimeter rect around the union of
-    /// `layout(area).exhaustion` and `.ability_list` (they share x/width and
-    /// are stacked contiguously in y, so the union is exact without needing
-    /// `Rect::union`). The text rects are inset 1 cell off every bordered
-    /// edge — there is NO border between exhaustion and ability_list (they
-    /// share an interior boundary), so `ability_text` keeps its top edge
-    /// un-inset. Sole source of this geometry; `render()` and tests both
-    /// call this rather than re-deriving it.
-    fn details_panel_rects(area: Rect) -> (Rect, Rect, Rect) {
-        let l = Self::layout(area);
-        let ex_dots = Self::cell_rect_to_dots(l.exhaustion);
-        let ab_dots = Self::cell_rect_to_dots(l.ability_list);
+    /// `border` is the DOT-PRECISE (not cell-floored — see `draw_dot_border`)
+    /// 1-cell-perimeter rect around the union of `right_col_dots(area)`'s
+    /// two elements (they share x/width and are stacked contiguously in y,
+    /// so the union is exact without needing `Rect::union`) — calls
+    /// `right_col_dots` directly, NOT `layout(area).exhaustion`/
+    /// `.ability_list`, which are already cell-floored and cannot recover
+    /// the sub-cell precision `draw_dot_border` needs (see
+    /// `right_col_dots`'s doc comment). The text rects are inset 1 cell off
+    /// every bordered edge — there is NO border between exhaustion and
+    /// ability_list (they share an interior boundary), so `ability_text`
+    /// keeps its top edge un-inset. Sole source of this geometry; `render()`
+    /// and tests both call this rather than re-deriving it.
+    fn details_panel_rects(area: Rect) -> (engine_render::DotRect, Rect, Rect) {
+        let [ex_dots, ab_dots] = Self::right_col_dots(area);
         // `border` is a union (they share x/width and are y-contiguous), not
         // an inset — no negative-inset API, so build it via struct-update.
+        // Deliberately NOT `.to_cell_rect()`'d here — `draw_dot_border` now
+        // consumes this at dot precision directly (see its doc comment for
+        // why flooring it here would silently re-introduce the bug where
+        // this panel's border landed 2 dots off from stat_bar's).
         let border = engine_render::DotRect {
             h: ex_dots.h + ab_dots.h,
             ..ex_dots
-        }
-        .to_cell_rect();
+        };
         // 1 cell L/R, 1 cell off the TOP border only — exhaustion/ability
         // share an un-bordered interior boundary, so no bottom inset.
         let ex_text = ex_dots.inset(2, 2, 4, 0).to_cell_rect();
@@ -1326,16 +1411,38 @@ impl RosterManager {
     /// Shared by b1-t5 (details panel) and formerly the stat-bar outlines —
     /// every bordered element gets the SAME thickness/chamfer via
     /// `draw_dot_box`. `FRAME_PANEL` MUST NOT be used for this.
-    fn draw_dot_border(buf: &mut Buffer, rect: Rect, color: engine_core::color::Rgba) {
-        let dot_cols = rect.width as usize * 2;
-        let dot_rows = rect.height as usize * 4;
-        if dot_cols == 0 || dot_rows == 0 {
+    /// `rect`'s position and size are honored at DOT precision, not floored
+    /// to the nearest cell first — the same sub-cell placement technique
+    /// `render_sprite` uses: offset the raw dots into a buffer sized to
+    /// include the sub-cell remainder, convert once. Without this, a
+    /// caller could compute a dot-precise `DotRect` and still have the
+    /// visible border land on the wrong dot row, because this function
+    /// would silently floor it to the nearest cell — exactly the bug that
+    /// made the details panel's border 2 dots off from `stat_bar`'s.
+    fn draw_dot_border(buf: &mut Buffer, rect: engine_render::DotRect, color: engine_core::color::Rgba) {
+        let (dot_cols, dot_rows) = (rect.w, rect.h);
+        if dot_cols <= 0 || dot_rows <= 0 {
             return;
         }
-        let mut dots = DotBuffer::new(dot_cols, dot_rows);
-        Self::draw_dot_box(&mut dots, 0, 0, dot_cols - 1, dot_rows - 1, color);
+        let cell_rect = rect.to_cell_rect();
+        let (dx, dy) = rect.cell_remainder();
+        let mut dots = DotBuffer::new((dot_cols + dx) as usize, (dot_rows + dy) as usize);
+        Self::draw_dot_box(
+            &mut dots,
+            dx as usize,
+            dy as usize,
+            (dx + dot_cols - 1) as usize,
+            (dy + dot_rows - 1) as usize,
+            color,
+        );
         let grid = dots_to_grid(&dots);
-        engine_render::draw_grid(buf, rect, &grid);
+        let draw_area = Rect {
+            x: cell_rect.x,
+            y: cell_rect.y,
+            width: grid.cols() as u16,
+            height: grid.rows() as u16,
+        };
+        engine_render::draw_grid(buf, draw_area, &grid);
     }
 
     /// The exhaustion status line for `e` (b2-t4): `"Exhausted: {days} days
@@ -1717,7 +1824,9 @@ mod layout_tests {
              stat_bar's independent details_top anchoring, not from HEADER_GAP_H (which is now a top margin above name)",
             l.level.y, l.level.height, l.stat_bar.y
         );
-        assert!(l.exhaustion.y < l.ability_list.y, "exhaustion.y ({}) must be above ability_list.y ({})", l.exhaustion.y, l.ability_list.y);
+        let exhaustion = RosterManager::exhaustion_rect(area);
+        let ability_list = RosterManager::ability_list_rect(area);
+        assert!(exhaustion.y < ability_list.y, "exhaustion.y ({}) must be above ability_list.y ({})", exhaustion.y, ability_list.y);
         assert!(l.stat_bar.y < l.sprite.y, "stat_bar.y ({}) must be above sprite.y ({})", l.stat_bar.y, l.sprite.y);
         assert!(l.sprite.y < l.dot_row.y, "sprite.y ({}) must be above dot_row.y ({})", l.sprite.y, l.dot_row.y);
     }
@@ -1749,7 +1858,7 @@ mod layout_tests {
             // be dot-identical, only close enough to round to the same
             // cell; see `stat_bar_top_and_details_panel_top_share_a_cell`).
             assert_eq!(
-                l.stat_bar.y, l.exhaustion.y,
+                l.stat_bar.y, RosterManager::exhaustion_rect(area).y,
                 "w={w},h={h}: body position unchanged by the header shift"
             );
         }
@@ -1761,10 +1870,9 @@ mod layout_tests {
     fn details_panel_width_is_one_third() {
         for width in [60u16, 90u16] {
             let area = Rect::new(0, 0, width, 30);
-            let l = RosterManager::layout(area);
             let expected = width - (width * 2 / 3);
-            assert_eq!(l.exhaustion.width, expected, "width={width}: exhaustion.width");
-            assert_eq!(l.ability_list.width, expected, "width={width}: ability_list.width");
+            assert_eq!(RosterManager::exhaustion_rect(area).width, expected, "width={width}: exhaustion.width");
+            assert_eq!(RosterManager::ability_list_rect(area).width, expected, "width={width}: ability_list.width");
         }
     }
 
@@ -1784,23 +1892,72 @@ mod layout_tests {
     }
 
     /// Follow-up on spec 38 correction (item 4): `stat_bar`'s top
-    /// (raised by `STAT_BAR_TOP_LIFT_CELLS`, freeing a cell for `sprite`
-    /// below it to claim) and the details panel's top (raised independently
-    /// by `DETAILS_PANEL_TOP_LIFT_DOTS`/`DETAILS_PANEL_TOP_GROWTH_DOTS`,
-    /// tuned by eye, NOT derived to dot-match `stat_bar`) land on the SAME
-    /// cell row. This only proves cell-level agreement — the two use
-    /// different dot-level math and are not guaranteed dot-identical; see
-    /// `Self::layout`'s `right_col` comment.
+    /// (raised by `STAT_BAR_TOP_LIFT_CELLS`) and the details panel's top
+    /// (raised independently by `DETAILS_PANEL_TOP_LIFT_DOTS` +
+    /// `DETAILS_PANEL_TOP_GROWTH_DOTS`) must share a cell row — the coarse,
+    /// necessary-but-not-sufficient check; see
+    /// `stat_bar_and_details_panel_borders_visually_align_at_dot_level`
+    /// (rendered-buffer test, same module) for the actual DOT-level
+    /// guarantee, which is what the project owner actually cares about —
+    /// two borders sharing a cell row can still be several dots apart
+    /// visually if their draw routines don't use the same sub-cell
+    /// convention (this is exactly the bug that shipped once already).
     #[test]
     fn stat_bar_top_and_details_panel_top_share_a_cell() {
         for (w, h) in [(80u16, 30u16), (40u16, 20u16), (60u16, 24u16)] {
-            let l = RosterManager::layout(Rect::new(0, 0, w, h));
+            let area = Rect::new(0, 0, w, h);
+            let l = RosterManager::layout(area);
+            let exhaustion = RosterManager::exhaustion_rect(area);
             assert_eq!(
-                l.stat_bar.y, l.exhaustion.y,
+                l.stat_bar.y, exhaustion.y,
                 "w={w},h={h}: stat_bar.y ({}) and the details panel top exhaustion.y ({}) must share a cell row",
-                l.stat_bar.y, l.exhaustion.y
+                l.stat_bar.y, exhaustion.y
             );
         }
+    }
+
+    /// The DOT-level guarantee `stat_bar_top_and_details_panel_top_share_a_cell`
+    /// can't provide: decodes the actual rendered braille buffer (not the
+    /// `Rect`/`DotRect` geometry) and confirms `stat_bar`'s border and the
+    /// details panel's border have their topmost LIT dot at the same
+    /// absolute dot row. This is the real acceptance bar the project owner
+    /// asked for — two border-drawing routines with different sub-cell
+    /// conventions (`stat_bar`'s "hug cap" recess vs. `draw_dot_border`'s
+    /// plain top-row line) can share a cell row while still being visibly
+    /// offset; only decoding actual lit dots proves otherwise. Regression
+    /// for the bug where they were 2 dots apart despite `layout()` agreeing
+    /// on the cell.
+    #[test]
+    fn stat_bar_and_details_panel_borders_visually_align_at_dot_level() {
+        use crate::scenes::test_util::render_to_buffer;
+
+        fn topmost_lit_abs_dot_row(buf: &Buffer, col: u16, near_row: u16) -> i32 {
+            const DOT_POS: [(u8, u8); 8] = [(0,0),(0,1),(0,2),(1,0),(1,1),(1,2),(0,3),(1,3)];
+            for y in near_row.saturating_sub(2)..near_row + 3 {
+                if let Some((mask, _)) = engine_render::decode_braille_cell(buf, col, y) {
+                    for dy in 0..4u8 {
+                        if (0..8u8).any(|k| DOT_POS[k as usize].1 == dy && mask & (1 << k) != 0) {
+                            return y as i32 * 4 + dy as i32;
+                        }
+                    }
+                }
+            }
+            panic!("no lit dot found near row {near_row} at column {col}");
+        }
+
+        let scene = RosterManager::new();
+        let area = Rect::new(0, 0, 80, 30);
+        let l = RosterManager::layout(area);
+        let exhaustion = RosterManager::exhaustion_rect(area);
+        let buf = render_to_buffer(&scene, 80, 30);
+
+        let stat_bar_top = topmost_lit_abs_dot_row(&buf, l.stat_bar.x + 2, l.stat_bar.y);
+        let details_top = topmost_lit_abs_dot_row(&buf, exhaustion.x + 2, exhaustion.y);
+        assert_eq!(
+            stat_bar_top, details_top,
+            "stat_bar's border (topmost lit dot row {stat_bar_top}) and the details panel's border \
+             (topmost lit dot row {details_top}) must visually align, not just share a cell"
+        );
     }
 
     /// spec 38 correction (item 4/5), narrowed by `STAT_BAR_TOP_LIFT_CELLS`:
@@ -1829,6 +1986,7 @@ mod layout_tests {
         for width in [80u16, 60u16] {
             let area = Rect::new(0, 0, width, 30);
             let l = RosterManager::layout(area);
+            let ability_list = RosterManager::ability_list_rect(area);
             // The details panel is pulled `DETAILS_LEFT_SHIFT` further left off
             // the right edge (spec 38 corrections item 4), so it now shares up
             // to `EDGE_MARGIN + DETAILS_LEFT_SHIFT` columns with the LEFT
@@ -1837,9 +1995,9 @@ mod layout_tests {
             // by render-to-buffer).
             let tolerance = RosterManager::EDGE_MARGIN + RosterManager::DETAILS_LEFT_SHIFT;
             assert!(
-                l.sprite.right() <= l.ability_list.left() + tolerance,
+                l.sprite.right() <= ability_list.left() + tolerance,
                 "width={}: sprite ({:?}) must not extend more than {tolerance} cells into ability_list ({:?})",
-                width, l.sprite, l.ability_list
+                width, l.sprite, ability_list
             );
         }
     }
@@ -1852,16 +2010,17 @@ mod layout_tests {
     fn details_panel_pulled_left_off_right_edge() {
         for width in [60u16, 90u16] {
             let area = Rect::new(0, 0, width, 30);
-            let l = RosterManager::layout(area);
+            let exhaustion = RosterManager::exhaustion_rect(area);
+            let ability_list = RosterManager::ability_list_rect(area);
             let expected_x = area.right()
-                - (RosterManager::EDGE_MARGIN + RosterManager::DETAILS_LEFT_SHIFT + l.exhaustion.width);
+                - (RosterManager::EDGE_MARGIN + RosterManager::DETAILS_LEFT_SHIFT + exhaustion.width);
             assert_eq!(
-                l.exhaustion.x, expected_x,
+                exhaustion.x, expected_x,
                 "width={width}: details panel x must be inset EDGE_MARGIN+DETAILS_LEFT_SHIFT from area.right()"
             );
-            assert_eq!(l.ability_list.x, expected_x, "width={width}: ability_list shares the panel x");
+            assert_eq!(ability_list.x, expected_x, "width={width}: ability_list shares the panel x");
             assert_eq!(
-                area.right() - l.exhaustion.right(),
+                area.right() - exhaustion.right(),
                 RosterManager::EDGE_MARGIN + RosterManager::DETAILS_LEFT_SHIFT,
                 "width={width}: panel right edge must sit EDGE_MARGIN+DETAILS_LEFT_SHIFT in from area.right()"
             );
@@ -2146,10 +2305,11 @@ mod stat_bar_tests {
         const MIN_GAP: u16 = 2;
 
         for (w, h) in [(80u16, 30u16), (40u16, 20u16), (60u16, 24u16)] {
-            let l = RosterManager::layout(Rect::new(0, 0, w, h));
+            let area = Rect::new(0, 0, w, h);
+            let l = RosterManager::layout(area);
             let slices = RosterManager::stat_slice_parts(l.stat_bar);
             let (last_outline, _fill, _label) = *slices.last().unwrap();
-            let panel_left = l.exhaustion.x; // details panel border's left column
+            let panel_left = RosterManager::exhaustion_rect(area).x; // details panel border's left column
 
             assert!(
                 last_outline.right() <= panel_left,
@@ -2519,7 +2679,7 @@ mod stat_bar_tests {
         // top (see `stat_bar_top_and_details_panel_top_share_a_cell`).
         assert_eq!(
             outline.top(),
-            l.exhaustion.y,
+            RosterManager::exhaustion_rect(area()).y,
             "the stat-bar box top must share a cell row with the details-panel border top"
         );
 
@@ -2589,7 +2749,7 @@ mod draw_dot_border_tests {
 
     fn render() -> Buffer {
         let mut buf = Buffer::empty(Rect::new(0, 0, 20, 12));
-        RosterManager::draw_dot_border(&mut buf, rect(), RosterManager::BORDER_COLOR);
+        RosterManager::draw_dot_border(&mut buf, RosterManager::cell_rect_to_dots(rect()), RosterManager::BORDER_COLOR);
         buf
     }
 
@@ -2647,7 +2807,7 @@ mod draw_dot_border_tests {
     fn zero_size_rect_is_noop() {
         let mut buf = Buffer::empty(Rect::new(0, 0, 20, 12));
         let before = buf.clone();
-        RosterManager::draw_dot_border(&mut buf, Rect::new(2, 1, 0, 6), RosterManager::BORDER_COLOR);
+        RosterManager::draw_dot_border(&mut buf, RosterManager::cell_rect_to_dots(Rect::new(2, 1, 0, 6)), RosterManager::BORDER_COLOR);
         assert_eq!(buf, before, "zero-width rect must leave the buffer unchanged");
     }
 
@@ -2703,15 +2863,28 @@ mod details_panel_border_tests {
     use super::*;
     use crate::scenes::test_util::render_to_buffer;
 
-    /// The details-panel border rect — the union of `exhaustion` and
-    /// `ability_list`.
+    /// The details-panel border's OBSERVABLE cell footprint — the union of
+    /// `exhaustion` and `ability_list`, computed at dot precision (matching
+    /// `RosterManager::details_panel_rects`) and THEN converted to the cell
+    /// span `draw_dot_border` actually paints. Using `.to_cell_rect()` alone
+    /// (which floors the origin and size independently) understates the
+    /// footprint whenever the union's dot extent isn't itself cell-aligned:
+    /// `draw_dot_border` paints every cell touched by any dot in
+    /// `[y, y+h)`, i.e. `ceil((y+h)/4) - floor(y/4)` rows, not
+    /// `floor(h/4)` — the same `floor(a)+floor(b) != floor(a+b)` gap that
+    /// caused this panel's border to render 2 dots off `stat_bar`'s in the
+    /// first place.
     fn border_rect(area: Rect) -> Rect {
-        let l = RosterManager::layout(area);
+        let [ex_dots, ab_dots] = RosterManager::right_col_dots(area);
+        let union = engine_render::DotRect { h: ex_dots.h + ab_dots.h, ..ex_dots };
+        let top_cell = union.y.div_euclid(4);
+        let bottom_cell_exclusive = (union.y + union.h + 3).div_euclid(4);
+        let cell = union.to_cell_rect();
         Rect::new(
-            l.exhaustion.x,
-            l.exhaustion.y,
-            l.exhaustion.width,
-            l.exhaustion.height + l.ability_list.height,
+            cell.x,
+            top_cell.max(0) as u16,
+            cell.width,
+            (bottom_cell_exclusive - top_cell).max(0) as u16,
         )
     }
 
@@ -2867,7 +3040,7 @@ mod exhaustion_render_tests {
         let (w, h) = (80u16, 30u16);
         let buf = render_to_buffer(&rm, w, h);
         let area = Rect::new(0, 0, w, h);
-        let rect = RosterManager::layout(area).exhaustion;
+        let rect = RosterManager::exhaustion_rect(area);
 
         let text = rect_text(&buf, rect);
         assert!(
@@ -2891,7 +3064,7 @@ mod exhaustion_render_tests {
         let (w, h) = (80u16, 30u16);
         let buf = render_to_buffer(&rm, w, h);
         let area = Rect::new(0, 0, w, h);
-        let rect = RosterManager::layout(area).exhaustion;
+        let rect = RosterManager::exhaustion_rect(area);
 
         let text = rect_text(&buf, rect);
         assert!(
@@ -2914,7 +3087,7 @@ mod exhaustion_render_tests {
     fn exhaustion_hidden_during_slide() {
         let (w, h) = (80u16, 30u16);
         let area = Rect::new(0, 0, w, h);
-        let rect = RosterManager::layout(area).exhaustion;
+        let rect = RosterManager::exhaustion_rect(area);
         let has_text = |buf: &ratatui::buffer::Buffer| {
             rect_text(buf, rect).chars().any(|c| c.is_ascii_alphanumeric())
         };
@@ -2954,7 +3127,7 @@ mod exhaustion_render_tests {
         let (w, h) = (80u16, 30u16);
         let buf = render_to_buffer(&rm, w, h);
         let area = Rect::new(0, 0, w, h);
-        let rect = RosterManager::layout(area).exhaustion;
+        let rect = RosterManager::exhaustion_rect(area);
 
         let text = rect_text(&buf, rect);
         assert!(
@@ -2999,7 +3172,7 @@ mod ability_list_render_tests {
         let (w, h) = (80u16, 30u16);
         let buf = render_to_buffer(&rm, w, h);
         let area = Rect::new(0, 0, w, h);
-        let rect = RosterManager::layout(area).ability_list;
+        let rect = RosterManager::ability_list_rect(area);
 
         let text = rect_text(&buf, rect);
         assert!(
@@ -3029,7 +3202,7 @@ mod ability_list_render_tests {
     fn ability_list_hidden_during_slide() {
         let (w, h) = (80u16, 30u16);
         let area = Rect::new(0, 0, w, h);
-        let rect = RosterManager::layout(area).ability_list;
+        let rect = RosterManager::ability_list_rect(area);
 
         let mut scene = RosterManager::new();
         scene.creatures[0] =
@@ -3075,7 +3248,7 @@ mod ability_list_render_tests {
         let (w, h) = (80u16, 30u16);
         let buf = render_to_buffer(&rm, w, h);
         let area = Rect::new(0, 0, w, h);
-        let rect = RosterManager::layout(area).ability_list;
+        let rect = RosterManager::ability_list_rect(area);
 
         let text = rect_text(&buf, rect);
         assert!(
