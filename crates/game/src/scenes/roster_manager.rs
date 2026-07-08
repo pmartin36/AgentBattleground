@@ -107,10 +107,10 @@ impl RosterManager {
     /// edges of `area` they anchor to (spec `Decisions (v1)`).
     const EDGE_MARGIN: u16 = 1;
 
-    /// Top inset (in whole terminal cells) of the home button specifically —
-    /// one cell less than `EDGE_MARGIN`, moving it up one braille cell (4
-    /// dots) from the standard edge inset used on its other sides.
-    const HOME_TOP_MARGIN: u16 = 0;
+    /// Sub-cell upward render nudge (in braille dots) applied to the home
+    /// button via `Button::set_dot_offset_down`, on top of its normal
+    /// `EDGE_MARGIN` cell-level position — finer than a whole cell.
+    const HOME_NUDGE_UP_DOTS: i32 = -1;
 
     /// Extra rightward inset (in cells) of the details panel beyond
     /// `EDGE_MARGIN`, pulling the whole panel LEFT off the screen's right edge.
@@ -204,15 +204,20 @@ impl RosterManager {
     /// its pinned baseline above `dot_row`.
     const STAT_BAR_BAND_H: u16 =
         Self::STAT_BAR_OUTLINE_H + Self::STAT_LABEL_H;
-    /// Height (in cells) of each stat-bar OUTLINE. 2 cells = 8 dot rows: a
-    /// 1-dot chamfered border wraps the whole outline, and the green fill
-    /// occupies the interior (dot rows 1..7), starting one dot in from the
-    /// left border. The top/bottom braille cells contain both a border dot
-    /// (the outline's own top/bottom edge) and fill dots, so those cells
-    /// render as a muted grey-green blend — an accepted trade-off for a
-    /// compact bar; the left/right edge columns never mix with fill, so those
-    /// stay pure border color.
-    const STAT_BAR_OUTLINE_H: u16 = 2;
+    /// Height (in cells) of each stat-bar OUTLINE. 3 cells = 12 dot rows: the
+    /// green fill occupies exactly the MIDDLE cell (dot rows 4-7, see
+    /// `stat_slice_parts`), and a rounded `STAT_BAR_HUG_CAP_DOTS`-thick grey
+    /// cap sits directly above and below it — the top cell's bottom
+    /// `STAT_BAR_HUG_CAP_DOTS` dots, and the bottom cell's top
+    /// `STAT_BAR_HUG_CAP_DOTS` dots — with 1-dot left/right sides connecting
+    /// them. Because the fill is confined to its own single cell and the caps
+    /// live in the cells directly above/below it, no braille cell ever
+    /// contains both a border dot and a fill dot, so the border always
+    /// renders as a complete, crisp shape at any fill amount.
+    const STAT_BAR_OUTLINE_H: u16 = 3;
+    /// Thickness (in dots) of the grey cap directly above/below the fill —
+    /// see `STAT_BAR_OUTLINE_H`.
+    const STAT_BAR_HUG_CAP_DOTS: usize = 2;
     /// Reserved blank cells on the RIGHT of `stat_bar` that the 4 slices never
     /// occupy, so the rightmost bar keeps genuine horizontal clearance from
     /// the details panel's left border. The panel's left edge sits
@@ -542,7 +547,7 @@ impl RosterManager {
             area,
             (Self::HOME_W, Self::HOME_H),
             engine_render::Anchor::TopRight,
-            (Self::EDGE_MARGIN, Self::HOME_TOP_MARGIN),
+            (Self::EDGE_MARGIN, Self::EDGE_MARGIN),
         )
     }
 
@@ -824,14 +829,15 @@ impl RosterManager {
                 // blank gap row between the bar and its label.
                 let label_y = (s.y + outline_h).min(s.bottom().saturating_sub(label_h));
                 let label = Rect::new(s.x, label_y, s.width, label_h);
-                // `fill` is the interior column span between the left/right
-                // borders (inset one cell each side), full outline height — the
-                // region the proportional green occupies.
+                // `fill` is exactly the outline's MIDDLE cell — inset one full
+                // cell on every side — so it never shares a braille cell with
+                // the hug caps drawn directly above/below it (see
+                // `STAT_BAR_OUTLINE_H`).
                 let fill = Rect::new(
                     outline.x.saturating_add(1),
-                    outline.y,
+                    outline.y.saturating_add(1),
                     outline.width.saturating_sub(2),
-                    outline.height,
+                    outline.height.saturating_sub(2),
                 );
                 (outline, fill, label)
             })
@@ -858,12 +864,14 @@ impl RosterManager {
     /// `STAT_BAR_COLOR` fill are built into ONE `DotBuffer` spanning the
     /// `outline` rect and drawn with a single `draw_grid` (non-text chrome, so
     /// they render through the dot pipeline — never `engine_render::fill`,
-    /// CLAUDE.md constraint 4): a 1-dot chamfered-corner border wraps the whole
-    /// `outline` (via `draw_dot_box`) and the fill lights the interior (dot rows
-    /// 1..dot_rows-1) proportionally to `stat_fill_dots`, starting one dot in
-    /// from the left border. Border and fill share the top/bottom braille cells,
-    /// so those render as a muted grey-green blend; the unfilled remainder of
-    /// the bar shows the border alone (visible outline even at zero fill). A
+    /// CLAUDE.md constraint 4): a rounded "hug" bracket (via `draw_dot_cap_box`)
+    /// wraps just the fill's own cell — `STAT_BAR_HUG_CAP_DOTS`-thick grey caps
+    /// directly above/below it, 1-dot left/right sides connecting them, with
+    /// the same chamfered corner used everywhere else on this screen — and the
+    /// fill lights `fill` — the outline's own middle cell — proportionally to
+    /// `stat_fill_dots`. Because `fill` never shares a braille cell with the
+    /// caps (see `STAT_BAR_OUTLINE_H`), the border always renders as a
+    /// complete, crisp bracket at any fill amount, including zero. A
     /// plain-text `stat_label(kind)` sits on the row immediately beneath.
     fn render_stat_bars(&self, buf: &mut Buffer, rect: Rect) {
         for ((outline, fill, label), kind) in
@@ -871,21 +879,37 @@ impl RosterManager {
         {
             let dot_cols = outline.width as usize * 2;
             let dot_rows = outline.height as usize * 4;
-            if dot_cols > 2 && dot_rows > 2 && fill.width > 0 {
+            if dot_cols > 0 && dot_rows > 0 && fill.width > 0 && fill.height > 0 {
                 let mut dots = DotBuffer::new(dot_cols, dot_rows);
 
-                // 1-dot border wrapping the whole outline (rounded corners via
-                // `draw_dot_box`), then the proportional green fill in the
-                // interior (dot rows 1..dot_rows-1), starting one dot in from the
-                // left border. The border and fill share the top/bottom cells, so
-                // those cells render as a muted grey-green blend.
-                Self::draw_dot_box(&mut dots, 0, 0, dot_cols - 1, dot_rows - 1, Self::BORDER_COLOR);
+                // Fill-cell dot bounds within the outline's dot grid (the
+                // middle cell — see `stat_slice_parts`).
+                let fx0 = (fill.x - outline.x) as usize * 2;
+                let fy0 = (fill.y - outline.y) as usize * 4;
+                let fill_dot_cols = fill.width as usize * 2;
+                let fill_dot_rows = fill.height as usize * 4;
 
-                let interior_cols = dot_cols - 2;
-                let n = self.stat_fill_dots(kind, interior_cols);
-                for row in 1..dot_rows - 1 {
+                // Rounded hug bracket: `STAT_BAR_HUG_CAP_DOTS`-thick caps
+                // directly above/below the fill's own cell, 1-dot left/right
+                // sides spanning that same hugged range, chamfered corners.
+                let hug_top = fy0.saturating_sub(Self::STAT_BAR_HUG_CAP_DOTS);
+                let hug_bottom = (fy0 + fill_dot_rows + Self::STAT_BAR_HUG_CAP_DOTS)
+                    .min(dot_rows)
+                    .saturating_sub(1);
+                Self::draw_dot_cap_box(
+                    &mut dots,
+                    0,
+                    hug_top,
+                    dot_cols - 1,
+                    hug_bottom,
+                    Self::STAT_BAR_HUG_CAP_DOTS,
+                    Self::BORDER_COLOR,
+                );
+
+                let n = self.stat_fill_dots(kind, fill_dot_cols);
+                for row in fy0..fy0 + fill_dot_rows {
                     for col in 0..n {
-                        dots.set(1 + col, row, Dot::Lit(Self::STAT_BAR_COLOR));
+                        dots.set(fx0 + col, row, Dot::Lit(Self::STAT_BAR_COLOR));
                     }
                 }
 
@@ -945,6 +969,54 @@ impl RosterManager {
                 // Chamfer clip: a dot within `chamfer` of TWO adjacent edges
                 // (a corner zone) is dropped unless its Manhattan distance sum
                 // clears the threshold — a 45° diagonal cut off each corner.
+                let clipped = (d_left < chamfer && d_top < chamfer && d_left + d_top < chamfer)
+                    || (d_right < chamfer && d_top < chamfer && d_right + d_top < chamfer)
+                    || (d_left < chamfer && d_bottom < chamfer && d_left + d_bottom < chamfer)
+                    || (d_right < chamfer && d_bottom < chamfer && d_right + d_bottom < chamfer);
+                if clipped {
+                    continue;
+                }
+
+                dots.set(col, row, Dot::Lit(color));
+            }
+        }
+    }
+
+    /// Like `draw_dot_box`, but with an asymmetric edge thickness: left/right
+    /// sides stay `BORDER_THICKNESS` dots thick, while the top/bottom caps
+    /// are `v_thickness` dots thick — e.g. the stat bars' 2-dot hug caps,
+    /// which a uniform `draw_dot_box` thickness can't produce (it would need
+    /// either a 2-dot-thick border on every side, or a 1-dot cap that isn't
+    /// what was asked for). Same single-dot `CHAMFER` corner clip as
+    /// `draw_dot_box` — the clip only compares distance-from-edge on each
+    /// axis independently, so it reads identically rounded regardless of
+    /// this box's differing horizontal/vertical thickness.
+    fn draw_dot_cap_box(
+        dots: &mut DotBuffer,
+        left: usize,
+        top: usize,
+        right: usize,
+        bottom: usize,
+        v_thickness: usize,
+        color: engine_core::color::Rgba,
+    ) {
+        let h_thickness = Self::BORDER_THICKNESS;
+        let chamfer = Self::CHAMFER;
+        for row in top..=bottom {
+            for col in left..=right {
+                let d_left = col - left;
+                let d_right = right - col;
+                let d_top = row - top;
+                let d_bottom = bottom - row;
+
+                let in_border = d_left < h_thickness
+                    || d_right < h_thickness
+                    || d_top < v_thickness
+                    || d_bottom < v_thickness;
+                if !in_border {
+                    continue;
+                }
+
                 let clipped = (d_left < chamfer && d_top < chamfer && d_left + d_top < chamfer)
                     || (d_right < chamfer && d_top < chamfer && d_right + d_top < chamfer)
                     || (d_left < chamfer && d_bottom < chamfer && d_left + d_bottom < chamfer)
@@ -1195,6 +1267,7 @@ impl Scene for RosterManager {
         {
             let mut home = self.home_button.borrow_mut();
             home.set_rect(home_rect);
+            home.set_dot_offset_down(Self::HOME_NUDGE_UP_DOTS);
             home.render(frame.buffer_mut());
         }
     }
@@ -2145,43 +2218,46 @@ mod stat_bar_tests {
         (0x2800..=0x28FF).contains(&cp).then_some(cp - 0x2800)
     }
 
-    /// The 2-cell bar box is top-aligned (its top edge on the outline's TOP
-    /// dot-row, level with the details-panel border) and snug to the label (its
-    /// bottom edge on the outline's BOTTOM dot-row, immediately above the label
-    /// cell). Proven at the dot level via the mid-span border cells' glyph
-    /// masks.
+    /// The 3-cell bar box's OUTLINE rect is top-aligned (level with the
+    /// details-panel border) and snug to the label — but the visible hug
+    /// bracket is recessed within it: the outline's TOP cell only lights its
+    /// own BOTTOM `STAT_BAR_HUG_CAP_DOTS` dots (the cap directly above the
+    /// fill), and its BOTTOM cell only lights its own TOP
+    /// `STAT_BAR_HUG_CAP_DOTS` dots (the cap directly below the fill) — the
+    /// outline's outermost dot-rows on each end stay genuinely empty. Proven
+    /// at the dot level via the mid-span cells' glyph masks.
     #[test]
     fn stat_bar_box_is_top_aligned_and_snug_to_label() {
         // A zero stat so the border is fully visible everywhere (no green fill
-        // to luma-blend over the top/bottom border rows).
+        // to luma-blend over the border rows).
         let buf = render_with_stats(only_stat(StatKind::Strength, 0));
         let l = RosterManager::layout(area());
         let slices = RosterManager::stat_slice_parts(l.stat_bar);
         let (outline, _fill, label) = slices[0]; // Strength == StatKind::ALL[0]
 
-        const TOP_ROW: u32 = (1 << 0) | (1 << 3);
-        const BOTTOM_ROW: u32 = (1 << 6) | (1 << 7);
+        const CELL_TOP_HALF: u32 = (1 << 0) | (1 << 3) | (1 << 1) | (1 << 4);
+        const CELL_BOTTOM_HALF: u32 = (1 << 2) | (1 << 5) | (1 << 6) | (1 << 7);
 
         // A cell mid-way along each border edge (avoid the chamfered corners).
         let cx = outline.left() + outline.width / 2;
 
-        // Top border is top-aligned: the outline's top cell lights its TOP
-        // dot-row (the very top of the stat area).
+        // The outline's TOP cell only lights its own bottom half (the hug cap
+        // directly above the fill's cell) — its top half stays empty space.
         let top_mask = braille_mask(&buf, cx, outline.top())
-            .expect("mid top-border cell must be a painted braille glyph");
+            .expect("mid top-cap cell must be a painted braille glyph");
         assert!(
-            top_mask & TOP_ROW != 0,
-            "top border cell (mask={top_mask:#04x}) must light its TOP dot-row — the box is top-aligned"
+            top_mask & CELL_BOTTOM_HALF != 0 && top_mask & CELL_TOP_HALF == 0,
+            "top cap cell (mask={top_mask:#04x}) must light only its BOTTOM half, hugging the fill below it"
         );
 
-        // Bottom border is snug to the label: the outline's bottom cell lights
-        // its BOTTOM dot-row, immediately above the label cell.
+        // The outline's BOTTOM cell only lights its own top half (the hug cap
+        // directly below the fill's cell), snug against the label below it.
         let bottom_cell_y = outline.bottom() - 1;
         let bottom_mask = braille_mask(&buf, cx, bottom_cell_y)
-            .expect("mid bottom-border cell must be a painted braille glyph");
+            .expect("mid bottom-cap cell must be a painted braille glyph");
         assert!(
-            bottom_mask & BOTTOM_ROW != 0,
-            "bottom border cell (mask={bottom_mask:#04x}) must light its BOTTOM dot-row — snug against the label below"
+            bottom_mask & CELL_TOP_HALF != 0 && bottom_mask & CELL_BOTTOM_HALF == 0,
+            "bottom cap cell (mask={bottom_mask:#04x}) must light only its TOP half, hugging the fill above it"
         );
 
         // The bar box top sits on the same row as the details-panel border top.
@@ -3523,9 +3599,10 @@ mod home_button_tests {
         );
         assert_eq!(
             rect.top(),
-            area.top() + RosterManager::HOME_TOP_MARGIN,
-            "home button rect must be inset from the top edge of area by HOME_TOP_MARGIN \
-             (one cell less than EDGE_MARGIN, moving it up one braille cell)"
+            area.top() + RosterManager::EDGE_MARGIN,
+            "home button rect must be inset from the top edge of area by EDGE_MARGIN \
+             (the render-only HOME_NUDGE_UP_DOTS dot offset moves the drawn glyph without \
+             moving this hit-test rect)"
         );
     }
 

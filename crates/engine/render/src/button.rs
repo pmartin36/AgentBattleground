@@ -160,19 +160,27 @@ fn render_tinted(
     #[cfg(test)]
     let _cache_test_guard = crate::asset_cache::cache_test_lock();
 
-    // A positive `dot_down` nudges the whole composed button DOWN by that many
-    // sub-cell braille dots — a genuine offset finer than a whole cell, applied
-    // to the composited dots BEFORE `dots_to_grid` (the same "offset the raw
-    // dots, then convert" precision technique used for sub-cell sprite/dot
-    // placement elsewhere). The render target is grown by just enough whole
-    // cells to hold the shifted content, since `dots_to_grid` only converts
-    // whole cells; the panel/icon keep their natural `content_rows` size (never
-    // stretched to the taller target). `dot_down == 0` leaves the target ==
-    // `rect` and every layer at dot_y 0 — byte-identical to an un-nudged render.
-    let down = dot_down.max(0) as usize;
-    let extra_cells = down.div_ceil(4);
+    // `dot_down` nudges the whole composed button by that many sub-cell
+    // braille dots — positive shifts DOWN, negative shifts UP — a genuine
+    // offset finer than a whole cell, applied to the composited dots BEFORE
+    // `dots_to_grid` (the same "offset the raw dots, then convert" precision
+    // technique used for sub-cell sprite/dot placement elsewhere). The render
+    // target grows by just enough whole cells to hold the shifted content:
+    // extending downward (`target_rect.y == rect.y`) for `dot_down >= 0`, or
+    // extending upward (`target_rect.y` moves up, spilling into the cell-row
+    // above `rect`) for `dot_down < 0` — since `dots_to_grid` only converts
+    // whole cells; the panel/icon keep their natural `content_rows` size
+    // (never stretched to the taller target). `dot_down == 0` leaves the
+    // target == `rect` and every layer at dot_y 0 — byte-identical to an
+    // un-nudged render.
+    let extra_cells = (dot_down.unsigned_abs() as usize).div_ceil(4);
     let target_rows = content_rows + extra_cells * 4;
-    let target_rect = Rect::new(rect.x, rect.y, rect.width, rect.height + extra_cells as u16);
+    let (target_y, down) = if dot_down >= 0 {
+        (rect.y, dot_down)
+    } else {
+        (rect.y.saturating_sub(extra_cells as u16), (extra_cells * 4) as i32 + dot_down)
+    };
+    let target_rect = Rect::new(rect.x, target_y, rect.width, rect.height + extra_cells as u16);
 
     let bg_dots_raw = crate::asset_cache::sprite_to_dots(background, dot_cols as u32, content_rows as u32);
     let bg_dots = crate::dots::tint(&bg_dots_raw, PANEL_GOLD_TINT);
@@ -195,13 +203,13 @@ fn render_tinted(
                 crate::composite::DotPlacement {
                     dots: &bg_dots,
                     dot_x: 0,
-                    dot_y: down as i32,
+                    dot_y: down,
                     depth: 0,
                 },
                 crate::composite::DotPlacement {
                     dots: &icon_dots,
                     dot_x: ((dot_cols.saturating_sub(icon_cols)) / 2) as i32,
-                    dot_y: ((content_rows.saturating_sub(icon_rows)) / 2) as i32 + down as i32,
+                    dot_y: ((content_rows.saturating_sub(icon_rows)) / 2) as i32 + down,
                     depth: 1,
                 },
             ];
@@ -211,7 +219,7 @@ fn render_tinted(
             let placement = [crate::composite::DotPlacement {
                 dots: &bg_dots,
                 dot_x: 0,
-                dot_y: down as i32,
+                dot_y: down,
                 depth: 0,
             }];
             crate::composite::composite_dots(dot_cols, target_rows, &placement)
@@ -231,11 +239,12 @@ pub struct Button {
     core: ButtonCore,
     panel: &'static [u8],
     icon: &'static [u8],
-    /// Sub-cell downward render nudge, in braille dots. `0` (the default)
-    /// renders the button flush in its rect; a positive value shifts the
-    /// composed panel+icon DOWN by that many dots — finer than a whole cell —
-    /// spilling into the cell-row below the rect. Positioning-only: the
-    /// hit-test rect (`core.rect()`) is unaffected.
+    /// Sub-cell render nudge, in braille dots. `0` (the default) renders the
+    /// button flush in its rect; a positive value shifts the composed
+    /// panel+icon DOWN by that many dots, a negative value shifts it UP —
+    /// finer than a whole cell either way — spilling into the cell-row below
+    /// or above the rect respectively. Positioning-only: the hit-test rect
+    /// (`core.rect()`) is unaffected.
     dot_down: i32,
 }
 
@@ -257,8 +266,9 @@ impl Button {
         }
     }
 
-    /// Set the sub-cell downward render nudge (in braille dots). See
-    /// `dot_down`. Positioning-only — never touches the hit-test rect.
+    /// Set the sub-cell render nudge (in braille dots) — positive down,
+    /// negative up. See `dot_down`. Positioning-only — never touches the
+    /// hit-test rect.
     pub fn set_dot_offset_down(&mut self, dots: i32) {
         self.dot_down = dots;
     }
@@ -269,7 +279,8 @@ impl Button {
     /// research.md's blueprint for b3-t2). Cells outside `self.rect` are
     /// left untouched; a zero-area or oversized `self.rect` must not panic.
     /// A non-zero `dot_down` shifts the render into the cell-row directly
-    /// below `self.rect`, so those cells may also be painted.
+    /// below (positive) or above (negative) `self.rect`, so those cells may
+    /// also be painted.
     pub fn render(&self, buf: &mut Buffer) {
         render_tinted(
             buf,
