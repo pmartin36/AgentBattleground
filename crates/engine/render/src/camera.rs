@@ -119,6 +119,65 @@ impl Camera for ObliqueCamera {
     }
 }
 
+/// Small positive floor on the perspective-divide forward term: prevents
+/// divide-by-zero and sign-flip when a point is at/behind the camera plane.
+/// Divide-safety floor, not a visual-tuning constant (spec 41 Decision 1).
+const NEAR_EPS: f32 = 0.01;
+
+/// Real minimal pinhole camera (position + pitch + FOV) projecting a 2D
+/// ground-plane `WorldPos`. No yaw — only the two `DepthAxis` assignments
+/// already established. Replaces `ObliqueCamera` for Sideline/Over-the-
+/// shoulder (b3-t1); Top-Down never uses this (spec 41 Decision 1).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct PerspectiveCamera {
+    pub depth_axis: DepthAxis,
+    pub elevation_deg: f32,
+    pub camera_depth: f32,
+    pub camera_height: f32,
+    pub spread_center: f32,
+    pub fov_deg: f32,
+    pub scale_dots: f32,
+}
+
+impl PerspectiveCamera {
+    /// Signed distance from the camera along its forward axis, UNCLAMPED.
+    /// Single source of the forward term shared by `project`'s divide,
+    /// `depth_key`'s sort key, and `forward_distance` — never re-derived.
+    fn cam_forward_raw(&self, pos: WorldPos) -> f32 {
+        let (depth, _) = axis_values(self.depth_axis, pos);
+        let elev = self.elevation_deg.to_radians();
+        let dz = depth - self.camera_depth;
+        dz * elev.cos() + self.camera_height * elev.sin()
+    }
+
+    /// Distance-from-camera term the perspective divide uses, clamped to
+    /// `NEAR_EPS`. b6-t1's depth-scale reuses this (`1 / forward_distance`)
+    /// rather than inventing its own falloff.
+    pub fn forward_distance(&self, pos: WorldPos) -> f32 {
+        self.cam_forward_raw(pos).max(NEAR_EPS)
+    }
+}
+
+impl Camera for PerspectiveCamera {
+    fn project(&self, pos: WorldPos) -> (i32, i32) {
+        let (depth, spread) = axis_values(self.depth_axis, pos);
+        let elev = self.elevation_deg.to_radians();
+        let dz = depth - self.camera_depth;
+        let dy = -self.camera_height;
+        let cam_vertical = dz * elev.sin() + dy * elev.cos();
+        let cam_right = spread - self.spread_center;
+        let half_fov_tan = (self.fov_deg.to_radians() / 2.0).tan();
+        let denom = self.forward_distance(pos) * half_fov_tan;
+        let screen_x = (cam_right / denom * self.scale_dots).round() as i32;
+        let screen_y = (cam_vertical / denom * self.scale_dots).round() as i32;
+        (screen_x, screen_y)
+    }
+
+    fn depth_key(&self, pos: WorldPos) -> i32 {
+        (-self.cam_forward_raw(pos) * self.scale_dots).round() as i32
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,5 +413,138 @@ mod tests {
             x_y0, x_y2,
             "world-y (team axis) must map to screen-x under Sideline"
         );
+    }
+
+    // ── PerspectiveCamera (b2-t1) ───────────────────────────────────────────
+
+    /// Representative camera used by several tests below: camera sits at
+    /// depth -5.0 (strictly outside the 0..7 occupied board range), pitched
+    /// down 20°, aimed at spread_center=3.5. Not a pinned "preset" value —
+    /// arbitrary well-formed config used only to exercise the formula shape.
+    fn representative_cam() -> PerspectiveCamera {
+        PerspectiveCamera {
+            depth_axis: DepthAxis::Row,
+            elevation_deg: 20.0,
+            camera_depth: -5.0,
+            camera_height: 3.0,
+            spread_center: 3.5,
+            fov_deg: 60.0,
+            scale_dots: 40.0,
+        }
+    }
+
+    /// Root-cause structural fix for spec 39/41: `screen_x` and `screen_y`
+    /// must divide by the *identical* `forward_distance(pos)*half_fov_tan`
+    /// denominator. Recompute the expected coords independently using only
+    /// the public `forward_distance` accessor (not a private helper) and
+    /// assert `project` matches exactly — a hybrid formula (e.g. a taper
+    /// term on only one axis) would diverge from this for at least one point.
+    #[test]
+    fn perspective_project_screen_x_y_share_forward_distance_denom() {
+        let cam = representative_cam();
+        let half_fov_tan = (cam.fov_deg.to_radians() / 2.0).tan();
+        for pos in [
+            WorldPos::new(3.0, 1.0),
+            WorldPos::new(-2.0, 6.0),
+            WorldPos::new(3.5, 0.0),
+        ] {
+            let (depth, spread) = axis_values(cam.depth_axis, pos);
+            let elev = cam.elevation_deg.to_radians();
+            let dz = depth - cam.camera_depth;
+            let dy = -cam.camera_height;
+            let cam_vertical = dz * elev.sin() + dy * elev.cos();
+            let cam_right = spread - cam.spread_center;
+            let denom = cam.forward_distance(pos) * half_fov_tan;
+            let expected = (
+                (cam_right / denom * cam.scale_dots).round() as i32,
+                (cam_vertical / denom * cam.scale_dots).round() as i32,
+            );
+            assert_eq!(
+                cam.project(pos),
+                expected,
+                "project(pos={pos:?}) must divide both axes by forward_distance(pos)*half_fov_tan"
+            );
+        }
+    }
+
+    /// Moving a point nearer the camera along the depth axis must strictly
+    /// increase `depth_key` (nearer sorts on top).
+    #[test]
+    fn perspective_depth_key_nearer_is_greater() {
+        let cam = representative_cam();
+        let far = cam.depth_key(WorldPos::new(0.0, 6.0));
+        let near = cam.depth_key(WorldPos::new(0.0, 0.0));
+        assert!(
+            near > far,
+            "nearer point (row 0) must have a strictly greater depth_key than farther point (row 6): near={near} far={far}"
+        );
+    }
+
+    /// For a point comfortably on the on-screen side of `camera_depth`,
+    /// `forward_distance` must be a real positive value strictly above the
+    /// `NEAR_EPS` floor (not just clamped to it).
+    #[test]
+    fn perspective_forward_distance_positive_on_correct_side() {
+        let cam = representative_cam();
+        let d = cam.forward_distance(WorldPos::new(0.0, 0.0));
+        assert!(
+            d > NEAR_EPS,
+            "forward_distance for an on-screen point must exceed the NEAR_EPS floor, got {d}"
+        );
+    }
+
+    /// A point exactly at `cam_forward_raw == 0` (depth == camera_depth,
+    /// elevation 0 so the height term drops out) and a point behind the
+    /// camera (`cam_forward_raw < 0`) must both clamp to exactly `NEAR_EPS`,
+    /// never panic/produce NaN/inf, and remain safely invertible.
+    #[test]
+    fn perspective_forward_distance_near_eps_safety() {
+        let cam = PerspectiveCamera {
+            depth_axis: DepthAxis::Row,
+            elevation_deg: 0.0,
+            camera_depth: 5.0,
+            camera_height: 3.0,
+            spread_center: 0.0,
+            fov_deg: 60.0,
+            scale_dots: 40.0,
+        };
+        // dz == 0 → raw cam_forward == 0 exactly.
+        let at_zero = cam.forward_distance(WorldPos::new(0.0, 5.0));
+        assert_eq!(at_zero, NEAR_EPS, "cam_forward==0 must clamp to exactly NEAR_EPS");
+        assert!((1.0 / at_zero).is_finite());
+
+        // dz < 0 → raw cam_forward negative (behind the camera).
+        let behind = cam.forward_distance(WorldPos::new(0.0, 0.0));
+        assert_eq!(behind, NEAR_EPS, "cam_forward<0 must clamp to exactly NEAR_EPS");
+        assert!((1.0 / behind).is_finite());
+
+        // project() must not panic and must return finite dot coordinates.
+        let (px, py) = cam.project(WorldPos::new(0.0, 5.0));
+        assert!(
+            px.abs() < i32::MAX / 2 && py.abs() < i32::MAX / 2,
+            "project must return finite, sane dot coords at the NEAR_EPS clamp boundary, got ({px},{py})"
+        );
+    }
+
+    /// Moving a point nearer the camera (comfortably above the NEAR_EPS
+    /// floor, so the clamp is inert) must strictly decrease `forward_distance`.
+    #[test]
+    fn perspective_forward_distance_monotonic_nearer_is_smaller() {
+        let cam = representative_cam();
+        let near = cam.forward_distance(WorldPos::new(0.0, 0.0));
+        let far = cam.forward_distance(WorldPos::new(0.0, 6.0));
+        assert!(
+            near < far,
+            "forward_distance must strictly decrease as a point moves nearer the camera: near={near} far={far}"
+        );
+    }
+
+    /// A point on the aim line (`spread == spread_center`) must project to
+    /// `screen_x == 0` — no yaw, no additive shear.
+    #[test]
+    fn perspective_spread_center_projects_screen_x_zero() {
+        let cam = representative_cam();
+        let (x, _) = cam.project(WorldPos::new(cam.spread_center, 0.0));
+        assert_eq!(x, 0, "point on the aim line must project to screen_x == 0");
     }
 }
