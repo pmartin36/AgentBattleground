@@ -1929,21 +1929,7 @@ mod layout_tests {
     /// on the cell.
     #[test]
     fn stat_bar_and_details_panel_borders_visually_align_at_dot_level() {
-        use crate::scenes::test_util::render_to_buffer;
-
-        fn topmost_lit_abs_dot_row(buf: &Buffer, col: u16, near_row: u16) -> i32 {
-            const DOT_POS: [(u8, u8); 8] = [(0,0),(0,1),(0,2),(1,0),(1,1),(1,2),(0,3),(1,3)];
-            for y in near_row.saturating_sub(2)..near_row + 3 {
-                if let Some((mask, _)) = engine_render::decode_braille_cell(buf, col, y) {
-                    for dy in 0..4u8 {
-                        if (0..8u8).any(|k| DOT_POS[k as usize].1 == dy && mask & (1 << k) != 0) {
-                            return y as i32 * 4 + dy as i32;
-                        }
-                    }
-                }
-            }
-            panic!("no lit dot found near row {near_row} at column {col}");
-        }
+        use crate::scenes::test_util::{render_to_buffer, topmost_lit_dot_row};
 
         let scene = RosterManager::new();
         let area = Rect::new(0, 0, 80, 30);
@@ -1951,8 +1937,8 @@ mod layout_tests {
         let exhaustion = RosterManager::exhaustion_rect(area);
         let buf = render_to_buffer(&scene, 80, 30);
 
-        let stat_bar_top = topmost_lit_abs_dot_row(&buf, l.stat_bar.x + 2, l.stat_bar.y);
-        let details_top = topmost_lit_abs_dot_row(&buf, exhaustion.x + 2, exhaustion.y);
+        let stat_bar_top = topmost_lit_dot_row(&buf, l.stat_bar.x + 2, l.stat_bar.y);
+        let details_top = topmost_lit_dot_row(&buf, exhaustion.x + 2, exhaustion.y);
         assert_eq!(
             stat_bar_top, details_top,
             "stat_bar's border (topmost lit dot row {stat_bar_top}) and the details panel's border \

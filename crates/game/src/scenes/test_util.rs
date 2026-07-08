@@ -98,6 +98,32 @@ pub(crate) fn braille_mask(buf: &Buffer, x: u16, y: u16) -> Option<u32> {
     engine_render::decode_braille_cell(buf, x, y).map(|(mask, _color)| mask as u32)
 }
 
+/// The absolute DOT row (`cell_y * 4 + dy`, `dy` in `0..4`) of the topmost
+/// LIT dot found in column `col`, scanning cell rows near `near_row`
+/// (`near_row - 2 ..= near_row + 2`). Use this — never a bare `Rect`/
+/// `DotRect` coordinate comparison — to check whether two braille-rendered
+/// elements are actually visually aligned: two elements sharing a terminal
+/// cell row are NOT proven aligned by that alone, since different drawing
+/// routines can place their lit dots anywhere within a cell (this is
+/// exactly how a real bug shipped once — two borders shared a cell yet
+/// rendered 2 dots apart). See `CLAUDE.md`'s "`ratatui::Rect` is
+/// cell-quantized" rule.
+///
+/// Panics if no lit dot is found in the scanned range — callers should
+/// already know roughly where the element they're checking renders.
+pub(crate) fn topmost_lit_dot_row(buf: &Buffer, col: u16, near_row: u16) -> i32 {
+    // Bit k -> (dx, dy), per `dots.rs`'s `DOTS` table; dy is what we need.
+    const DOT_DY: [u8; 8] = [0, 1, 2, 0, 1, 2, 3, 3];
+    for y in near_row.saturating_sub(2)..near_row.saturating_add(3) {
+        if let Some(mask) = braille_mask(buf, col, y) {
+            if let Some(dy) = (0..4u8).find(|&dy| (0..8u8).any(|k| DOT_DY[k as usize] == dy && mask & (1 << k) != 0)) {
+                return y as i32 * 4 + dy as i32;
+            }
+        }
+    }
+    panic!("no lit dot found near row {near_row} at column {col}");
+}
+
 // ── b7-t1: golden-fixture serialize/deserialize helpers ─────────────────────
 
 /// Serialize every LIT braille cell of `buf`, through `decode_braille_cell`,
