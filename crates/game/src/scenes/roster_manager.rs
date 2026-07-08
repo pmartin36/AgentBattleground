@@ -4046,3 +4046,95 @@ mod selection_tests {
         );
     }
 }
+
+/// b7-t1: pre-`flex()` migration golden-fixture gate. Freezes the CURRENT
+/// (pre-migration) `RosterManager` render at 4 deterministic scenarios into
+/// committed fixtures under `crates/game/tests/fixtures/roster/`, decoded
+/// through the exact `decode_braille_cell`/`diff_dots` channel the b8
+/// `flex()` migration is re-checked against (b8-t9). Text labels are NOT
+/// covered here — `decode_braille_cell` only sees braille dot cells
+/// (research.md SCOPE NOTE); text positioning stays covered by this file's
+/// existing `rect_text`-based assertions elsewhere.
+#[cfg(test)]
+mod golden_fixture_tests {
+    use super::*;
+    use crate::scenes::test_util::{
+        buffer_to_art, key_event, load_roster_fixture, render_to_buffer, serialize_braille_buffer,
+    };
+    use crossterm::event::KeyCode;
+    use engine_core::scene::EngineCtx;
+    use engine_render::diff_dots;
+
+    /// (fixture name, render width, render height, scene-mutation fn).
+    type Scenario = (&'static str, u16, u16, fn(&mut RosterManager));
+
+    /// The 4 deterministic scenarios: fixture name, render dims, and the
+    /// mutation applied to a fresh `RosterManager::new()` before render.
+    fn scenarios() -> Vec<Scenario> {
+        fn rest(_scene: &mut RosterManager) {}
+        fn at_index_2(scene: &mut RosterManager) {
+            scene.current_index = 2;
+        }
+        fn mid_slide(scene: &mut RosterManager) {
+            scene.handle_input(key_event(KeyCode::Right));
+            let mut ctx = EngineCtx;
+            scene.update(&mut ctx, Duration::from_millis(75)); // ~25% of the 300ms SLIDE_DUR
+        }
+
+        vec![
+            ("rest_40x20", 40, 20, rest as fn(&mut RosterManager)),
+            ("rest_80x30", 80, 30, rest as fn(&mut RosterManager)),
+            ("index2_80x30", 80, 30, at_index_2 as fn(&mut RosterManager)),
+            ("midslide_80x30", 80, 30, mid_slide as fn(&mut RosterManager)),
+        ]
+    }
+
+    /// For each of the 4 scenarios, the CURRENT render must dot-for-dot
+    /// match its committed fixture (`diff_dots(&fixture, &actual).is_match()`).
+    /// Pre-migration this is a freeze (green by construction once the
+    /// fixtures are generated); b8-t9 re-runs this SAME assertion against
+    /// the `flex()`-migrated code, so this test is the enforced acceptance
+    /// oracle for the whole b8 bucket.
+    ///
+    /// Run with `UPDATE_ROSTER_FIXTURES=1` to (re)generate the 4
+    /// `*.fixture` + `*.preview.txt` files from the current render — do the
+    /// manual visual pass over the previews (recorded in
+    /// `crates/game/tests/fixtures/roster/README.md`) BEFORE committing
+    /// regenerated fixtures.
+    #[test]
+    fn roster_golden_fixtures_match_pre_migration_baseline() {
+        let generate = std::env::var("UPDATE_ROSTER_FIXTURES").is_ok();
+
+        for (name, w, h, build) in scenarios() {
+            let mut scene = RosterManager::new();
+            build(&mut scene);
+            let actual = render_to_buffer(&scene, w, h);
+
+            if generate {
+                let fixture_path =
+                    format!("{}/tests/fixtures/roster/{name}.fixture", env!("CARGO_MANIFEST_DIR"));
+                let preview_path = format!(
+                    "{}/tests/fixtures/roster/{name}.preview.txt",
+                    env!("CARGO_MANIFEST_DIR")
+                );
+                std::fs::write(&fixture_path, serialize_braille_buffer(&actual))
+                    .unwrap_or_else(|e| panic!("failed to write {fixture_path}: {e}"));
+                std::fs::write(&preview_path, buffer_to_art(&actual))
+                    .unwrap_or_else(|e| panic!("failed to write {preview_path}: {e}"));
+                continue;
+            }
+
+            let fixture = load_roster_fixture(name);
+            let diff = diff_dots(&fixture, &actual);
+            assert!(
+                diff.is_match(),
+                "scenario {name:?}: current render diverges from the committed \
+                 pre-migration fixture ({} dot mismatch(es) of {} compared); \
+                 regenerate with UPDATE_ROSTER_FIXTURES=1 only if the divergence \
+                 is intentional (re-run the manual visual pass first)",
+                diff.mismatches.len(),
+                diff.dots_compared
+            );
+        }
+    }
+}
