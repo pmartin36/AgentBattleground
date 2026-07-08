@@ -8,7 +8,7 @@ use engine_render::composite::{composite_scene, SpriteContent, SpriteDraw};
 use engine_render::dots::{dots_to_grid, Dot, DotBuffer};
 use engine_render::transform::{Transform, Vec2};
 use engine_render::tween::Tween;
-use engine_render::{draw_grid, AnimatedSprite};
+use engine_render::{draw_grid, rasterize_shape, AnimatedSprite, ShapeKind};
 use engine_core::color::Rgba;
 use engine_core::Inspectable;
 use engine_core::SceneKey;
@@ -763,6 +763,109 @@ impl BattleViewer {
         self.creatures.get(index)?.animation(AnimationKind::Idle)
     }
 
+    /// Shared drawable-piece iterator: alive pieces that have a sprite,
+    /// paired with that sprite. `shadow_buffers` and `build_draws` both fold
+    /// over this SAME iterator so their per-piece indices can never drift.
+    fn drawable_pieces(&self) -> impl Iterator<Item = (&Piece, &AnimatedSprite)> {
+        self.pieces
+            .iter()
+            .filter(|p| p.alive)
+            .filter_map(|p| Some((p, self.piece_sprite(p.index)?)))
+    }
+
+    /// b7-t1: pure fade scalar in `[0,1]` for `piece_index`'s contact shadow,
+    /// derived from `self.elapsed`/`self.events`/`self.tuning.shadow_fade_ms`
+    /// (spec Decision 4). Standing still (no relevant event, or outside every
+    /// event's window) => `1.0`. When multiple events target this piece, the
+    /// MIN across them wins.
+    fn shadow_alpha(&self, piece_index: usize) -> f32 {
+        let fade = self.tuning.shadow_fade_ms as f32 / 1000.0;
+        let mut alpha = 1.0_f32;
+        for ev in &self.events {
+            let target = match ev.kind {
+                EventKind::Move { piece_index, .. } => piece_index,
+                EventKind::Die { piece_index } => piece_index,
+            };
+            if target != piece_index {
+                continue;
+            }
+            let t_start = ev.start_time;
+            let t_end = ev.start_time + ev.duration;
+            let a = if self.elapsed < t_start {
+                1.0
+            } else if fade > 0.0 && self.elapsed < t_start + fade {
+                1.0 - (self.elapsed - t_start) / fade
+            } else if self.elapsed < t_end {
+                0.0
+            } else if fade > 0.0 && self.elapsed < t_end + fade {
+                (self.elapsed - t_end) / fade
+            } else {
+                1.0
+            };
+            alpha = alpha.min(a);
+        }
+        alpha
+    }
+
+    /// b7-t1: one team-colored `rasterize_shape(ShapeKind::Ellipse, ...)`
+    /// buffer per drawable piece, same iteration order `build_draws` shares
+    /// (`drawable_pieces`). Width is `geom.cell_width_cols * 2` dots; height
+    /// squashes by the camera's elevation sine (`k`) so a low, oblique camera
+    /// flattens the ellipse while Top-Down (`k=1`) keeps it round.
+    fn shadow_buffers(&self, geom: &BoardGeometry) -> Vec<DotBuffer> {
+        let k = geom.camera.oblique().elevation_deg.to_radians().sin();
+        // `cell_width_cols` is always `2 * cell_height_rows` (even), so a bare
+        // `* 2` width is always even and `rasterize_shape`'s center
+        // (`(width-1)/2`) never lands on an integer dot — no dot can ever
+        // reach the shape's true center/full alpha. `+ 1` (spec: "roughly"
+        // `cell_width_cols * 2` dots wide) keeps the width odd so the
+        // geometric center always coincides with a real dot.
+        let w = geom.cell_width_cols as usize * 2 + 1;
+        let h = ((w as f32) * k).round().max(1.0) as usize;
+        self.drawable_pieces()
+            .map(|(p, _)| {
+                let alpha = self.shadow_alpha(p.index);
+                let col = Rgba::new(p.color.r, p.color.g, p.color.b, (255.0 * alpha).round() as u8);
+                rasterize_shape(ShapeKind::Ellipse, w, h, col)
+            })
+            .collect()
+    }
+
+    /// b7-t1: per drawable piece, emits the shadow `SpriteDraw`
+    /// (`Prerasterized`, `tint: None`) immediately followed by the piece's
+    /// own `SpriteDraw` (`tint: None` — b7-t1 detint), sharing `translate`.
+    /// `shadow_bufs` must come from `self.shadow_buffers(geom)` and align
+    /// index-for-index with `drawable_pieces()`'s order.
+    fn build_draws<'a>(
+        &'a self,
+        geom: &BoardGeometry,
+        shadow_bufs: &'a [DotBuffer],
+        elapsed: Duration,
+    ) -> Vec<SpriteDraw<'a>> {
+        let base_dot_rows = sprite_base_dot_rows(&geom.camera);
+        let oblique = geom.camera.oblique();
+        let mut draws = Vec::with_capacity(shadow_bufs.len() * 2);
+        for (i, (p, sprite)) in self.drawable_pieces().enumerate() {
+            let transform = depth_scaled_transform(&p.transform, &oblique, &self.tuning);
+            draws.push(SpriteDraw {
+                content: SpriteContent::Prerasterized(&shadow_bufs[i]),
+                translate: p.transform.translate,
+                tint: None,
+            });
+            draws.push(SpriteDraw {
+                content: SpriteContent::Animated {
+                    sprite,
+                    elapsed: piece_elapsed(elapsed, p.index),
+                    transform,
+                    base_dot_rows,
+                },
+                translate: p.transform.translate,
+                tint: None,
+            });
+        }
+        draws
+    }
+
     /// Drives every event whose window has begun and is not yet settled,
     /// every frame — independent of any other event, per the spec's overlap
     /// rule ("the playback clock evaluates which events are active at the
@@ -869,27 +972,8 @@ impl Scene for BattleViewer {
         draw_board_lines(frame.buffer_mut(), &geom);
 
         let elapsed = Duration::from_secs_f32(self.elapsed);
-        let base_dot_rows = sprite_base_dot_rows(&geom.camera);
-        let oblique = geom.camera.oblique();
-        let draws: Vec<SpriteDraw> = self
-            .pieces
-            .iter()
-            .filter(|p| p.alive)
-            .filter_map(|p| {
-                let sprite = self.piece_sprite(p.index)?;
-                let transform = depth_scaled_transform(&p.transform, &oblique, &self.tuning);
-                Some(SpriteDraw {
-                    content: SpriteContent::Animated {
-                        sprite,
-                        elapsed: piece_elapsed(elapsed, p.index),
-                        transform,
-                        base_dot_rows,
-                    },
-                    translate: p.transform.translate,
-                    tint: Some(p.color),
-                })
-            })
-            .collect();
+        let shadow_bufs = self.shadow_buffers(&geom);
+        let draws = self.build_draws(&geom, &shadow_bufs, elapsed);
 
         let w = (geom.board_rect.width * 2) as usize;
         let h = (geom.board_rect.height * 4) as usize;
@@ -2698,79 +2782,6 @@ mod battle_viewer_scene_wiring_tests {
         sym.chars().any(|c| ('\u{2800}'..='\u{28FF}').contains(&c))
     }
 
-    /// DELIVERABLE (2)+(3): sprite glyph cells are present in both the top
-    /// half (Team A) and bottom half (Team B) of the board, and the two
-    /// halves' sets of glyph colors are disjoint aside from near-black
-    /// outline/shadow pixels, proving the two teams render with genuinely
-    /// distinct (multiply-blend-tinted) palettes rather than the same
-    /// untinted sprite in both places. Does not assert exact RGB values,
-    /// since multiply-blend against the real (multi-hued, non-uniform)
-    /// creature art doesn't average to a single flat color the way a full
-    /// color-replace would have.
-    ///
-    /// Near-black source pixels are excluded from the disjointness check:
-    /// `mul(src, c) = floor(src*c/255)` (composite.rs) means for a small
-    /// source value `src`, the output is confined to a narrow band
-    /// (`src*176/255 ..= src`, since both tints' channels fall in
-    /// `176..=255`) regardless of which team's tint is applied — e.g.
-    /// `src=9` maps to `6..=9` under either tint. Such near-black
-    /// outline/shadow pixels are legitimately shared by both teams by
-    /// construction (tint-invariant within rounding), not evidence of
-    /// untinted bleed, so they're excluded by a luma-ish max-channel
-    /// threshold rather than only the exact `(0,0,0)` case.
-    #[test]
-    fn team_tinted_cells_present_and_banded_by_team() {
-        use std::collections::HashSet;
-
-        /// Pixels this dark collapse to near-identical output regardless of
-        /// tint (see doc comment above) and are excluded from the
-        /// disjointness check as tint-invariant, not untinted bleed.
-        const NEAR_BLACK_MAX_CHANNEL: u8 = 24;
-
-        let scene = BattleViewer::default();
-        let area = Rect::new(0, 0, 100, 50);
-        let geom = board_geometry(area, BattleCamera::sideline_preset(), BattleViewerTuning::default());
-        let mid_y = geom.board_rect.y + geom.board_rect.height / 2;
-
-        let buf = render_to_buffer(&scene, 100, 50);
-
-        let mut top_colors: HashSet<(u8, u8, u8)> = HashSet::new();
-        let mut bottom_colors: HashSet<(u8, u8, u8)> = HashSet::new();
-
-        // Default scene camera is Sideline, which renders grid lines dimmed (b4-t1).
-        let grid_line_fg = actual_grid_line_fg(&geom.camera, &BattleViewerTuning::default());
-        for y in geom.board_rect.y..geom.board_rect.bottom() {
-            for x in geom.board_rect.x..geom.board_rect.right() {
-                let cell = buf.cell((x, y)).unwrap();
-                if !is_braille_glyph(cell.symbol()) {
-                    continue;
-                }
-                if cell.fg == grid_line_fg {
-                    continue; // board grid-line glyph, not piece tint
-                }
-                if let Color::Rgb(r, g, b) = cell.fg {
-                    if r.max(g).max(b) < NEAR_BLACK_MAX_CHANNEL {
-                        continue; // tint-invariant near-black outline/shadow, shared by design
-                    }
-                    if y < mid_y {
-                        top_colors.insert((r, g, b));
-                    } else {
-                        bottom_colors.insert((r, g, b));
-                    }
-                }
-            }
-        }
-
-        assert!(!top_colors.is_empty(), "expected some Team A glyph color in the top half");
-        assert!(!bottom_colors.is_empty(), "expected some Team B glyph color in the bottom half");
-        assert!(
-            top_colors.is_disjoint(&bottom_colors),
-            "top-half (Team A) and bottom-half (Team B) glyph colors must not overlap \
-             (aside from near-black outline/shadow pixels, already excluded): \
-             top={top_colors:?} bottom={bottom_colors:?}"
-        );
-    }
-
     /// DELIVERABLE (4): idle animation actually advances — after `update()`
     /// accumulates enough elapsed time to cross a frame boundary, at least
     /// one previously-lit board cell changes.
@@ -2813,56 +2824,25 @@ mod battle_viewer_scene_wiring_tests {
         assert_eq!(scene.id(), SceneKey::from(SceneId::BattleViewer));
     }
 
-    /// b3-t2 DELIVERABLE (the point of the whole feature): mutating a stored
-    /// `scene.pieces[i].color` directly must change what the very next
-    /// `render()` call draws — proving `render()` reads live stored state
-    /// instead of silently re-deriving `piece.team.tint_color()` fresh every
-    /// frame. Every piece's color is set to a pure-black sentinel; multiply-
-    /// blend by black forces every lit sprite dot to black regardless of the
-    /// (non-uniform) wizard source, so the expected output is exact.
-    #[test]
-    fn render_reflects_mutated_stored_piece_color() {
-        let mut scene = BattleViewer::default();
-        let area = Rect::new(0, 0, 100, 50);
-        let geom = board_geometry(area, BattleCamera::sideline_preset(), BattleViewerTuning::default());
-
-        for p in &mut scene.pieces {
-            p.color = Rgba::rgb(0, 0, 0);
-        }
-
-        let buf = render_to_buffer(&scene, 100, 50);
-        // Default scene camera is Sideline, which renders grid lines dimmed (b4-t1).
-        let grid_line_fg = actual_grid_line_fg(&geom.camera, &BattleViewerTuning::default());
-
-        let mut found_glyph = false;
-        for y in geom.board_rect.y..geom.board_rect.bottom() {
-            for x in geom.board_rect.x..geom.board_rect.right() {
-                let cell = buf.cell((x, y)).unwrap();
-                if !is_braille_glyph(cell.symbol()) {
-                    continue;
-                }
-                if cell.fg == grid_line_fg {
-                    continue; // board grid-line glyph, not a piece
-                }
-                found_glyph = true;
-                assert_eq!(
-                    cell.fg,
-                    Color::Rgb(0, 0, 0),
-                    "cell ({x},{y}) must reflect the mutated stored piece.color (black), not the team default"
-                );
-            }
-        }
-        assert!(found_glyph, "expected at least one sprite glyph cell in the board");
-    }
-
+    /// b3-t2's former `render_reflects_mutated_stored_piece_color` asserted
+    /// mutating a stored `piece.color` changes what `render()` draws for the
+    /// piece's own SPRITE (pure-black multiply-tint). b7-t1 detints the
+    /// piece sprite (`tint: None`) — team color now lives only on the
+    /// contact shadow, so that "render reads live stored color" contract is
+    /// now pinned at the shadow directly: see
+    /// `contact_shadow_tests::shadow_buffers_reflect_mutated_stored_piece_color`.
+    ///
     /// b3-t2 DELIVERABLE: the tint-shape-invariance bug. `render()`'s glyph
     /// mask (braille `symbol`) must be decided from the untinted sprite shape
-    /// alone — changing ONLY a piece's `color` (team tint), with its
-    /// transform/frame/placement held fixed, must never move the mask. Holds
-    /// the SAME piece fixed (so `Team::scale_x`'s mirror never enters) and
-    /// varies just `piece.color` between TEAM_A_COLOR and TEAM_B_COLOR — the
-    /// spec's own "team-A/team-B" verification technique, isolated to a
-    /// single piece so only the tint differs between the two renders.
+    /// alone — changing ONLY a piece's `color`, with its transform/frame/
+    /// placement held fixed, must never move the mask. Post-detint the piece
+    /// sprite's mask is trivially color-independent (tint no longer touches
+    /// it at all); any color difference between the two renders now comes
+    /// from the shadow, not the sprite, so this test only pins the full-board
+    /// glyph-mask topology invariance — it no longer assumes the color
+    /// difference is located over the piece's own sprite cells. Holds the
+    /// SAME piece fixed (so `Team::scale_x`'s mirror never enters) and varies
+    /// just `piece.color` between TEAM_A_COLOR and TEAM_B_COLOR.
     #[test]
     fn render_glyph_mask_invariant_to_tint() {
         let mut scene = BattleViewer::default();
@@ -3139,6 +3119,200 @@ mod battle_viewer_scene_wiring_tests {
             (scene.elapsed - 0.15).abs() < 1e-4,
             "expected elapsed ~= 0.15 seconds after a 150ms update(), got {}",
             scene.elapsed
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: contact shadow draw + sprite-tint removal (b7-t1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod contact_shadow_tests {
+    use super::*;
+
+    /// PUBLIC_SURFACE case 1 (unit on `shadow_alpha`): a standing-still
+    /// piece — `elapsed == 0.0`, before `demo_events`' `start_time`s — has no
+    /// active event, so `shadow_alpha` must be exactly `1.0`.
+    #[test]
+    fn shadow_alpha_full_when_standing_still() {
+        let scene = BattleViewer::default();
+        assert_eq!(
+            scene.shadow_alpha(0),
+            1.0,
+            "a piece with no active event (elapsed before every event's start_time) must be full shadow alpha"
+        );
+    }
+
+    /// PUBLIC_SURFACE case 2: sampled partway through a `Move` longer than
+    /// the fade window (`demo_events`' piece-0 Move: [1.0, 2.2), fade =
+    /// `shadow_fade_ms/1000 = 0.15`), `shadow_alpha` must be exactly `0.0`.
+    #[test]
+    fn shadow_alpha_zero_mid_move_past_fade() {
+        let scene = BattleViewer { elapsed: 1.5, ..BattleViewer::default() }; // 1.0+0.15=1.15 <= 1.5 < 2.2
+        assert_eq!(
+            scene.shadow_alpha(0),
+            0.0,
+            "sampled well inside the move's window, past the fade-out, alpha must be exactly 0.0"
+        );
+    }
+
+    /// PUBLIC_SURFACE case 3: immediately after the move's window closes
+    /// (`t_end = 2.2`, fade window `[2.2, 2.35)`), `shadow_alpha` must be
+    /// partway back up from 0 toward 1, matching the fade-in formula exactly.
+    #[test]
+    fn shadow_alpha_fades_back_in_after_move_window() {
+        let scene = BattleViewer { elapsed: 2.3, ..BattleViewer::default() }; // (2.3 - 2.2) / 0.15 = 0.6666...
+        let alpha = scene.shadow_alpha(0);
+        assert!(
+            alpha > 0.0 && alpha < 1.0,
+            "expected a partial fade-in value in (0,1), got {alpha}"
+        );
+        let expected = (2.3_f32 - 2.2_f32) / 0.15_f32;
+        assert!(
+            (alpha - expected).abs() < 1e-3,
+            "expected shadow_alpha ~= {expected}, got {alpha}"
+        );
+    }
+
+    /// PUBLIC_SURFACE case 1 (shadow_buffers, standing-still): the shadow
+    /// ellipse's center dot alpha must equal the piece's own `color.a`
+    /// (full-alpha shadow) when no event fades it. This is the "team color
+    /// now lives on the shadow" contract that replaces the removed
+    /// `render_reflects_mutated_stored_piece_color` sprite-tint assertion
+    /// (b7-t1 detints the piece sprite).
+    #[test]
+    fn shadow_center_dot_full_alpha_when_standing_still() {
+        let scene = BattleViewer::default();
+        let area = Rect::new(0, 0, 100, 50);
+        let geom = board_geometry(area, BattleCamera::sideline_preset(), BattleViewerTuning::default());
+
+        let bufs = scene.shadow_buffers(&geom);
+        assert!(!bufs.is_empty(), "expected at least one shadow buffer for a drawable piece");
+        let buf = &bufs[0];
+        let (cx, cy) = (buf.cols() / 2, buf.rows() / 2);
+        match buf.get(cx, cy) {
+            Dot::Lit(c) => assert_eq!(
+                c.a, scene.pieces[0].color.a,
+                "standing-still shadow center dot alpha must equal the piece's own color.a"
+            ),
+            Dot::Transparent => panic!("expected the shadow ellipse's center dot to be Lit"),
+        }
+    }
+
+    /// Replaces `render_reflects_mutated_stored_piece_color` (b3-t2): after
+    /// this task detints the piece sprite, team color lives ONLY on the
+    /// shadow — mutating a stored `piece.color` must change what
+    /// `shadow_buffers` bakes into the ellipse's center dot RGB, proving the
+    /// shadow reads live stored state instead of a fixed team default.
+    #[test]
+    fn shadow_buffers_reflect_mutated_stored_piece_color() {
+        let mut scene = BattleViewer::default();
+        for p in &mut scene.pieces {
+            p.color = Rgba::rgb(11, 22, 33);
+        }
+        let area = Rect::new(0, 0, 100, 50);
+        let geom = board_geometry(area, BattleCamera::sideline_preset(), BattleViewerTuning::default());
+
+        let bufs = scene.shadow_buffers(&geom);
+        assert!(!bufs.is_empty(), "expected at least one shadow buffer for a drawable piece");
+        let buf = &bufs[0];
+        let (cx, cy) = (buf.cols() / 2, buf.rows() / 2);
+        match buf.get(cx, cy) {
+            Dot::Lit(c) => assert_eq!(
+                (c.r, c.g, c.b),
+                (11, 22, 33),
+                "shadow center dot RGB must reflect the mutated stored piece.color, not a team default"
+            ),
+            Dot::Transparent => panic!("expected the shadow ellipse's center dot to be Lit"),
+        }
+    }
+
+    /// PUBLIC_SURFACE case 4: the piece's own `SpriteDraw.tint` must be
+    /// `None` — team color no longer multiply-tints the piece sprite
+    /// (b7-t1 detint; carried only by the shadow).
+    #[test]
+    fn piece_own_sprite_tint_is_none() {
+        let scene = BattleViewer::default();
+        let area = Rect::new(0, 0, 100, 50);
+        let geom = board_geometry(area, BattleCamera::sideline_preset(), BattleViewerTuning::default());
+        let shadow_bufs = scene.shadow_buffers(&geom);
+        let draws = scene.build_draws(&geom, &shadow_bufs, Duration::ZERO);
+
+        assert!(draws.len() >= 2, "expected at least one shadow+piece pair");
+        for pair in draws.chunks(2) {
+            let piece = &pair[1];
+            assert!(
+                matches!(piece.content, SpriteContent::Animated { .. }),
+                "the second entry of each pair must be the piece's own Animated draw"
+            );
+            assert_eq!(piece.tint, None, "the piece's own SpriteDraw.tint must be None");
+        }
+    }
+
+    /// PUBLIC_SURFACE case 5: each shadow entry in `build_draws`' output is
+    /// `Prerasterized`, carries `tint: None`, shares `translate` with the
+    /// following piece entry, and sits immediately before it (order =
+    /// shadow, piece, shadow, piece, ...).
+    #[test]
+    fn shadow_precedes_own_piece_and_shares_translate() {
+        let scene = BattleViewer::default();
+        let area = Rect::new(0, 0, 100, 50);
+        let geom = board_geometry(area, BattleCamera::sideline_preset(), BattleViewerTuning::default());
+        let shadow_bufs = scene.shadow_buffers(&geom);
+        let draws = scene.build_draws(&geom, &shadow_bufs, Duration::ZERO);
+
+        assert_eq!(
+            draws.len(),
+            shadow_bufs.len() * 2,
+            "expected exactly one shadow draw + one piece draw per drawable piece"
+        );
+        assert!(draws.len() >= 2, "expected at least one drawable piece in the default scene");
+
+        for pair in draws.chunks(2) {
+            let (shadow, piece) = (&pair[0], &pair[1]);
+            assert!(
+                matches!(shadow.content, SpriteContent::Prerasterized(_)),
+                "shadow entry must be SpriteContent::Prerasterized"
+            );
+            assert_eq!(shadow.tint, None, "shadow entry's tint must be None (color is baked into the ellipse)");
+            assert_eq!(
+                shadow.translate, piece.translate,
+                "shadow must share the very next entry's (its own piece's) translate"
+            );
+        }
+    }
+
+    /// PUBLIC_SURFACE case 6: shadow vertical squash differs by camera
+    /// elevation. Top-Down (`elevation_deg = 90.0`, `k = sin(90°) = 1.0`)
+    /// shadows are round (`rows() == cols()`); Sideline
+    /// (`elevation_deg = 10.0`, `k = sin(10°) ≈ 0.17`) shadows are
+    /// flattened (`rows()` much smaller than Top-Down's for the same width).
+    #[test]
+    fn shadow_squash_round_topdown_flat_sideline() {
+        let scene = BattleViewer::default();
+        let area = Rect::new(0, 0, 100, 50);
+
+        let geom_top = board_geometry(area, BattleCamera::top_down_preset(), BattleViewerTuning::default());
+        let geom_side = board_geometry(area, BattleCamera::sideline_preset(), BattleViewerTuning::default());
+        assert_eq!(
+            geom_top.cell_width_cols, geom_side.cell_width_cols,
+            "sanity: shadow width (cell_width_cols*2) must be camera-independent for the same area"
+        );
+
+        let top_bufs = scene.shadow_buffers(&geom_top);
+        let side_bufs = scene.shadow_buffers(&geom_side);
+        assert!(!top_bufs.is_empty() && !side_bufs.is_empty(), "expected at least one shadow buffer each");
+
+        let (topdown, sideline) = (&top_bufs[0], &side_bufs[0]);
+        assert_eq!(
+            topdown.cols(), topdown.rows(),
+            "Top-Down (k=1) shadow must be round: rows() == cols()"
+        );
+        assert!(
+            sideline.rows() < topdown.rows(),
+            "Sideline (k~=0.17) shadow must be flattened relative to Top-Down: sideline.rows()={} topdown.rows()={}",
+            sideline.rows(), topdown.rows()
         );
     }
 }

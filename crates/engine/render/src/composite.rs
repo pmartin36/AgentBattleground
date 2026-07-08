@@ -75,13 +75,12 @@ pub fn composite_dots(
 // composite_scene (b1-t1, spec 33)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// The rasterizable content of one [`SpriteDraw`]. Today always `Animated`
-/// (mirrors `piece_shape_and_color`'s inputs: sprite + elapsed + transform +
-/// base_dot_rows).
-///
-/// Extension point (documented, NOT built): a future `Prerasterized(&'a
-/// DotBuffer)` variant is additive — existing `Animated` construction sites
-/// do not change when it is added.
+/// The rasterizable content of one [`SpriteDraw`]. `Animated` mirrors
+/// `piece_shape_and_color`'s inputs: sprite + elapsed + transform +
+/// base_dot_rows. `Prerasterized` (b7-t1: contact shadow) carries an
+/// already-built `DotBuffer` (e.g. from `rasterize_shape`) placed as-is, with
+/// no sprite/transform rasterization step — additive: every existing
+/// `Animated` construction site is unaffected.
 pub enum SpriteContent<'a> {
     Animated {
         sprite: &'a AnimatedSprite,
@@ -89,6 +88,7 @@ pub enum SpriteContent<'a> {
         transform: Transform,
         base_dot_rows: u32,
     },
+    Prerasterized(&'a DotBuffer),
 }
 
 /// One sprite to composite: what to rasterize (`content`), where to place it
@@ -127,6 +127,7 @@ pub fn composite_scene<C: Camera>(
                 transform,
                 base_dot_rows,
             } => sprite.rasterize_at(*elapsed, transform, *base_dot_rows),
+            SpriteContent::Prerasterized(buf) => (*buf).clone(),
         };
         let tinted = d.tint.map(|c| tint(&raw, c));
         raws.push(raw);
@@ -635,6 +636,37 @@ mod tests {
         assert_eq!(
             actual, expected,
             "untinted composite_scene output must match manually compositing the raw buffer into both shape and color"
+        );
+    }
+
+    /// A `Prerasterized(&DotBuffer)` draw must composite the given buffer
+    /// as-is — no sprite rasterization step, and (per `tint: None`) the same
+    /// buffer feeds both the shape and color passes. Sibling `Animated` draws
+    /// are unaffected (additive variant); this is the mechanism b7-t1's
+    /// contact shadow relies on to place a `rasterize_shape`-built ellipse.
+    #[test]
+    fn composite_scene_prerasterized_places_buffer_as_is() {
+        // A 2x4-dot buffer is the minimum that maps to a non-empty (1x1
+        // cell) Grid (dots_to_grid_tinted floor-divides by 2/4). `project:
+        // (1, 2)` makes `place`'s centering land the buffer's top-left dot
+        // exactly at canvas origin: dot_x = 1 - 2/2 = 0, dot_y = 2 - 4/2 = 0.
+        let mut buf = DotBuffer::new(2, 4);
+        buf.set(0, 0, Dot::Lit(Rgba::rgb(10, 20, 30)));
+        let camera = FixedProjectCamera { project: (1, 2) };
+
+        let draws = [SpriteDraw {
+            content: SpriteContent::Prerasterized(&buf),
+            translate: WorldPos::new(0.0, 0.0),
+            tint: None,
+        }];
+        let grid = composite_scene(2, 4, &camera, &draws);
+
+        assert_eq!(grid.cols(), 1, "canvas 2 dots wide -> 1 cell column");
+        assert_eq!(grid.rows(), 1, "canvas 4 dots tall -> 1 cell row");
+        assert_eq!(
+            glyph_color(grid.get(0, 0)),
+            Rgba::rgb(10, 20, 30),
+            "Prerasterized draw must place the given buffer's dot unchanged"
         );
     }
 }
