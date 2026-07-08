@@ -8,7 +8,10 @@ use engine_core::Inspectable;
 use engine_core::SceneKey;
 use serde_json::Value as JsonValue;
 
-use engine_render::{anchor, anchor_with_margin, stack, Anchor, ButtonState, FrameButton, StackAxis};
+use engine_render::{
+    anchor_with_margin, flex, stack, Align, Anchor, Basis, ButtonState, Direction, FlexChild,
+    FlexStyle, FrameButton, Justify, StackAxis,
+};
 
 use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use crate::scene_id::SceneId;
@@ -104,7 +107,31 @@ impl MainHub {
     /// Title box rect for `area` — sole place its position/size is
     /// computed; `render()` and tests both call this.
     fn title_rect(area: Rect) -> Rect {
-        anchor(area, Self::title_size(area), Anchor::TopCenter)
+        let (w, h) = Self::title_size(area);
+        let child = FlexChild {
+            basis: Basis::Intrinsic(Box::new(move |_main| (w as i32 * 2, h as i32 * 4))),
+            grow: 0.0,
+            shrink: 0.0,
+        };
+        let style = FlexStyle {
+            direction: Direction::Row,
+            justify_content: Justify::Center,
+            align_items: Align::Start,
+            gap: 0,
+        };
+        flex(Self::cell_rect_to_dots(area), style, std::slice::from_ref(&child))[0].to_cell_rect()
+    }
+
+    /// Converts a whole-cell `Rect` into dot space (2 dots wide, 4 dots tall
+    /// per cell) — the sole cell->dot boundary `title_rect`/`menu_container`/
+    /// `button_rects` use on their way into `flex()` (b2-t1/b3-t1/b3-t2).
+    fn cell_rect_to_dots(r: Rect) -> engine_render::DotRect {
+        engine_render::DotRect {
+            x: r.x as i32 * 2,
+            y: r.y as i32 * 4,
+            w: r.width as i32 * 2,
+            h: r.height as i32 * 4,
+        }
     }
 
     /// Menu group container rect for `area` — anchored near the BOTTOM of
@@ -637,19 +664,34 @@ mod mouse_input_tests {
 #[cfg(test)]
 mod layout_tests {
     use super::*;
-    use engine_render::{anchor, stack, Anchor, StackAxis};
+    use engine_render::{flex, stack, Align, Basis, Direction, FlexChild, FlexStyle, Justify, StackAxis};
 
     /// Fixed screen area used by every case in this module.
     fn area() -> Rect {
         Rect::new(0, 0, 120, 50)
     }
 
-    /// `title_rect` is exactly `anchor(area, title_size(area),
-    /// Anchor::TopCenter)` — the mechanism, not hand-derived arithmetic.
+    /// `title_rect` is exactly a single-child `flex()` Row (Justify::Center,
+    /// Align::Start) over `cell_rect_to_dots(area)`, `.to_cell_rect()`'d —
+    /// the mechanism, not hand-derived arithmetic (research.md's proven
+    /// formula-equivalent replacement for `anchor(.., Anchor::TopCenter)`).
     #[test]
     fn title_rect_is_top_center_anchor() {
         let a = area();
-        let expected = anchor(a, MainHub::title_size(a), Anchor::TopCenter);
+        let (w, h) = MainHub::title_size(a);
+        let child = FlexChild {
+            basis: Basis::Intrinsic(Box::new(move |_main| (w as i32 * 2, h as i32 * 4))),
+            grow: 0.0,
+            shrink: 0.0,
+        };
+        let style = FlexStyle {
+            direction: Direction::Row,
+            justify_content: Justify::Center,
+            align_items: Align::Start,
+            gap: 0,
+        };
+        let expected =
+            flex(MainHub::cell_rect_to_dots(a), style, std::slice::from_ref(&child))[0].to_cell_rect();
         assert_eq!(MainHub::title_rect(a), expected);
     }
 
