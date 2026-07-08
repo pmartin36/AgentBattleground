@@ -191,6 +191,12 @@ impl RosterManager {
     /// its pinned baseline above `dot_row`.
     const STAT_BAR_BAND_H: u16 =
         Self::STAT_BAR_OUTLINE_H + Self::STAT_LABEL_H;
+    /// Cells `left_col`'s container top (and `stat_bar`/its labels with it)
+    /// sits above `details_top`, with the container's height extended by the
+    /// same amount so its BOTTOM — and therefore `sprite`'s pinned baseline —
+    /// doesn't move. The freed space becomes `sprite`'s (the sole grow
+    /// child's) to claim automatically; see `Self::layout`'s `left_col`.
+    const STAT_BAR_TOP_LIFT_CELLS: u16 = 1;
     /// Height (in cells) of each stat-bar OUTLINE. 3 cells = 12 dot rows: the
     /// green fill occupies exactly the MIDDLE cell (dot rows 4-7, see
     /// `stat_slice_parts`), and a rounded `STAT_BAR_HUG_CAP_DOTS`-thick grey
@@ -248,6 +254,17 @@ impl RosterManager {
     /// lowest content and `dot_row`) breaks. This is the sprite's fixed
     /// baseline: growing the sprite (via `SPRITE_INSET_TOP`) never moves it.
     const SPRITE_INSET_BOTTOM: u16 = 1;
+    /// Of the one full cell (4 dots) `layout()`'s `left_col` flex frees up
+    /// for the sprite band when `stat_bar` moves up one cell (see
+    /// `Self::layout`'s `left_col` container), this many dots are held back
+    /// as a top margin (via `DotRect::inset`) rather than handed to the
+    /// creature's fit box — the remaining `4 - SPRITE_GROWTH_MARGIN_DOTS`
+    /// dots are the sprite's actual net growth. A real `flex`-`grow` +
+    /// `inset`-margin composition (the freed cell is claimed automatically
+    /// by `sprite`'s existing `grow: 1.0`; this constant only tunes how much
+    /// of it the sprite visually consumes), not a bespoke placement — see
+    /// `render_sprite`.
+    const SPRITE_GROWTH_MARGIN_DOTS: u16 = 2;
     /// Height of the `dot_row` band at the bottom of the frame — the dots
     /// themselves (`DOT_H - DOT_LABEL_H` rows) plus one row of static role
     /// labels underneath (b2-t6).
@@ -400,17 +417,21 @@ impl RosterManager {
         };
 
         // LEFT column: stat_bar directly above sprite, both spanning the
-        // same column range (no ARROW_W inset — arrows move to dot_row). The
-        // stat_bar's TOP is aligned to `details_top` so the bars sit level
-        // with the top of the details box (not high up near the header); the
-        // sprite (the sole grow child) fills the remaining space below it
-        // down to dot_row.
+        // same column range (no ARROW_W inset — arrows move to dot_row).
+        // Independent of the RIGHT column's `details_top`-anchored flex
+        // below — this container's own top sits `STAT_BAR_TOP_LIFT_CELLS`
+        // higher, with height extended to match, so the container's BOTTOM
+        // (unaffected, still `dot_row`'s top) doesn't move. `stat_bar`
+        // (Fixed) shifts up by exactly that lift, in whole cells (it sizes a
+        // text/border band, which is inherently cell-granular); `sprite`
+        // (the sole grow child) automatically absorbs the freed space at
+        // its TOP — a real `flex`-`grow` outcome, not a manual computation.
         let left_col = engine_render::flex(
             engine_render::DotRect {
                 x: area.x as i32 * 2,
-                y: details_top as i32 * 4,
+                y: (details_top as i32 - Self::STAT_BAR_TOP_LIFT_CELLS as i32) * 4,
                 w: left_w as i32 * 2,
-                h: body_h_dots,
+                h: body_h_dots + Self::STAT_BAR_TOP_LIFT_CELLS as i32 * 4,
             },
             body_style,
             &[
@@ -843,22 +864,78 @@ impl RosterManager {
         let zero_area = Rect::new(0, 0, area.width, area.height);
         let mut tmp = Buffer::empty(zero_area);
         let base_rect = Self::layout(zero_area).sprite;
-        let sprite_rect = Self::cell_rect_to_dots(base_rect)
-            .inset(
-                Self::SPRITE_INSET_LEFT as i32 * 2,
-                Self::SPRITE_INSET_RIGHT as i32 * 2,
-                Self::SPRITE_INSET_TOP as i32 * 4,
-                Self::SPRITE_INSET_BOTTOM as i32 * 4,
-            )
-            .to_cell_rect();
+        let sprite_rect = Self::cell_rect_to_dots(base_rect).inset(
+            Self::SPRITE_INSET_LEFT as i32 * 2,
+            Self::SPRITE_INSET_RIGHT as i32 * 2,
+            // Of the cell `layout()`'s left_col freed at the top (via
+            // STAT_BAR_TOP_LIFT_CELLS + sprite's grow), hold back
+            // SPRITE_GROWTH_MARGIN_DOTS as a plain top margin rather than
+            // handing all of it to the fit box — the rest is real net growth.
+            Self::SPRITE_INSET_TOP as i32 * 4 + Self::SPRITE_GROWTH_MARGIN_DOTS as i32,
+            Self::SPRITE_INSET_BOTTOM as i32 * 4,
+        );
 
         let creature = &self.creatures[index];
         if let Some(sprite) = creature.animation(crate::creatures::AnimationKind::Idle) {
-            let (cols, rows) = engine_render::convert::fit_dot_dims(sprite.frame_at(self.elapsed), sprite_rect);
-            if cols > 0 && rows > 0 {
-                let buf = sprite.dots_at(self.elapsed, cols * 2, rows * 4);
-                let grid = engine_render::dots::dots_to_grid(&buf);
-                engine_render::draw_grid(&mut tmp, sprite_rect, &grid);
+            let frame = sprite.frame_at(self.elapsed);
+            let aspect = frame.width() as f32 / (frame.height().max(1)) as f32;
+
+            // Aspect-preserving fit within `sprite_rect`, at dot precision —
+            // mirrors `fit_dot_dims`'s fit-width-then-fit-height-if-needed
+            // shape, computed directly in dots. `sprite_rect`'s own size is
+            // ENTIRELY the flex-grown container's (see `Self::layout`'s
+            // `left_col`) plus the margin inset above — no separate growth
+            // arithmetic here; this just fits within whatever `sprite_rect`
+            // already is.
+            let mut dot_w = sprite_rect.w;
+            let mut dot_h = (dot_w as f32 / aspect).round() as i32;
+            if dot_h > sprite_rect.h {
+                dot_h = sprite_rect.h;
+                dot_w = (dot_h as f32 * aspect).round() as i32;
+            }
+
+            if dot_w > 0 && dot_h > 0 {
+                // Bottom-aligned within sprite_rect (its own bottom is the
+                // sprite's pinned baseline, per SPRITE_INSET_BOTTOM), and
+                // horizontally centered. Going through `.to_cell_rect()`
+                // here (as the simpler cell-based `fit_dot_dims` path used
+                // to) would floor `sprite_rect`'s x/y and w/h independently,
+                // and `floor(a) + floor(b) != floor(a+b)` in general — that
+                // silently un-pins the baseline by up to a cell whenever
+                // sprite_rect isn't itself cell-aligned. Placing in dots
+                // throughout, and floor-ing the FINAL target rect exactly
+                // once, avoids that.
+                let target_x = sprite_rect.x + (sprite_rect.w - dot_w) / 2;
+                let target_y = sprite_rect.y + sprite_rect.h - dot_h;
+                let target = engine_render::DotRect { x: target_x, y: target_y, w: dot_w, h: dot_h };
+                let cell_rect = target.to_cell_rect();
+                let (dx, dy) = target.cell_remainder();
+
+                // Dot-precise sub-cell placement: offset the raw dots into a
+                // buffer sized to include the sub-cell remainder, then
+                // convert the whole thing — the same technique
+                // `Button::set_dot_offset_down`/`render_tinted` already use.
+                // `dots_to_grid`'s ceiling-division fix means the buffer no
+                // longer needs to be a clean cell multiple beforehand.
+                let content = sprite.dots_at(self.elapsed, dot_w as u32, dot_h as u32);
+                let mut placed = DotBuffer::new((dot_w + dx) as usize, (dot_h + dy) as usize);
+                for y in 0..dot_h {
+                    for x in 0..dot_w {
+                        placed.set(
+                            (x + dx) as usize,
+                            (y + dy) as usize,
+                            content.get(x as usize, y as usize),
+                        );
+                    }
+                }
+                let grid = dots_to_grid(&placed);
+                let draw_area = Rect {
+                    x: cell_rect.x,
+                    y: cell_rect.y,
+                    width: grid.cols() as u16,
+                    height: grid.rows() as u16,
+                };
+                engine_render::draw_grid(&mut tmp, draw_area, &grid);
             }
         }
 
@@ -1642,8 +1719,13 @@ mod layout_tests {
                 "w={w},h={h}: level must stay tight under name (header-block shift moves them together)"
             );
             // The body is unchanged by the header shift: stat_bar still opens
-            // at the details-panel top, a real gap below level.
-            assert_eq!(l.stat_bar.y, l.exhaustion.y, "w={w},h={h}: body position unchanged by the header shift");
+            // STAT_BAR_TOP_LIFT_CELLS above the details-panel top, a real
+            // gap below level.
+            assert_eq!(
+                l.stat_bar.y,
+                l.exhaustion.y.saturating_sub(RosterManager::STAT_BAR_TOP_LIFT_CELLS),
+                "w={w},h={h}: body position unchanged by the header shift"
+            );
         }
     }
 
@@ -1675,33 +1757,35 @@ mod layout_tests {
         );
     }
 
-    /// spec 38 correction (item 4): the stat bars are no longer positioned
-    /// high up near the header — their band's TOP must sit at the SAME y as
-    /// the details panel's top (`exhaustion.y`, which is the panel border's
-    /// top row), so the bars read as level with the top of the details box.
+    /// Follow-up on spec 38 correction (item 4): the stat bars sit
+    /// `STAT_BAR_TOP_LIFT_CELLS` above the details panel's top
+    /// (`exhaustion.y`, the panel border's top row) — one cell higher than
+    /// spec 38's original "level with the details box top," freeing that
+    /// cell for `sprite` (the grow child directly below) to claim.
     #[test]
-    fn stat_bar_top_aligns_with_details_panel_top() {
+    fn stat_bar_top_sits_one_lift_above_details_panel_top() {
         for (w, h) in [(80u16, 30u16), (40u16, 20u16), (60u16, 24u16)] {
             let l = RosterManager::layout(Rect::new(0, 0, w, h));
             assert_eq!(
-                l.stat_bar.y, l.exhaustion.y,
-                "w={w},h={h}: stat_bar.y ({}) must equal the details panel top exhaustion.y ({}) — bars level with the details box top",
+                l.stat_bar.y,
+                l.exhaustion.y.saturating_sub(RosterManager::STAT_BAR_TOP_LIFT_CELLS),
+                "w={w},h={h}: stat_bar.y ({}) must sit STAT_BAR_TOP_LIFT_CELLS above the details panel top exhaustion.y ({})",
                 l.stat_bar.y, l.exhaustion.y
             );
         }
     }
 
-    /// spec 38 correction (item 4/5): the stat bar band no longer starts
-    /// right after the header — a real blank gap separates the header
-    /// (`level`) from the stat bar band, since the band was pushed down to
-    /// the details panel top.
+    /// spec 38 correction (item 4/5), narrowed by `STAT_BAR_TOP_LIFT_CELLS`:
+    /// the stat bar band no longer starts right after the header — a real
+    /// (nonzero) blank gap still separates the header (`level`) from the
+    /// stat bar band, even after the band moved one cell closer to it.
     #[test]
     fn real_gap_between_header_and_stat_bar() {
         let l = RosterManager::layout(Rect::new(0, 0, 80, 30));
         let gap = l.stat_bar.y.saturating_sub(l.level.y + l.level.height);
         assert!(
-            gap >= 2,
-            "expected a real blank gap (>=2 rows) between level (bottom={}) and stat_bar (top={}), got {gap}",
+            gap >= 1,
+            "expected a real blank gap (>=1 row) between level (bottom={}) and stat_bar (top={}), got {gap}",
             l.level.y + l.level.height, l.stat_bar.y
         );
     }
@@ -2403,11 +2487,12 @@ mod stat_bar_tests {
             "bottom cap cell (mask={bottom_mask:#04x}) must light only its TOP half, hugging the fill above it"
         );
 
-        // The bar box top sits on the same row as the details-panel border top.
+        // The bar box top sits STAT_BAR_TOP_LIFT_CELLS above the
+        // details-panel border top.
         assert_eq!(
             outline.top(),
-            l.exhaustion.y,
-            "the stat-bar box top must be level with the details-panel border top"
+            l.exhaustion.y.saturating_sub(RosterManager::STAT_BAR_TOP_LIFT_CELLS),
+            "the stat-bar box top must sit STAT_BAR_TOP_LIFT_CELLS above the details-panel border top"
         );
 
         // The label cell sits immediately below the outline — no gap between the
