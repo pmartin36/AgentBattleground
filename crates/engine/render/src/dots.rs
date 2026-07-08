@@ -248,14 +248,21 @@ fn gather_block(buf: &DotBuffer, tx: usize, ty: usize) -> [Dot; 8] {
 
 /// Convert a `shape`/`color` pair into a braille [`Grid`].
 ///
-/// Grid dims = `(shape.cols()/2, shape.rows()/4)`. Per 2×4 block, the glyph
-/// mask (`ch`, Transparent-ness) is decided entirely from `shape` (see
-/// `cell_from_dots_tinted`); `color` supplies only the RGB averaged into
-/// `Cell::Glyph.color`, over the dot positions `shape` decided are lit.
-/// Out-of-range dot reads on either buffer are treated as `Dot::Transparent`.
+/// Grid dims = `(ceil(shape.cols()/2), ceil(shape.rows()/4))` — a buffer
+/// whose extent isn't an exact multiple of the 2×4 cell size still renders
+/// its trailing partial cell (the missing dots within it read as
+/// `Dot::Transparent`, per `gather_block`) rather than silently dropping
+/// that content. This is what makes dot-precise sizes (not just dot-precise
+/// *positions*) render losslessly: a buffer built at, say, an odd dot height
+/// paints exactly that many dot-rows, not a floor-rounded fraction fewer.
+/// Per 2×4 block, the glyph mask (`ch`, Transparent-ness) is decided
+/// entirely from `shape` (see `cell_from_dots_tinted`); `color` supplies
+/// only the RGB averaged into `Cell::Glyph.color`, over the dot positions
+/// `shape` decided are lit. Out-of-range dot reads on either buffer are
+/// treated as `Dot::Transparent`.
 pub fn dots_to_grid_tinted(shape: &DotBuffer, color: &DotBuffer) -> Grid {
-    let cell_cols = shape.cols() / 2;
-    let cell_rows = shape.rows() / 4;
+    let cell_cols = shape.cols().div_ceil(2);
+    let cell_rows = shape.rows().div_ceil(4);
     let mut grid = Grid::new(cell_cols, cell_rows);
 
     for ty in 0..cell_rows {
@@ -491,6 +498,80 @@ mod tests {
         let grid = dots_to_grid(&buf);
         assert_eq!(grid.cols(), 2, "4 dot-cols → 2 cell-cols");
         assert_eq!(grid.rows(), 2, "8 dot-rows → 2 cell-rows");
+    }
+
+    /// Regression: a buffer whose extent is NOT an exact multiple of the 2×4
+    /// cell size must still render its trailing partial cell — not silently
+    /// drop it via floor division. A 2×6 dot buffer (6 is not a multiple of
+    /// 4) with every dot lit must produce a 1×2 cell grid (ceil(6/4) = 2),
+    /// with the second cell's bottom 2 dot-rows (which don't exist in the
+    /// source buffer) reading as unlit — not the whole second cell vanishing
+    /// and not a panic.
+    #[test]
+    fn dots_to_grid_non_cell_multiple_height_renders_trailing_partial_cell() {
+        let mut buf = DotBuffer::new(2, 6);
+        for y in 0..6 {
+            for x in 0..2 {
+                buf.set(x, y, Dot::Lit(Rgba::rgb(255, 255, 255)));
+            }
+        }
+        let grid = dots_to_grid(&buf);
+        assert_eq!(grid.cols(), 1, "2 dot-cols → ceil(2/2) = 1 cell-col");
+        assert_eq!(
+            grid.rows(),
+            2,
+            "6 dot-rows is not a multiple of 4 → ceil(6/4) = 2 cell-rows, not floor's 1"
+        );
+
+        // Cell (0,0): all 8 dots lit (rows 0-3 fully in-buffer) → full glyph.
+        match grid.get(0, 0) {
+            Cell::Glyph { ch, .. } => assert_eq!(ch, '\u{28FF}', "first cell must be fully lit"),
+            other => panic!("expected a lit glyph at (0,0), got {other:?}"),
+        }
+
+        // Cell (0,1): only its top 2 dot-rows exist in the 6-row source
+        // (rows 4-5); its bottom 2 dot-rows (7-8, out of the 6-row buffer)
+        // must read as unlit, producing a partially-lit glyph, not a full
+        // one and not an absent one.
+        match grid.get(0, 1) {
+            Cell::Glyph { ch, .. } => {
+                assert_ne!(
+                    ch, '\u{2800}',
+                    "second cell must have SOME lit dots (rows 4-5 exist in the source)"
+                );
+                assert_ne!(
+                    ch, '\u{28FF}',
+                    "second cell must NOT be fully lit (rows 6-7 don't exist in the source)"
+                );
+            }
+            other => panic!("expected a partially-lit glyph at (0,1), got {other:?}"),
+        }
+    }
+
+    /// Same defect, from the width axis: a 5-dot-wide (not a multiple of 2)
+    /// buffer must render a trailing partial column, not drop it.
+    #[test]
+    fn dots_to_grid_non_cell_multiple_width_renders_trailing_partial_cell() {
+        let mut buf = DotBuffer::new(5, 4);
+        for y in 0..4 {
+            for x in 0..5 {
+                buf.set(x, y, Dot::Lit(Rgba::rgb(255, 255, 255)));
+            }
+        }
+        let grid = dots_to_grid(&buf);
+        assert_eq!(grid.cols(), 3, "5 dot-cols is not a multiple of 2 → ceil(5/2) = 3, not floor's 2");
+        assert_eq!(grid.rows(), 1, "4 dot-rows → 1 cell-row");
+
+        // Cell (2,0): only its left dot-column exists in the 5-col source
+        // (col 4); its right dot-column (col 5, out of bounds) must read as
+        // unlit, producing a partially-lit glyph.
+        match grid.get(2, 0) {
+            Cell::Glyph { ch, .. } => {
+                assert_ne!(ch, '\u{2800}', "trailing partial column must have SOME lit dots");
+                assert_ne!(ch, '\u{28FF}', "trailing partial column must NOT be fully lit");
+            }
+            other => panic!("expected a partially-lit glyph at (2,0), got {other:?}"),
+        }
     }
 
     /// Hand-derived oracle from golden case (a): 8 specific Lit dots in a 2×4
