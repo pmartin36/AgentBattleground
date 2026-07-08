@@ -453,6 +453,33 @@ pub enum EventKind {
     Die { piece_index: usize },
 }
 
+/// Tunable constants for camera-dependent rendering (grid dimming, depth
+/// scaling/taper, shadow fade). Single source of truth for the spec Decision
+/// 1 defaults — downstream tasks (b3-t1, b4-t2, b6-t1, b7-t1) read these
+/// fields rather than re-hardcoding the literals.
+#[derive(Clone, Copy, PartialEq, Debug, Inspectable)]
+pub struct BattleViewerTuning {
+    pub grid_dim_alpha: u8,
+    pub depth_scale_per_world_unit: f32,
+    pub depth_scale_min: f32,
+    pub grid_taper_per_world_unit: f32,
+    pub grid_taper_min: f32,
+    pub shadow_fade_ms: u32,
+}
+
+impl Default for BattleViewerTuning {
+    fn default() -> Self {
+        Self {
+            grid_dim_alpha: 0x60,
+            depth_scale_per_world_unit: 0.05,
+            depth_scale_min: 0.6,
+            grid_taper_per_world_unit: 0.06,
+            grid_taper_min: 0.4,
+            shadow_fade_ms: 150,
+        }
+    }
+}
+
 #[derive(Inspectable)]
 pub struct BattleViewer {
     elapsed: f32,
@@ -491,6 +518,9 @@ pub struct BattleViewer {
     /// `Self::default_camera_mode()` every time.
     #[inspect(hidden)]
     camera_mode: BattleCamera,
+    /// Camera-dependent rendering tuning constants (b2-t1). Not yet consumed
+    /// by any renderer — wired in by b3-t1/b4-t2/b6-t1/b7-t1.
+    pub tuning: BattleViewerTuning,
 }
 
 impl Default for BattleViewer {
@@ -510,6 +540,7 @@ impl Default for BattleViewer {
             event_from_values: std::collections::HashMap::new(),
             settled_events: std::collections::HashSet::new(),
             camera_mode: Self::default_camera_mode(),
+            tuning: BattleViewerTuning::default(),
         }
     }
 }
@@ -2810,6 +2841,75 @@ mod inspectable_tests {
         assert_eq!(
             piece, before,
             "piece must be byte-unchanged after a rejected readonly patch"
+        );
+    }
+
+    /// DELIVERABLE (b2-t1): `BattleViewerTuning::default()` returns exactly
+    /// the 6 spec Decision 1 values.
+    #[test]
+    fn battle_viewer_tuning_default_matches_spec_values() {
+        let tuning = BattleViewerTuning::default();
+        assert_eq!(tuning.grid_dim_alpha, 0x60);
+        assert_eq!(tuning.depth_scale_per_world_unit, 0.05);
+        assert_eq!(tuning.depth_scale_min, 0.6);
+        assert_eq!(tuning.grid_taper_per_world_unit, 0.06);
+        assert_eq!(tuning.grid_taper_min, 0.4);
+        assert_eq!(tuning.shadow_fade_ms, 150);
+    }
+
+    /// DELIVERABLE (b2-t1): `BattleViewer::schema()` has a `tuning` child
+    /// that is a `Struct` with the 6 tuning leaves, none readonly.
+    #[test]
+    fn battle_viewer_schema_exposes_editable_tuning_struct() {
+        let schema = BattleViewer::schema();
+        let tuning = field(&schema, "tuning");
+        assert_eq!(tuning.tag, FieldTag::Struct);
+
+        for name in [
+            "grid_dim_alpha",
+            "depth_scale_per_world_unit",
+            "depth_scale_min",
+            "grid_taper_per_world_unit",
+            "grid_taper_min",
+            "shadow_fade_ms",
+        ] {
+            let leaf = field(tuning, name);
+            assert!(!leaf.readonly, "tuning.{name} must be editable, not readonly");
+        }
+    }
+
+    /// DELIVERABLE (b2-t1): `apply_patch` on a `BattleViewer` value for
+    /// `"tuning.depth_scale_min"` edits only that leaf — `grid_dim_alpha`
+    /// (another tuning leaf) is unchanged.
+    #[test]
+    fn battle_viewer_apply_patch_on_tuning_leaf_edits_only_that_field() {
+        let mut scene = BattleViewer::default();
+
+        // 0.75 is exactly representable in IEEE-754 binary32, so it survives
+        // the f32 -> JSON f64 snapshot round-trip without rounding drift
+        // (unlike 0.9, which is not exactly representable in f32).
+        scene
+            .apply_patch("tuning.depth_scale_min", serde_json::json!(0.75))
+            .expect("apply_patch on tuning.depth_scale_min must succeed");
+
+        let snap = scene.snapshot();
+        let tuning = snap
+            .as_object()
+            .expect("BattleViewer snapshot must be a JSON object")
+            .get("tuning")
+            .expect("tuning key must be present in snapshot")
+            .as_object()
+            .expect("tuning must be a JSON object");
+
+        assert_eq!(
+            tuning.get("depth_scale_min").and_then(|v| v.as_f64()),
+            Some(0.75),
+            "depth_scale_min must reflect the patch"
+        );
+        assert_eq!(
+            tuning.get("grid_dim_alpha").and_then(|v| v.as_u64()),
+            Some(0x60),
+            "grid_dim_alpha must be untouched by a depth_scale_min patch"
         );
     }
 
