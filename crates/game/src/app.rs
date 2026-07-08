@@ -19,6 +19,17 @@ fn handle_key(mgr: &mut SceneManager, key: KeyEvent) -> bool {
     mgr.route_key(key)
 }
 
+/// Render the active scene, then apply the global debug cell-boundary
+/// gridline overlay (bucket b5) as a final post-composite pass when toggled
+/// on via `SceneManager::debug_grid_enabled()` — scene-agnostic by
+/// construction, no per-scene opt-in.
+fn render_frame(mgr: &SceneManager, f: &mut ratatui::Frame) {
+    mgr.render(f);
+    if mgr.debug_grid_enabled() {
+        engine_render::draw_debug_grid(f.buffer_mut());
+    }
+}
+
 /// RAII guard: restores the terminal on drop (covers both normal exit and panic).
 pub(crate) struct TerminalGuard;
 
@@ -161,7 +172,7 @@ pub fn run_with_params(
         mgr.pump_live_snapshots(&events, Instant::now());
 
         // 5. Render.
-        terminal.draw(|f| mgr.render(f))?;
+        terminal.draw(|f| render_frame(&mgr, f))?;
 
         // 6. Sleep the remainder of the 33.33 ms frame budget.
         let elapsed = frame_start.elapsed();
@@ -181,6 +192,62 @@ pub fn run(initial: Box<dyn Scene>) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crossterm::event::{KeyCode, KeyModifiers};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    use crate::scenes::{Leaderboard, MainHub};
+
+    /// Renders `mgr` through `render_frame` into a fresh `TestBackend` and
+    /// returns the resulting buffer.
+    fn render(mgr: &SceneManager) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(40, 20)).unwrap();
+        terminal.draw(|f| render_frame(mgr, f)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    /// The debug grid toggle (Ctrl-G, routed through `SceneManager::route_key`)
+    /// must change `render_frame`'s output for ANY active scene, with no
+    /// per-scene opt-in — the DELIVERABLE's before/after evidence across two
+    /// different scenes.
+    #[test]
+    fn render_frame_applies_debug_grid_overlay_globally_across_scenes() {
+        let scenes: Vec<Box<dyn Scene>> = vec![
+            Box::new(MainHub::default()),
+            Box::new(Leaderboard),
+        ];
+
+        for scene in scenes {
+            let mut mgr = SceneManager::with_scene(scene, Box::new(GameCatalog));
+
+            let buf_before = render(&mgr);
+
+            let quit = mgr.route_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+            assert!(!quit, "Ctrl-G must not be treated as quit");
+            assert!(
+                mgr.debug_grid_enabled(),
+                "Ctrl-G must toggle the debug grid on"
+            );
+
+            let buf_after = render(&mgr);
+
+            assert_ne!(
+                buf_before, buf_after,
+                "toggling the overlay on must change the rendered buffer for scene {:?}, \
+                 with no per-scene opt-in",
+                mgr.active_id()
+            );
+
+            let (mask, _color) = engine_render::decode_braille_cell(&buf_after, 0, 0)
+                .expect("top-left cell must be braille after the overlay pass");
+            assert_ne!(
+                mask, 0,
+                "top-left cell-boundary dot must be lit once the overlay is applied for scene {:?}",
+                mgr.active_id()
+            );
+        }
+    }
 
     /// Regression for the dt freeze bug: `tick()` must report real wall-clock
     /// time between calls (~ms), not intra-frame elapsed (~µs).

@@ -91,7 +91,7 @@ pub(crate) const DOTS: [(u32, u32, u8); 8] = [
 ];
 
 /// Perceived brightness from an RGB triplet (truncating float→u8).
-fn luma(r: u8, g: u8, b: u8) -> u8 {
+pub(crate) fn luma(r: u8, g: u8, b: u8) -> u8 {
     (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) as u8
 }
 

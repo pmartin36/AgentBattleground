@@ -64,6 +64,9 @@ pub struct SceneManager {
     last_live_push: Option<Instant>,
     /// Game-supplied scene registry.
     catalog: SceneCatalogBox,
+    /// True while the debug cell-boundary gridline overlay (bucket b5) is
+    /// toggled on. Flipped by `route_key`'s Ctrl-G branch.
+    debug_grid: bool,
 }
 
 impl SceneManager {
@@ -96,6 +99,7 @@ impl SceneManager {
             live_subscribed: false,
             last_live_push: None,
             catalog,
+            debug_grid: false,
         }
     }
 
@@ -112,6 +116,14 @@ impl SceneManager {
     /// Returns whether the active scene has requested application exit.
     pub fn active_quit_requested(&self) -> bool {
         self.active.quit_requested()
+    }
+
+    /// Whether the debug cell-boundary gridline overlay (bucket b5) is
+    /// toggled on. Flipped by `route_key`'s Ctrl-G branch; read by
+    /// `game::app`'s frame loop to decide whether to run the post-composite
+    /// overlay pass.
+    pub fn debug_grid_enabled(&self) -> bool {
+        self.debug_grid
     }
 
     /// Debug command: set `pending`, overriding any prior transition (debug always wins).
@@ -299,6 +311,13 @@ impl SceneManager {
         }
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return true;
+        }
+
+        // Debug cell-boundary gridline overlay toggle: consumed globally,
+        // never forwarded to the active scene, never a quit signal.
+        if key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.debug_grid = !self.debug_grid;
+            return false;
         }
 
         // All other keys: forward to the active scene.
@@ -697,6 +716,50 @@ mod tests {
         let quit = mgr.route_key(ke);
         assert!(!quit, "a non-quit key must return false");
         assert_eq!(rec.lock().unwrap().last_key, Some(ke));
+    }
+
+    // -------------------------------------------------- debug grid overlay (b5-t2)
+
+    /// Ctrl-G is the global debug cell-boundary gridline overlay toggle
+    /// (research: `.agent_handoffs/flex-layout-primitive/b5-t2/research.md`).
+    /// It must never be treated as quit, and must flip `debug_grid_enabled()`
+    /// on repeated presses (off -> on -> off).
+    #[test]
+    fn route_key_ctrl_g_toggles_debug_grid_enabled() {
+        let mut mgr = SceneManager::new(SceneKey::new("A"), Box::new(MockCatalog));
+        assert!(!mgr.debug_grid_enabled(), "debug grid must start off");
+
+        let quit = mgr.route_key(key('g', KeyModifiers::CONTROL));
+        assert!(!quit, "Ctrl-G must not be treated as quit");
+        assert!(
+            mgr.debug_grid_enabled(),
+            "first Ctrl-G must toggle the debug grid on"
+        );
+
+        let quit2 = mgr.route_key(key('g', KeyModifiers::CONTROL));
+        assert!(!quit2, "Ctrl-G must not be treated as quit");
+        assert!(
+            !mgr.debug_grid_enabled(),
+            "second Ctrl-G must toggle the debug grid back off"
+        );
+    }
+
+    /// Ctrl-G must be consumed globally, like `q`/Ctrl-C, never forwarded to
+    /// the active scene.
+    #[test]
+    fn route_key_ctrl_g_not_forwarded_to_active_scene() {
+        let scene = crate::test_support::MockScene::new(SceneKey::new("A"));
+        let rec = scene.recorder();
+        let mut mgr = SceneManager::with_scene(Box::new(scene), Box::new(MockCatalog));
+        let ke = key('g', KeyModifiers::CONTROL);
+        let quit = mgr.route_key(ke);
+        assert!(!quit, "Ctrl-G must not be treated as quit");
+        assert_ne!(
+            rec.lock().unwrap().last_key,
+            Some(ke),
+            "Ctrl-G must be consumed globally as the debug-grid toggle, not forwarded \
+             to the active scene"
+        );
     }
 
     /// Pins the digit-hotkey removal: a digit key press must forward like
