@@ -9,8 +9,7 @@ use engine_core::SceneKey;
 use serde_json::Value as JsonValue;
 
 use engine_render::{
-    anchor_with_margin, flex, stack, Align, Anchor, Basis, ButtonState, Direction, FlexChild,
-    FlexStyle, FrameButton, Justify, StackAxis,
+    flex, Align, Basis, ButtonState, Direction, FlexChild, FlexStyle, FrameButton, Justify,
 };
 
 use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
@@ -73,7 +72,7 @@ impl MainHub {
 
     /// Menu container size — width is a single button's width; height MUST
     /// equal the stacked group's total height (3 buttons + 2 gaps) so
-    /// `stack` fills the container exactly rather than leaving slack.
+    /// `flex` fills the container exactly rather than leaving slack.
     const MENU_W: u16 = Self::BUTTON_W;
     const MENU_H: u16 = 3 * Self::BUTTON_H + 2 * Self::MENU_GAP;
 
@@ -137,28 +136,55 @@ impl MainHub {
     /// Menu group container rect for `area` — anchored near the BOTTOM of
     /// the screen (not dead-center) so Exit sits close to the bottom edge,
     /// leaving the open space above for the much bigger title box. Sole
-    /// place its position is computed; feeds `button_rects` via `stack`.
+    /// place its position is computed; feeds `button_rects` via `flex`.
+    ///
+    /// Insets the dot-space `area` by `MENU_BOTTOM_MARGIN*4` dots on the
+    /// bottom edge, then runs a single-child Column flex (`Justify::End`
+    /// pins the group's bottom edge at the inset container's bottom edge,
+    /// `Align::Center` centers it horizontally) to reproduce the
+    /// pre-migration `anchor_with_margin`'s BottomCenter placement exactly.
     fn menu_container(area: Rect) -> Rect {
-        anchor_with_margin(
-            area,
-            (Self::MENU_W, Self::MENU_H),
-            Anchor::BottomCenter,
-            (0, Self::MENU_BOTTOM_MARGIN),
-        )
+        let container =
+            Self::cell_rect_to_dots(area).inset(0, 0, 0, Self::MENU_BOTTOM_MARGIN as i32 * 4);
+        let child = FlexChild {
+            // Column: closure returns (main=Y/height, cross=X/width) in dots.
+            basis: Basis::Intrinsic(Box::new(|_main| {
+                (Self::MENU_H as i32 * 4, Self::MENU_W as i32 * 2)
+            })),
+            grow: 0.0,
+            shrink: 0.0,
+        };
+        let style = FlexStyle {
+            direction: Direction::Column,
+            justify_content: Justify::End,
+            align_items: Align::Center,
+            gap: 0,
+        };
+        flex(container, style, std::slice::from_ref(&child))[0].to_cell_rect()
     }
 
     /// The 3 menu-button rects for `area`, top-to-bottom (index 0 Roster, 1
     /// Battle, 2 Exit — labels/roles assigned by b5-t3, this fixes geometry
     /// and order only).
     fn button_rects(area: Rect) -> [Rect; 3] {
-        let container = Self::menu_container(area);
-        let v = stack(
-            container,
-            &[(Self::BUTTON_W, Self::BUTTON_H); 3],
-            Self::MENU_GAP,
-            StackAxis::Vertical,
-        );
-        v.try_into().expect("stack of 3 sizes must yield 3 rects")
+        let container = Self::cell_rect_to_dots(Self::menu_container(area));
+        let child = || FlexChild {
+            // Column: closure returns (main=Y/height, cross=X/width) in dots.
+            basis: Basis::Intrinsic(Box::new(|_main| {
+                (Self::BUTTON_H as i32 * 4, Self::BUTTON_W as i32 * 2)
+            })),
+            grow: 0.0,
+            shrink: 0.0,
+        };
+        let children = [child(), child(), child()];
+        let style = FlexStyle {
+            direction: Direction::Column,
+            justify_content: Justify::Start,
+            align_items: Align::Start,
+            gap: Self::MENU_GAP as i32 * 4,
+        };
+        let rects = flex(container, style, &children);
+        [rects[0].to_cell_rect(), rects[1].to_cell_rect(), rects[2].to_cell_rect()]
     }
 
     /// Paint `crate::assets::FRAME_PANEL` stretched to fill `rect` exactly (same
@@ -664,7 +690,7 @@ mod mouse_input_tests {
 #[cfg(test)]
 mod layout_tests {
     use super::*;
-    use engine_render::{flex, stack, Align, Basis, Direction, FlexChild, FlexStyle, Justify, StackAxis};
+    use engine_render::{flex, Align, Basis, Direction, FlexChild, FlexStyle, Justify};
 
     /// Fixed screen area used by every case in this module.
     fn area() -> Rect {
@@ -711,6 +737,21 @@ mod layout_tests {
         assert!(h >= 10, "title height {h} must be tall enough to read a wordmark logo");
     }
 
+    /// `menu_container`'s pre-migration `anchor_with_margin(area, (MENU_W,
+    /// MENU_H), Anchor::BottomCenter, (0, MENU_BOTTOM_MARGIN))` output must
+    /// stay byte-identical once re-expressed via `flex`/`DotRect` (research.md
+    /// b3-t1 blueprint). These literals ARE that pre-migration output,
+    /// hand-computed and proven in research.md — a direct value assertion
+    /// beyond the two existing property-only tests below, which would not
+    /// catch an off-by-margin/axis slip in the new inset/Justify::End
+    /// formula. Covers both distinct b1 fixture geometries (120x50 and
+    /// 40x20) and both x-parity paths.
+    #[test]
+    fn menu_container_matches_pre_migration_rect() {
+        assert_eq!(MainHub::menu_container(Rect::new(0, 0, 120, 50)), Rect::new(50, 37, 20, 11));
+        assert_eq!(MainHub::menu_container(Rect::new(0, 0, 40, 20)), Rect::new(10, 7, 20, 11));
+    }
+
     /// The menu sits near the BOTTOM of the screen (Exit close to the
     /// bottom edge), not dead-center — the fix for the "menu floats in the
     /// middle with a huge empty gap above the tiny title" complaint.
@@ -731,21 +772,32 @@ mod layout_tests {
         );
     }
 
-    /// `button_rects` is exactly `stack(menu_container(area), ..)` — proves
-    /// the 3 button rects come from the stack mechanism applied to
-    /// `menu_container`'s own output, not independently derived.
+    /// `button_rects` is exactly a `flex()` mechanism (Column, 3 Intrinsic
+    /// children, `gap: MENU_GAP*4`, Justify::Start, Align::Start) applied
+    /// over `cell_rect_to_dots(menu_container(area))` — proves the 3 button
+    /// rects come from the flex mechanism applied to `menu_container`'s own
+    /// output, not independently derived (research.md b3-t2 blueprint).
     #[test]
     fn button_rects_match_stack_of_menu_container() {
         let a = area();
-        let container = MainHub::menu_container(a);
-        let expected = stack(
-            container,
-            &[(MainHub::BUTTON_W, MainHub::BUTTON_H); 3],
-            MainHub::MENU_GAP,
-            StackAxis::Vertical,
-        );
-        let got = MainHub::button_rects(a);
-        assert_eq!(got.as_slice(), expected.as_slice());
+        let container = MainHub::cell_rect_to_dots(MainHub::menu_container(a));
+        let child = || FlexChild {
+            basis: Basis::Intrinsic(Box::new(|_main| {
+                (MainHub::BUTTON_H as i32 * 4, MainHub::BUTTON_W as i32 * 2)
+            })),
+            grow: 0.0,
+            shrink: 0.0,
+        };
+        let children = [child(), child(), child()];
+        let style = FlexStyle {
+            direction: Direction::Column,
+            justify_content: Justify::Start,
+            align_items: Align::Start,
+            gap: MainHub::MENU_GAP as i32 * 4,
+        };
+        let expected: Vec<Rect> =
+            flex(container, style, &children).iter().map(|r| r.to_cell_rect()).collect();
+        assert_eq!(MainHub::button_rects(a).as_slice(), expected.as_slice());
     }
 
     /// The 3 button rects are strictly ordered top-to-bottom (index 0
