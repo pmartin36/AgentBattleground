@@ -107,6 +107,11 @@ impl RosterManager {
     /// edges of `area` they anchor to (spec `Decisions (v1)`).
     const EDGE_MARGIN: u16 = 1;
 
+    /// Top inset (in whole terminal cells) of the home button specifically —
+    /// one cell less than `EDGE_MARGIN`, moving it up one braille cell (4
+    /// dots) from the standard edge inset used on its other sides.
+    const HOME_TOP_MARGIN: u16 = 0;
+
     /// Extra rightward inset (in cells) of the details panel beyond
     /// `EDGE_MARGIN`, pulling the whole panel LEFT off the screen's right edge.
     /// One cell == 2 braille dots wide, so this shifts the panel left by 2
@@ -541,7 +546,7 @@ impl RosterManager {
             area,
             (Self::HOME_W, Self::HOME_H),
             engine_render::Anchor::TopRight,
-            (Self::EDGE_MARGIN, Self::EDGE_MARGIN),
+            (Self::EDGE_MARGIN, Self::HOME_TOP_MARGIN),
         )
     }
 
@@ -3527,8 +3532,9 @@ mod home_button_tests {
         );
         assert_eq!(
             rect.top(),
-            area.top() + RosterManager::EDGE_MARGIN,
-            "home button rect must be inset from the top edge of area by EDGE_MARGIN"
+            area.top() + RosterManager::HOME_TOP_MARGIN,
+            "home button rect must be inset from the top edge of area by HOME_TOP_MARGIN \
+             (one cell less than EDGE_MARGIN, moving it up one braille cell)"
         );
     }
 
