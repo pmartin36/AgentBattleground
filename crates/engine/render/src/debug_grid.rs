@@ -41,14 +41,31 @@ const BOUNDARY_MASK: u8 = compute_boundary_mask();
 /// For every braille cell in `buf`, lights the cell's left-column + top-row
 /// dots (`dx == 0 || dy == 0`, mask `0x4F`) and recolors the cell toward
 /// black if its underlying/assumed color is bright (luma >= 128), or toward
-/// white if dark, by [`GRID_CONTRAST_BLEND`]. A blank/non-braille cell is
-/// treated as underlying black.
+/// white if dark, by [`GRID_CONTRAST_BLEND`]. A blank cell (empty/space
+/// symbol) is treated as underlying black and painted the same way, so the
+/// grid stays visible over transparent background.
+///
+/// A non-braille cell that is NOT blank — i.e. it carries real text (a scene
+/// label, menu item, or HUD glyph) — is left completely untouched. Per
+/// CLAUDE.md's "Braille is universal except text" rule, text must never be
+/// converted to a braille glyph; `decode_braille_cell` alone can't tell a
+/// blank cell apart from a text cell (both decode to `None`), so this
+/// function checks the raw symbol itself to disambiguate before deciding
+/// whether to paint.
 pub fn draw_debug_grid(buf: &mut Buffer) {
     let area = buf.area;
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
-            let (mask, color) =
-                decode_braille_cell(buf, x, y).unwrap_or((0, Rgba::rgb(0, 0, 0)));
+            let is_blank = buf
+                .cell((x, y))
+                .map(|c| c.symbol().trim().is_empty())
+                .unwrap_or(true);
+
+            let (mask, color) = match decode_braille_cell(buf, x, y) {
+                Some(mc) => mc,
+                None if is_blank => (0, Rgba::rgb(0, 0, 0)),
+                None => continue, // non-braille, non-blank: real text — preserve untouched
+            };
 
             let l = luma(color.r, color.g, color.b);
             let target: f32 = if l >= 128 { 0.0 } else { 255.0 };
@@ -167,5 +184,37 @@ mod tests {
     #[test]
     fn boundary_mask_derived_from_dots_equals_0x4f() {
         assert_eq!(super::BOUNDARY_MASK, 0x4F);
+    }
+
+    /// Regression: a non-braille cell carrying real text (a scene label,
+    /// e.g. "R" from "Roster") must survive the overlay completely
+    /// untouched — both its symbol AND its foreground color — never
+    /// converted into a braille boundary glyph. `decode_braille_cell` alone
+    /// can't distinguish a blank cell from a text cell (both return `None`);
+    /// this pins the disambiguation that makes CLAUDE.md's "only text stays
+    /// plain terminal characters" rule hold under the overlay too.
+    #[test]
+    fn draw_debug_grid_preserves_non_blank_text_cells_untouched() {
+        let mut buf = make_buf(3, 1);
+        {
+            let cell = buf.cell_mut((1, 0)).expect("cell must exist");
+            cell.set_char('R');
+            cell.set_fg(Color::Rgb(200, 200, 200));
+        }
+
+        draw_debug_grid(&mut buf);
+
+        let cell = buf.cell((1, 0)).expect("cell must still exist");
+        assert_eq!(cell.symbol(), "R", "text glyph must not be converted to braille");
+        assert_eq!(
+            cell.fg,
+            Color::Rgb(200, 200, 200),
+            "text cell's foreground color must be untouched by the overlay"
+        );
+
+        // Neighboring blank cells must still be painted — the fix must not
+        // have accidentally disabled painting altogether.
+        let (mask, _) = decode_braille_cell(&buf, 0, 0).expect("blank neighbor must be painted");
+        assert_eq!(mask & 0x4F, 0x4F, "blank neighbor's boundary dots must be lit");
     }
 }

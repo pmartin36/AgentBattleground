@@ -246,6 +246,42 @@ mod tests {
                 "top-left cell-boundary dot must be lit once the overlay is applied for scene {:?}",
                 mgr.active_id()
             );
+
+            // Every plain-text cell (a scene label/menu glyph — anything
+            // `decode_braille_cell` reports as non-braille and non-blank in
+            // `buf_before`) must survive completely unchanged in `buf_after`.
+            // The overlay must never convert real text into a braille glyph.
+            let area = buf_before.area;
+            let mut checked_a_text_cell = false;
+            for y in area.top()..area.bottom() {
+                for x in area.left()..area.right() {
+                    let before_cell = buf_before.cell((x, y)).unwrap();
+                    let is_text = engine_render::decode_braille_cell(&buf_before, x, y).is_none()
+                        && !before_cell.symbol().trim().is_empty();
+                    if !is_text {
+                        continue;
+                    }
+                    checked_a_text_cell = true;
+                    let after_cell = buf_after.cell((x, y)).unwrap();
+                    assert_eq!(
+                        before_cell.symbol(),
+                        after_cell.symbol(),
+                        "text cell ({x},{y}) must not be converted to braille by the overlay for scene {:?}",
+                        mgr.active_id()
+                    );
+                    assert_eq!(
+                        before_cell.fg,
+                        after_cell.fg,
+                        "text cell ({x},{y})'s color must be untouched by the overlay for scene {:?}",
+                        mgr.active_id()
+                    );
+                }
+            }
+            assert!(
+                checked_a_text_cell,
+                "scene {:?} must render at least one plain-text cell for this guard to be meaningful",
+                mgr.active_id()
+            );
         }
     }
 
