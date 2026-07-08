@@ -41,11 +41,28 @@ pub fn composite_dots(
         for r in 0..p.dots.rows() {
             for c in 0..p.dots.cols() {
                 let dot = p.dots.get(c, r);
-                if let Dot::Lit(_) = dot {
+                if let Dot::Lit(src) = dot {
                     let dx = p.dot_x + c as i32;
                     let dy = p.dot_y + r as i32;
-                    if dx >= 0 && dy >= 0 {
+                    if dx < 0 || dy < 0 {
+                        continue;
+                    }
+                    if src.a == 0xFF {
+                        // Byte-identical to today: hard overwrite, relying on
+                        // `DotBuffer::set`'s silent upper-bound clip.
                         out.set(dx as usize, dy as usize, dot);
+                    } else {
+                        // Translucent: must read the destination, so this
+                        // needs a full bounds check (`get` panics OOB).
+                        let (ux, uy) = (dx as usize, dy as usize);
+                        if ux >= out.cols() || uy >= out.rows() {
+                            continue;
+                        }
+                        let blended = match out.get(ux, uy) {
+                            Dot::Lit(dest) => src.over(dest),
+                            Dot::Transparent => src,
+                        };
+                        out.set(ux, uy, Dot::Lit(blended));
                     }
                 }
             }
@@ -295,6 +312,43 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A translucent (`a < 0xFF`) `Lit` dot placed over an existing far `Lit`
+    /// dot must alpha-blend via `Rgba::over`, not hard-overwrite it — the
+    /// load-bearing change this task (b1-t2, spec Decision 2) adds on top of
+    /// b1-t1's blend helper.
+    ///
+    /// Setup: 1×1 output.
+    ///   far  placement: depth=0, Lit(opaque red).
+    ///   near placement: depth=1, Lit(translucent green, a=0x80).
+    /// Expected: out dot (0,0) == Lit(near_color.over(far_color)) — the exact
+    /// per-channel blend, not the raw translucent source color.
+    #[test]
+    fn composite_dots_translucent_blends_over_far_lit() {
+        let far_color = Rgba::rgb(255, 0, 0);
+        let near_color = Rgba::new(0, 255, 0, 0x80);
+        let mut far_buf = DotBuffer::new(1, 1);
+        far_buf.set(0, 0, Dot::Lit(far_color));
+        let mut near_buf = DotBuffer::new(1, 1);
+        near_buf.set(0, 0, Dot::Lit(near_color));
+
+        let placements = [
+            DotPlacement { dots: &far_buf, dot_x: 0, dot_y: 0, depth: 0 },
+            DotPlacement { dots: &near_buf, dot_x: 0, dot_y: 0, depth: 1 },
+        ];
+        let out = composite_dots(1, 1, &placements);
+
+        let expected = near_color.over(far_color);
+        assert_ne!(
+            expected, near_color,
+            "sanity: a mid-alpha blend must differ from the raw translucent source color"
+        );
+        assert_eq!(
+            out.get(0, 0),
+            Dot::Lit(expected),
+            "translucent near dot must alpha-blend over the far opaque dot via Rgba::over, not hard-overwrite it"
+        );
     }
 
     // ── composite_scene tests (b1-t1, spec 33) ────────────────────────────────

@@ -63,7 +63,11 @@ impl Grid {
 /// Blit `grid` into `buf`, centered within `area`.
 ///
 /// - Transparent cells leave the buffer cell's prior content unchanged.
-/// - Glyph cells write their `ch` as symbol and `Color::Rgb(r,g,b)` as fg.
+/// - Glyph cells write their `ch` as symbol. Fully opaque (`color.a == 0xFF`)
+///   glyphs overwrite fg with `Color::Rgb(r,g,b)` byte-identically; translucent
+///   glyphs (`color.a < 0xFF`) alpha-composite `color` over the destination
+///   cell's current fg (`Color::Rgb(r,g,b)` read as opaque, any other variant
+///   incl. `Color::Reset` treated as opaque black) via `Rgba::over`.
 /// - Cells that fall outside `area ∩ buf.area` are silently clipped.
 pub fn draw_grid(buf: &mut Buffer, area: Rect, grid: &Grid) {
     let base_x = area.left() + area.width.saturating_sub(grid.cols() as u16) / 2;
@@ -78,7 +82,16 @@ pub fn draw_grid(buf: &mut Buffer, area: Rect, grid: &Grid) {
                 if clip.left() <= x && x < clip.right() && clip.top() <= y && y < clip.bottom() {
                     if let Some(cell) = buf.cell_mut((x, y)) {
                         cell.set_char(ch);
-                        cell.set_fg(Color::Rgb(color.r, color.g, color.b));
+                        if color.a == 0xFF {
+                            cell.set_fg(Color::Rgb(color.r, color.g, color.b));
+                        } else {
+                            let dest = match cell.fg {
+                                Color::Rgb(r, g, b) => Rgba::new(r, g, b, 0xFF),
+                                _ => Rgba::new(0, 0, 0, 0xFF),
+                            };
+                            let blended = color.over(dest);
+                            cell.set_fg(Color::Rgb(blended.r, blended.g, blended.b));
+                        }
                     }
                 }
             }
@@ -212,6 +225,78 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── draw_grid alpha-blend (b1-t3) ─────────────────────────────────────────
+
+    /// A translucent Glyph (a=0x80) blitted over a cell whose fg is already
+    /// seeded black must alpha-composite via `Rgba::over`, not overwrite:
+    /// white(a=0x80) over black(a=0xFF) -> mid grey (lerp(0,255,128/255)=128).
+    #[test]
+    fn draw_grid_translucent_blends_over_seeded_fg() {
+        let color = Rgba::new(0xFF, 0xFF, 0xFF, 0x80);
+        let mut grid = Grid::new(1, 1);
+        grid.set(0, 0, Cell::Glyph { ch: '⣿', color });
+
+        let mut buf = make_buf(1, 1);
+        if let Some(c) = buf.cell_mut((0u16, 0u16)) {
+            c.set_fg(Color::Rgb(0x00, 0x00, 0x00));
+        }
+
+        draw_grid(&mut buf, Rect::new(0, 0, 1, 1), &grid);
+
+        let cell = buf.cell((0u16, 0u16)).expect("cell (0,0) must exist");
+        assert_eq!(cell.symbol(), "⣿", "glyph char is still written");
+        assert_eq!(
+            cell.fg,
+            Color::Rgb(0x80, 0x80, 0x80),
+            "translucent color must blend over the seeded dest fg, not overwrite it"
+        );
+    }
+
+    /// A translucent Glyph blitted over a fresh (Color::Reset) cell must
+    /// blend as if over opaque black — the fallback the battle-viewer's
+    /// grid lines actually hit (drawn into a fresh buffer).
+    #[test]
+    fn draw_grid_translucent_blends_over_reset_fallback_as_black() {
+        let color = Rgba::new(0xFF, 0xFF, 0xFF, 0x60);
+        let mut grid = Grid::new(1, 1);
+        grid.set(0, 0, Cell::Glyph { ch: '⣿', color });
+
+        let mut buf = make_buf(1, 1);
+        // Fresh buffer cell fg defaults to Color::Reset — not pre-seeded.
+
+        draw_grid(&mut buf, Rect::new(0, 0, 1, 1), &grid);
+
+        let cell = buf.cell((0u16, 0u16)).expect("cell (0,0) must exist");
+        assert_eq!(
+            cell.fg,
+            Color::Rgb(0x60, 0x60, 0x60),
+            "Color::Reset dest must be treated as opaque black for the blend"
+        );
+    }
+
+    /// An opaque Glyph (a=0xFF) must still be a byte-identical overwrite
+    /// regardless of what fg already occupies the destination cell.
+    #[test]
+    fn draw_grid_opaque_still_overwrites_regardless_of_dest() {
+        let color = Rgba::rgb(0xAA, 0xBB, 0xCC);
+        let mut grid = Grid::new(1, 1);
+        grid.set(0, 0, Cell::Glyph { ch: '⣿', color });
+
+        let mut buf = make_buf(1, 1);
+        if let Some(c) = buf.cell_mut((0u16, 0u16)) {
+            c.set_fg(Color::Rgb(0x11, 0x22, 0x33));
+        }
+
+        draw_grid(&mut buf, Rect::new(0, 0, 1, 1), &grid);
+
+        let cell = buf.cell((0u16, 0u16)).expect("cell (0,0) must exist");
+        assert_eq!(
+            cell.fg,
+            Color::Rgb(0xAA, 0xBB, 0xCC),
+            "a==0xFF must overwrite the dest fg byte-identically"
+        );
     }
 
     /// A grid larger than the buffer must not panic; out-of-bounds cells are

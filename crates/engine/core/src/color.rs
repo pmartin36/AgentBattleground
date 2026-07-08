@@ -92,6 +92,14 @@ impl Rgba {
             a: ch(self.a, other.a),
         }
     }
+
+    /// Alpha-composite `self` (source) over `dest` (destination):
+    /// `out = lerp(dest, self, self.a / 255.0)` per channel (r,g,b,a).
+    /// `self.a == 0xFF` returns `self` byte-identical; `self.a == 0x00`
+    /// returns `dest` unchanged. Rounding/clamping is inherited from `lerp`.
+    pub fn over(self, dest: Rgba) -> Rgba {
+        dest.lerp(self, self.a as f32 / 255.0)
+    }
 }
 
 impl std::str::FromStr for Rgba {
@@ -293,5 +301,42 @@ mod tests {
         let b = Rgba::new(0x00, 0x00, 0x00, 0xff);
         assert_eq!(a.lerp(b, -1.0), a, "t below 0 must clamp to t=0 (return self)");
         assert_eq!(a.lerp(b, 2.0), b, "t above 1 must clamp to t=1 (return other)");
+    }
+
+    // --- over (alpha blend, b1-t1: shared compositing primitive) ---
+
+    #[test]
+    fn over_opaque_source_returns_source_byte_identical() {
+        let src = Rgba::new(0x12, 0x34, 0x56, 0xFF);
+        let dest = Rgba::new(0x99, 0x88, 0x77, 0x66);
+        assert_eq!(src.over(dest), src, "fully opaque source must pass through unchanged");
+    }
+
+    #[test]
+    fn over_transparent_source_returns_dest_unchanged() {
+        let src = Rgba::new(0x12, 0x34, 0x56, 0x00);
+        let dest = Rgba::new(0x99, 0x88, 0x77, 0x66);
+        assert_eq!(src.over(dest), dest, "fully transparent source must leave dest unchanged");
+    }
+
+    #[test]
+    fn over_mid_alpha_is_exact_per_channel_lerp() {
+        let src = Rgba::new(0xFF, 0xFF, 0xFF, 0x80);
+        let dest = Rgba::new(0x00, 0x00, 0x00, 0xFF);
+        let out = src.over(dest);
+        assert_eq!((out.r, out.g, out.b), (0x80, 0x80, 0x80), "rgb channels must lerp toward src by src.a/255");
+        assert_eq!(out.a, 0xBF, "alpha channel is itself lerped, not forced to src.a or dest.a");
+    }
+
+    #[test]
+    fn over_mid_alpha_asymmetric_channels() {
+        let src = Rgba::new(0xC0, 0x40, 0x00, 0x40);
+        let dest = Rgba::new(0x00, 0x40, 0xC0, 0xFF);
+        let out = src.over(dest);
+        // t = 0x40 / 255 = 64/255
+        // r: 0 + (192-0)*64/255 = 48.19... -> 48 (0x30)
+        // g: 64 + (64-64)*64/255 = 64 -> 64 (0x40, unchanged since src.g == dest.g)
+        // b: 192 + (0-192)*64/255 = 192 - 48.19 = 143.81 -> 144 (0x90)
+        assert_eq!((out.r, out.g, out.b), (0x30, 0x40, 0x90), "each channel blends independently, not a single averaged value");
     }
 }
