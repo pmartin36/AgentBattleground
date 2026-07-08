@@ -3901,7 +3901,7 @@ mod feet_anchored_placement_tests {
     /// under `DepthAxis::Row` (OverShoulder) it runs the full screen column.
     /// Either way it can land in the exact scanned cell, and only a
     /// color-based filter (not a tighter cell window) reliably excludes it.
-    fn is_chromatic(color: Rgba) -> bool {
+    pub(super) fn is_chromatic(color: Rgba) -> bool {
         let (max, min) = (
             color.r.max(color.g).max(color.b),
             color.r.min(color.g).min(color.b),
@@ -4018,6 +4018,81 @@ mod feet_anchored_placement_tests {
     #[test]
     fn over_shoulder_bench_piece_feet_land_at_ground_point() {
         assert_piece_feet_land_at_ground_point(BattleCamera::over_shoulder_preset(), BENCH_COL, TEAM_A_BENCH_ROW);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: bench-piece visibility regression, all three presets (b7-t1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod bench_visibility_tests {
+    use super::*;
+    use crate::scenes::test_util::render_to_buffer;
+    use super::feet_anchored_placement_tests::is_chromatic;
+
+    /// Renders the demo `pieces()` layout under `camera` both with and
+    /// without the piece at `(BENCH_COL, bench_row)`, then asserts the
+    /// differential (`diff_dots`, control vs. full) contains at least one
+    /// chromatic (team-colored, never board-grid-gray) lit dot that only
+    /// exists in the full render. `board_geometry` depends only on
+    /// `area`+`camera`+`tuning` (never `pieces`), so grid lines/board chrome
+    /// are byte-identical in both renders and can never produce a false
+    /// positive here — the only possible dot-level differences are the
+    /// removed bench piece's own sprite+shadow dots (and anything they
+    /// occluded).
+    fn assert_bench_piece_visible(camera: BattleCamera, bench_row: u16) {
+        let full = BattleViewer {
+            camera_mode: camera,
+            ..BattleViewer::default()
+        };
+
+        let mut control = BattleViewer {
+            camera_mode: camera,
+            ..BattleViewer::default()
+        };
+        control.pieces.retain(|p| !(p.col == BENCH_COL && p.row == bench_row));
+
+        assert_eq!(
+            full.pieces.len(),
+            control.pieces.len() + 1,
+            "no bench piece matched (BENCH_COL, {bench_row}) — layout drifted, test is not \
+             exercising anything"
+        );
+
+        let buf_full = render_to_buffer(&full, 100, 50);
+        let buf_ctrl = render_to_buffer(&control, 100, 50);
+
+        let diff = engine_render::diff_dots(&buf_ctrl, &buf_full);
+        let visible = diff
+            .mismatches
+            .iter()
+            .any(|m| m.actual_lit && m.actual_color.is_some_and(is_chromatic));
+
+        assert!(
+            visible,
+            "preset {camera:?}: bench piece at row {bench_row} produced no distinguishable \
+             chromatic dot — it is invisible/off-screen (this is exactly spec 39's 'bench not \
+             visible' bug)"
+        );
+    }
+
+    #[test]
+    fn bench_visible_sideline() {
+        assert_bench_piece_visible(BattleCamera::sideline_preset(), TEAM_A_BENCH_ROW);
+        assert_bench_piece_visible(BattleCamera::sideline_preset(), TEAM_B_BENCH_ROW);
+    }
+
+    #[test]
+    fn bench_visible_over_shoulder() {
+        assert_bench_piece_visible(BattleCamera::over_shoulder_preset(), TEAM_A_BENCH_ROW);
+        assert_bench_piece_visible(BattleCamera::over_shoulder_preset(), TEAM_B_BENCH_ROW);
+    }
+
+    #[test]
+    fn bench_visible_top_down() {
+        assert_bench_piece_visible(BattleCamera::top_down_preset(), TEAM_A_BENCH_ROW);
+        assert_bench_piece_visible(BattleCamera::top_down_preset(), TEAM_B_BENCH_ROW);
     }
 }
 
