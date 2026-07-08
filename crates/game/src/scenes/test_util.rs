@@ -12,6 +12,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::Terminal;
 
+use engine_core::color::Rgba;
 use engine_core::scene::{InputEvent, Scene};
 
 /// Render `scene` into a fresh `w`×`h` `TestBackend` and return the resulting
@@ -122,6 +123,30 @@ pub(crate) fn topmost_lit_dot_row(buf: &Buffer, col: u16, near_row: u16) -> i32 
         }
     }
     panic!("no lit dot found near row {near_row} at column {col}");
+}
+
+/// The blended `Rgba` color of the LIT dot at the exact absolute dot
+/// coordinate `(dot_col, dot_row)` (0-indexed in the 2-dots-wide ×
+/// 4-dots-tall braille grid), or `None` if that specific dot is unlit / out
+/// of bounds. Unlike [`topmost_lit_dot_row`] (which scans a fixed `± 2`-CELL
+/// neighborhood — up to 8 dots — for the nearest lit dot), this checks one
+/// exact dot. Prefer this when an assertion's own tolerance is a small
+/// number of DOTS: scanning a whole `± 2`-cell neighborhood for that case is
+/// far wider than the tolerance and can pick up an unrelated element (a grid
+/// line, a neighboring sprite) that a tight dot-level check would never
+/// reach.
+pub(crate) fn lit_dot_color(buf: &Buffer, dot_col: i32, dot_row: i32) -> Option<Rgba> {
+    const DOT_DX: [u8; 8] = [0, 0, 0, 1, 1, 1, 0, 1];
+    const DOT_DY: [u8; 8] = [0, 1, 2, 0, 1, 2, 3, 3];
+    if dot_col < 0 || dot_row < 0 {
+        return None;
+    }
+    let (cell_col, dx) = ((dot_col / 2) as u16, (dot_col % 2) as u8);
+    let (cell_row, dy) = ((dot_row / 4) as u16, (dot_row % 4) as u8);
+    let (mask, color) = engine_render::decode_braille_cell(buf, cell_col, cell_row)?;
+    (0..8u8)
+        .any(|k| DOT_DX[k as usize] == dx && DOT_DY[k as usize] == dy && mask & (1 << k) != 0)
+        .then_some(color)
 }
 
 // ── b7-t1: golden-fixture serialize/deserialize helpers ─────────────────────

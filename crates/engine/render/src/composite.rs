@@ -4,7 +4,7 @@ use crate::anim::AnimatedSprite;
 use crate::camera::{Camera, WorldPos};
 use crate::dots::{dots_to_grid_tinted, tint, Dot, DotBuffer};
 use crate::grid::Grid;
-use crate::transform::{place, Transform};
+use crate::transform::{place, Transform, VerticalAnchor};
 use engine_core::color::Rgba;
 use std::time::Duration;
 
@@ -100,6 +100,7 @@ pub struct SpriteDraw<'a> {
     pub content: SpriteContent<'a>,
     pub translate: WorldPos,
     pub tint: Option<Rgba>,
+    pub vertical_anchor: VerticalAnchor,
 }
 
 /// Composite every `draws` entry into one `dot_cols`×`dot_rows` [`Grid`],
@@ -139,8 +140,8 @@ pub fn composite_scene<C: Camera>(
     for (i, d) in draws.iter().enumerate() {
         let raw = &raws[i];
         let color_buf = tints[i].as_ref().unwrap_or(raw);
-        shape_p.push(place(raw, d.translate, camera));
-        color_p.push(place(color_buf, d.translate, camera));
+        shape_p.push(place(raw, d.translate, camera, d.vertical_anchor));
+        color_p.push(place(color_buf, d.translate, camera, d.vertical_anchor));
     }
 
     let shape = composite_dots(dot_cols, dot_rows, &shape_p);
@@ -433,6 +434,7 @@ mod tests {
                 },
                 translate: WorldPos::new(0.0, 0.0), // depth 0 (far)
                 tint: None,
+                vertical_anchor: VerticalAnchor::Center,
             },
             SpriteDraw {
                 content: SpriteContent::Animated {
@@ -443,6 +445,7 @@ mod tests {
                 },
                 translate: WorldPos::new(5.0, 0.0), // depth 5 (near)
                 tint: None,
+                vertical_anchor: VerticalAnchor::Center,
             },
         ];
 
@@ -484,6 +487,7 @@ mod tests {
                 },
                 translate: WorldPos::new(0.0, 0.0),
                 tint: Some(c),
+                vertical_anchor: VerticalAnchor::Center,
             }];
             let grid = composite_scene(4, 8, &camera, &draws);
 
@@ -526,6 +530,7 @@ mod tests {
                 },
                 translate: WorldPos::new(0.0, 0.0),
                 tint: Some(c),
+                vertical_anchor: VerticalAnchor::Center,
             }];
             let grid = composite_scene(4, 8, &camera, &draws);
 
@@ -573,6 +578,7 @@ mod tests {
                 },
                 translate: WorldPos::new(4.0, 8.0), // buffer occupies dot cols [2,6) rows [4,12)
                 tint: Some(tint_a),
+                vertical_anchor: VerticalAnchor::Center,
             },
             SpriteDraw {
                 content: SpriteContent::Animated {
@@ -583,6 +589,7 @@ mod tests {
                 },
                 translate: WorldPos::new(24.0, 8.0), // buffer occupies dot cols [22,26) rows [4,12)
                 tint: Some(tint_b),
+                vertical_anchor: VerticalAnchor::Center,
             },
         ];
 
@@ -617,7 +624,7 @@ mod tests {
         let translate = WorldPos::new(0.0, 0.0);
 
         let raw = sprite.rasterize_at(Duration::ZERO, &transform, 8);
-        let placement = place(&raw, translate, &camera);
+        let placement = place(&raw, translate, &camera, VerticalAnchor::Center);
         let composited = composite_dots(4, 8, &[placement]);
         let expected = dots_to_grid(&composited);
 
@@ -630,6 +637,7 @@ mod tests {
             },
             translate,
             tint: None,
+            vertical_anchor: VerticalAnchor::Center,
         }];
         let actual = composite_scene(4, 8, &camera, &draws);
 
@@ -658,6 +666,7 @@ mod tests {
             content: SpriteContent::Prerasterized(&buf),
             translate: WorldPos::new(0.0, 0.0),
             tint: None,
+            vertical_anchor: VerticalAnchor::Center,
         }];
         let grid = composite_scene(2, 4, &camera, &draws);
 
@@ -667,6 +676,63 @@ mod tests {
             glyph_color(grid.get(0, 0)),
             Rgba::rgb(10, 20, 30),
             "Prerasterized draw must place the given buffer's dot unchanged"
+        );
+    }
+
+    /// `composite_scene` must place each draw via its own `vertical_anchor`
+    /// (b5-t2) rather than the hardcoded `Center` it used before this task —
+    /// a `Bottom`-anchored draw must match manually placing the same buffer
+    /// with `place(.., VerticalAnchor::Bottom)`, and must differ from a
+    /// `Center`-anchored draw of the identical buffer/position.
+    #[test]
+    fn composite_scene_threads_bottom_anchor() {
+        // 2x8-dot buffer (even rows), one lit dot at its top-left corner.
+        let mut buf = DotBuffer::new(2, 8);
+        buf.set(0, 0, Dot::Lit(Rgba::rgb(10, 20, 30)));
+        let camera = FixedProjectCamera { project: (8, 16) };
+        let translate = WorldPos::new(0.0, 0.0);
+
+        // Expected: composite_scene must delegate to place(.., Bottom).
+        let bottom_placement = place(&buf, translate, &camera, VerticalAnchor::Bottom);
+        let expected = dots_to_grid(&composite_dots(16, 16, &[bottom_placement]));
+
+        let bottom_draws = [SpriteDraw {
+            content: SpriteContent::Prerasterized(&buf),
+            translate,
+            tint: None,
+            vertical_anchor: VerticalAnchor::Bottom,
+        }];
+        let actual = composite_scene(16, 16, &camera, &bottom_draws);
+
+        assert_eq!(
+            actual, expected,
+            "composite_scene must place a Bottom-anchored draw via place(.., Bottom), not the hardcoded Center"
+        );
+
+        // Distinctness: a Center-anchored draw of the identical buffer/position
+        // must land differently (guards against the field being read but
+        // ignored).
+        let center_draws = [SpriteDraw {
+            content: SpriteContent::Prerasterized(&buf),
+            translate,
+            tint: None,
+            vertical_anchor: VerticalAnchor::Center,
+        }];
+        let center_actual = composite_scene(16, 16, &camera, &center_draws);
+        assert_ne!(
+            actual, center_actual,
+            "Bottom- and Center-anchored composites of the same buffer/position must differ"
+        );
+
+        // Dot-precision offset check at the place() level (composite_scene's
+        // output is cell-resolution and can't expose a sub-cell shift): for
+        // an even-row buffer, Center must sit exactly rows()/2 dots above
+        // Bottom.
+        let center_placement = place(&buf, translate, &camera, VerticalAnchor::Center);
+        assert_eq!(
+            center_placement.dot_y - bottom_placement.dot_y,
+            (buf.rows() / 2) as i32,
+            "Center anchor must sit exactly rows()/2 dots above Bottom anchor for an even-row buffer"
         );
     }
 }

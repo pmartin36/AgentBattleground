@@ -126,17 +126,36 @@ pub fn rasterize(img: &DynamicImage, transform: &Transform, base_dot_rows: u32) 
     out
 }
 
-/// Anchor `dots`' CENTER at `camera.project(translate)`, returning a ready
-/// `DotPlacement`. Collapses the rasterize -> project -> placement
+/// Vertical placement reference for a billboard sprite relative to its
+/// camera-projected point. `Center` anchors the sprite's mid-row (pre-b5-t1
+/// behavior); `Bottom` anchors the sprite's bottom row (feet at the point,
+/// growing upward). b5-t1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerticalAnchor {
+    Center,
+    Bottom,
+}
+
+/// Anchor `dots` at `camera.project(translate)` per `anchor`, returning a
+/// ready `DotPlacement`. Collapses the rasterize -> project -> placement
 /// boilerplate. `translate` is the pivot's world position; rotation/scale are
 /// already baked into `dots` by `rasterize`. Spec 16 §"Sprite Transform &
-/// Placement".
-pub fn place<'a, C: Camera>(dots: &'a DotBuffer, translate: WorldPos, camera: &C) -> DotPlacement<'a> {
+/// Placement"; anchor param added by b5-t1.
+pub fn place<'a, C: Camera>(
+    dots: &'a DotBuffer,
+    translate: WorldPos,
+    camera: &C,
+    anchor: VerticalAnchor,
+) -> DotPlacement<'a> {
     let (px, py) = camera.project(translate);
+    let dot_y = match anchor {
+        VerticalAnchor::Center => py - (dots.rows() / 2) as i32,
+        VerticalAnchor::Bottom => py - dots.rows() as i32,
+    };
     DotPlacement {
         dots,
         dot_x: px - (dots.cols() / 2) as i32,
-        dot_y: py - (dots.rows() / 2) as i32,
+        dot_y,
         depth: camera.depth_key(translate),
     }
 }
@@ -340,7 +359,7 @@ mod tests {
         let translate = WorldPos::new(2.0, 3.0);
         let camera = SideView::new(4.0); // project -> (8, 12)
 
-        let placement = place(&dots, translate, &camera);
+        let placement = place(&dots, translate, &camera, VerticalAnchor::Center);
 
         assert_eq!(placement.dot_x, 8 - 4, "dot_x must be project.x - cols/2");
         assert_eq!(placement.dot_y, 12 - 2, "dot_y must be project.y - rows/2");
@@ -355,7 +374,7 @@ mod tests {
         let translate = WorldPos::new(0.0, 0.0);
         let camera = SideView::new(1.0); // project -> (0, 0)
 
-        let placement = place(&dots, translate, &camera);
+        let placement = place(&dots, translate, &camera, VerticalAnchor::Center);
 
         assert_eq!(placement.dot_x, 0 - 2, "5/2 must floor to 2");
         assert_eq!(placement.dot_y, 0 - 1, "3/2 must floor to 1");
@@ -368,7 +387,7 @@ mod tests {
         let translate = WorldPos::new(-3.5, 7.25);
         let camera = SideView::new(2.0);
 
-        let placement = place(&dots, translate, &camera);
+        let placement = place(&dots, translate, &camera, VerticalAnchor::Center);
 
         assert_eq!(placement.depth, camera.depth_key(translate));
     }
@@ -380,9 +399,28 @@ mod tests {
         let translate = WorldPos::new(1.0, 1.0);
         let camera = SideView::new(1.0);
 
-        let placement = place(&dots, translate, &camera);
+        let placement = place(&dots, translate, &camera, VerticalAnchor::Center);
 
         assert!(std::ptr::eq(placement.dots, &dots), "placement.dots must point at the passed buffer");
+    }
+
+    /// `Bottom` anchors the buffer's bottom row at the projected point:
+    /// `dot_y == py - dots.rows()`, distinct from `Center`'s `py - rows/2` for
+    /// the identical buffer/position. `dot_x`/`depth` are unaffected by anchor.
+    #[test]
+    fn place_bottom_anchors_feet_at_projected_point() {
+        let dots = DotBuffer::new(8, 4);
+        let translate = WorldPos::new(2.0, 3.0);
+        let camera = SideView::new(4.0); // project -> (8, 12)
+
+        let center = place(&dots, translate, &camera, VerticalAnchor::Center);
+        let bottom = place(&dots, translate, &camera, VerticalAnchor::Bottom);
+
+        assert_eq!(bottom.dot_y, 12 - 4, "Bottom dot_y must be project.y - rows");
+        assert_eq!(center.dot_y, 12 - 2, "Center dot_y must remain project.y - rows/2");
+        assert_ne!(bottom.dot_y, center.dot_y, "Bottom and Center must differ for a non-zero-row buffer");
+        assert_eq!(bottom.dot_x, center.dot_x, "dot_x must be identical across anchors");
+        assert_eq!(bottom.depth, center.depth, "depth must be identical across anchors");
     }
 
     // ── Inspectable (b3-t1) ──────────────────────────────────────────────────

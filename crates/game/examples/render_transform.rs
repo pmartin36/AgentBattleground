@@ -149,7 +149,12 @@ impl Scene for RenderTransformScene {
         // invariant. The source frame itself is already a one-off decode in
         // `new()`, not a per-frame cost.
         let dots = engine_render::transform::rasterize(&self.img, &transform, WIZARD_DOT_ROWS);
-        let placement = engine_render::transform::place(&dots, transform.translate, &self.camera);
+        let placement = engine_render::transform::place(
+            &dots,
+            transform.translate,
+            &self.camera,
+            engine_render::transform::VerticalAnchor::Center,
+        );
 
         let composed = engine_render::composite::composite_dots(cols * 2, rows * 4, &[placement]);
         let grid = engine_render::dots::dots_to_grid(&composed);

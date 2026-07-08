@@ -6,7 +6,7 @@ use ratatui::layout::Rect;
 use engine_render::camera::{axis_values, Camera, DepthAxis, ObliqueCamera, PerspectiveCamera, WorldPos};
 use engine_render::composite::{composite_scene, SpriteContent, SpriteDraw};
 use engine_render::dots::{dots_to_grid, Dot, DotBuffer};
-use engine_render::transform::{Transform, Vec2};
+use engine_render::transform::{Transform, Vec2, VerticalAnchor};
 use engine_render::tween::Tween;
 use engine_render::{draw_grid, rasterize_shape, AnimatedSprite, ShapeKind};
 use engine_core::color::Rgba;
@@ -408,6 +408,21 @@ impl BattleCamera {
             BattleCamera::Sideline(c) => c.elevation_deg,
             BattleCamera::TopDown(c) => c.elevation_deg,
             BattleCamera::OverShoulder(c) => c.elevation_deg,
+        }
+    }
+
+    /// Vertical anchor to use for every `SpriteDraw` (shadow and piece alike)
+    /// under the active variant. `TopDown` centers sprites on their grid
+    /// point (looking straight down, there is no "ground contact" edge);
+    /// `Sideline`/`OverShoulder` anchor sprites by their bottom edge so a
+    /// piece's feet land on its projected ground point instead of floating
+    /// centered on it. Exhaustive match — no wildcard — so a future variant
+    /// is forced to choose an anchor.
+    pub fn vertical_anchor(&self) -> VerticalAnchor {
+        match self {
+            BattleCamera::TopDown(_) => VerticalAnchor::Center,
+            BattleCamera::Sideline(_) => VerticalAnchor::Bottom,
+            BattleCamera::OverShoulder(_) => VerticalAnchor::Bottom,
         }
     }
 
@@ -1219,6 +1234,7 @@ impl BattleViewer {
         elapsed: Duration,
     ) -> Vec<SpriteDraw<'a>> {
         let base_dot_rows = sprite_base_dot_rows(&geom.camera);
+        let anchor = geom.camera.vertical_anchor();
         let mut draws = Vec::with_capacity(shadow_bufs.len() * 2);
         for (i, (p, sprite)) in self.drawable_pieces().enumerate() {
             let transform = depth_scaled_transform(&p.transform, &geom.camera, &self.tuning);
@@ -1226,6 +1242,7 @@ impl BattleViewer {
                 content: SpriteContent::Prerasterized(&shadow_bufs[i]),
                 translate: p.transform.translate,
                 tint: None,
+                vertical_anchor: anchor,
             });
             draws.push(SpriteDraw {
                 content: SpriteContent::Animated {
@@ -1236,6 +1253,7 @@ impl BattleViewer {
                 },
                 translate: p.transform.translate,
                 tint: None,
+                vertical_anchor: anchor,
             });
         }
         draws
@@ -3809,6 +3827,194 @@ mod billboarding_invariant_tests {
             let geom = board_geometry(area, camera, BattleViewerTuning::default());
             assert_billboarding_invariant(&scene, &geom, Duration::from_secs_f32(2.0));
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: per-preset vertical anchor / feet-in-the-box placement (b5-t4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod vertical_anchor_choice_tests {
+    use super::*;
+
+    /// PUBLIC_SURFACE (research.md b5-t4): every `SpriteDraw` `build_draws`
+    /// emits (both the shadow and the piece of every pair) must carry
+    /// `VerticalAnchor::Bottom` for Sideline/OverShoulder (feet-in-the-box)
+    /// and `VerticalAnchor::Center` for TopDown (no verticality to anchor).
+    /// Exercises the full call path (not a standalone accessor), so a
+    /// mis-wired or reverted call site in `build_draws` is caught directly.
+    #[test]
+    fn build_draws_anchor_is_bottom_for_oblique_center_for_top_down() {
+        let scene = BattleViewer::default();
+        let area = Rect::new(0, 0, 100, 50);
+
+        let cases: [(BattleCamera, VerticalAnchor); 3] = [
+            (BattleCamera::sideline_preset(), VerticalAnchor::Bottom),
+            (BattleCamera::over_shoulder_preset(), VerticalAnchor::Bottom),
+            (BattleCamera::top_down_preset(), VerticalAnchor::Center),
+        ];
+
+        for (camera, expected) in cases {
+            let geom = board_geometry(area, camera, BattleViewerTuning::default());
+            let shadow_bufs = scene.shadow_buffers(&geom);
+            let draws = scene.build_draws(&geom, &shadow_bufs, Duration::ZERO);
+            assert!(!draws.is_empty(), "expected at least one draw for preset {camera:?}");
+            for draw in &draws {
+                assert_eq!(
+                    draw.vertical_anchor, expected,
+                    "preset {camera:?}: every SpriteDraw must carry vertical_anchor == {expected:?}"
+                );
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: feet-anchored placement lands sprites at the ground point (b5-t4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod feet_anchored_placement_tests {
+    use super::*;
+    use crate::scenes::test_util::{lit_dot_color, render_to_buffer};
+
+    /// Rounding tolerance for the folded feet-vs-rendered comparison
+    /// (research.md b5-t4): covers only `place`'s Bottom-anchor integer dot
+    /// rounding — the shadow's own outer alpha-0 padding is folded out below,
+    /// so it never needs to be absorbed by this margin.
+    const FEET_TOLERANCE_DOTS: i32 = 2;
+
+    /// True for any rendered dot color that is NOT a shade of the board's
+    /// grid-line gray. `GRID_LINE_COLOR` (and its translucent Sideline/
+    /// OverShoulder blends, always blended toward black) keeps R≈G≈B; both
+    /// team colors (`TEAM_A_COLOR` pale gold, `TEAM_B_COLOR` pale mint) are
+    /// chromatic at every alpha. Used to keep the feet-probe's bottom-up scan
+    /// from landing on a board grid-line dot instead of the target piece's
+    /// team-colored shadow: `draw_board_lines` draws a line through every
+    /// integer world column/row, and a piece's world position (`col + 0.5`)
+    /// is always within half a unit of one — under `DepthAxis::Col`
+    /// (Sideline) that line lands at nearly the piece's own screen depth;
+    /// under `DepthAxis::Row` (OverShoulder) it runs the full screen column.
+    /// Either way it can land in the exact scanned cell, and only a
+    /// color-based filter (not a tighter cell window) reliably excludes it.
+    fn is_chromatic(color: Rgba) -> bool {
+        let (max, min) = (
+            color.r.max(color.g).max(color.b),
+            color.r.min(color.g).min(color.b),
+        );
+        max.saturating_sub(min) > 12
+    }
+
+    /// For a non-Top-Down preset, one Team A piece from the demo roster
+    /// (rendered alone — see the isolation comment below for why): the
+    /// BOTTOMMOST chromatic (team/creature-colored, never board-grid-gray)
+    /// rendered dot in its exact projected dot column must land within
+    /// `FEET_TOLERANCE_DOTS` of the camera-projected ground point, once the
+    /// shadow buffer's own bottom transparent padding (the Ring's alpha-0
+    /// outer edge) is folded out. Projects through `geom.framed_camera()`
+    /// (not bare `geom.camera`) since `render()` composites through the
+    /// offset-baked camera (fit-to-viewport, b4-t1) — see research.md's
+    /// correction #1. Verified via decoded dots (`lit_dot_color`, checked at
+    /// the exact dot column rather than a cell-floored one — see
+    /// `lit_dot_color`'s docs for why a coarser scan can find an unrelated
+    /// element instead of the shadow — and restricted to chromatic dots via
+    /// `is_chromatic` so a board grid-line dot is never mistaken for the
+    /// shadow), never a raw `Rect`/`DotRect` field comparison, per this
+    /// project's alignment-verification convention.
+    fn assert_piece_feet_land_at_ground_point(camera: BattleCamera, col: u16, row: u16) {
+        let mut scene = BattleViewer::default();
+        // Isolate to just the target piece: the demo roster's other 7 pieces
+        // (and their own shadows) are close enough in screen-space under a
+        // perspective camera's spread/depth divide that a neighbor's WIDE
+        // shadow can bleed into this piece's scanned column even from a
+        // different board column/row — not just an exact-column collision.
+        // Keeping only the piece under test removes every such cross-piece
+        // ambiguity; the board grid chrome (excluded via `is_chromatic`) is
+        // the only other rendered element left to guard against.
+        scene.pieces.retain(|p| p.col == col && p.row == row);
+        // `render()` (battle_viewer.rs's `Scene` impl) builds its geometry
+        // from `self.camera_mode`, NOT from a parameter — so the scene's own
+        // camera must actually be switched to `camera` or `render_to_buffer`
+        // below renders under whatever `BattleViewer::default()` starts on
+        // (Sideline) regardless of which preset this assertion is computing
+        // `expected` for.
+        scene.camera_mode = camera;
+        let area = Rect::new(0, 0, 100, 50);
+        let geom = board_geometry(area, camera, BattleViewerTuning::default());
+
+        let piece = scene
+            .pieces
+            .first()
+            .expect("demo pieces() must include a Team A piece at (col, row)");
+
+        let shadow_bufs = scene.shadow_buffers(&geom);
+        let shadow_slot = scene
+            .drawable_pieces()
+            .position(|(p, _)| p.index == piece.index)
+            .expect("Team A piece at (col, row) must be drawable (alive + has a sprite)");
+        let shadow = &shadow_bufs[shadow_slot];
+
+        let cam = geom.framed_camera();
+        let (fx, fy) = cam.project(piece.transform.translate);
+        let feet_dot_col = geom.board_rect.left() as i32 * 2 + fx;
+        let feet_dot_row = geom.board_rect.top() as i32 * 4 + fy;
+
+        // Fold out the shadow buffer's own bottom-lit padding: the buffer-
+        // local lowest LIT row (0-indexed from the top), and its distance
+        // from the buffer's own last row.
+        let lowest_local = (0..shadow.rows())
+            .rev()
+            .find(|&r| (0..shadow.cols()).any(|c| !matches!(shadow.get(c, r), Dot::Transparent)))
+            .expect("shadow buffer must have at least one lit dot");
+        let bottom_padding = (shadow.rows() - 1 - lowest_local) as i32;
+
+        // `place`'s Bottom anchor sets the buffer's own lowest row at grid-y
+        // `fy - 1` (dot_y = py - rows, so the last row is dot_y + rows - 1 ==
+        // py - 1); the folded padding removes the rest of the deterministic
+        // offset, leaving only rounding for FEET_TOLERANCE_DOTS to absorb.
+        let expected = feet_dot_row - 1 - bottom_padding;
+
+        let buf = render_to_buffer(&scene, area.width, area.height);
+        // Find the actual BOTTOMMOST chromatic (team/creature-colored, never
+        // board-grid-gray) dot in the exact projected dot COLUMN (not floored
+        // to a terminal cell), scanning the full rendered height. A `Center`
+        // anchor and a `Bottom` anchor both place chromatic content near
+        // `expected` (the Ring shadow spans several dots either side of its
+        // anchor point) — only the BOTTOM of that content is anchor-specific:
+        // `Bottom` caps it at `expected` (nothing chromatic below), `Center`
+        // lets it hang roughly a further half-buffer-height below. Checking
+        // the bottommost dot (not just "is anything chromatic within
+        // tolerance") is what actually discriminates the two anchors, and
+        // the isolated single-piece scene + exact dot column + chromatic
+        // filter together rule out every non-anchor source of a lower dot
+        // (a neighboring piece, a board grid line) — so a full-height scan is
+        // safe here, unlike the fixed ± 2-cell scan `topmost_lit_dot_row`
+        // uses for a general-purpose neighborhood search.
+        let bottommost_chromatic = (0..(area.height as i32 * 4))
+            .rev()
+            .find(|&dot_row| lit_dot_color(&buf, feet_dot_col, dot_row).is_some_and(is_chromatic));
+
+        assert_eq!(
+            bottommost_chromatic.map(|observed| (observed - expected).abs() <= FEET_TOLERANCE_DOTS),
+            Some(true),
+            "preset {camera:?}: bottommost chromatic (team/creature-colored) dot at dot column \
+             {feet_dot_col} is {bottommost_chromatic:?}, must land within {FEET_TOLERANCE_DOTS} \
+             dots of the projected ground point (row {expected}) — the creature must stand in \
+             its cell, not float centered on it"
+        );
+    }
+
+    /// Team A's bench piece, under Sideline.
+    #[test]
+    fn sideline_bench_piece_feet_land_at_ground_point() {
+        assert_piece_feet_land_at_ground_point(BattleCamera::sideline_preset(), BENCH_COL, TEAM_A_BENCH_ROW);
+    }
+
+    /// Team A's bench piece, under OverShoulder.
+    #[test]
+    fn over_shoulder_bench_piece_feet_land_at_ground_point() {
+        assert_piece_feet_land_at_ground_point(BattleCamera::over_shoulder_preset(), BENCH_COL, TEAM_A_BENCH_ROW);
     }
 }
 
