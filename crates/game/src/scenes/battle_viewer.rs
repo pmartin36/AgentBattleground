@@ -3,7 +3,7 @@ use std::time::Duration;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use engine_render::camera::{axis_values, Camera, DepthAxis, ObliqueCamera, PerspectiveCamera, WorldPos};
+use engine_render::camera::{Camera, DepthAxis, ObliqueCamera, PerspectiveCamera, WorldPos};
 use engine_render::composite::{composite_scene, SpriteContent, SpriteDraw};
 use engine_render::dots::{dots_to_grid, Dot, DotBuffer};
 use engine_render::transform::{Transform, Vec2, VerticalAnchor};
@@ -979,20 +979,28 @@ pub fn sprite_base_dot_rows(camera: &BattleCamera) -> u32 {
     (camera.sprite_scale_dots() * SPRITE_DOT_RATIO).round() as u32
 }
 
-/// Per-piece depth-scale multiplier (spec 39 Decision 1): `1.0` at
-/// `elevation_deg = 90.0` (Top-Down) for any `pos`; otherwise decreases as
-/// `pos` gets farther from `camera.camera_depth` along `camera.depth_axis`,
-/// clamped at `tuning.depth_scale_min`. Reuses `axis_values` (engine) rather
-/// than re-matching on `DepthAxis` inline.
-fn depth_scale_factor(camera: &BattleCamera, tuning: &BattleViewerTuning, pos: WorldPos) -> f32 {
-    let (depth_axis, camera_depth) = match camera {
-        BattleCamera::TopDown(c) => (c.depth_axis, c.camera_depth),
-        BattleCamera::Sideline(c) | BattleCamera::OverShoulder(c) => (c.depth_axis, c.camera_depth),
+/// Per-piece depth-scale multiplier (spec 41 Decision 4): `1.0` for
+/// `TopDown` (no `PerspectiveCamera` backing it, so no `forward_distance`
+/// term to derive one from); otherwise `near_ref / camera.forward_distance(pos)`
+/// where `near_ref` is `forward_distance` at the board's nearest depth-axis
+/// edge — self-bounding in `(0.0, 1.0]` for any in-board `pos`, no clamp.
+fn depth_scale_factor(camera: &BattleCamera, pos: WorldPos) -> f32 {
+    let cam = match camera {
+        BattleCamera::TopDown(_) => return 1.0,
+        BattleCamera::Sideline(c) | BattleCamera::OverShoulder(c) => c,
     };
-    let (depth, _) = axis_values(depth_axis, pos);
-    let dist = (depth - camera_depth).abs();
-    let k = camera.elevation_deg().to_radians().sin();
-    (1.0 - (1.0 - k) * dist * tuning.depth_scale_per_world_unit).max(tuning.depth_scale_min)
+    let extent = match cam.depth_axis {
+        DepthAxis::Col => BOARD_COLS as f32,
+        DepthAxis::Row => BOARD_ROWS as f32,
+    };
+    let depth_pos = |d: f32| match cam.depth_axis {
+        DepthAxis::Col => WorldPos::new(d, 0.0),
+        DepthAxis::Row => WorldPos::new(0.0, d),
+    };
+    let near_ref = cam
+        .forward_distance(depth_pos(0.0))
+        .min(cam.forward_distance(depth_pos(extent)));
+    near_ref / cam.forward_distance(pos)
 }
 
 /// Applies `depth_scale_factor` on top of `transform`'s OWN existing scale
@@ -1000,8 +1008,8 @@ fn depth_scale_factor(camera: &BattleCamera, tuning: &BattleViewerTuning, pos: W
 /// overwrites from `Team::scale_x()`/`1.0`. `translate`/`rotation` pass
 /// through unchanged. The render loop's per-piece draw-construction calls
 /// this same helper (not a second, duplicated inline formula).
-fn depth_scaled_transform(transform: &Transform, camera: &BattleCamera, tuning: &BattleViewerTuning) -> Transform {
-    let factor = depth_scale_factor(camera, tuning, transform.translate);
+fn depth_scaled_transform(transform: &Transform, camera: &BattleCamera) -> Transform {
+    let factor = depth_scale_factor(camera, transform.translate);
     Transform {
         scale: Vec2::new(transform.scale.x * factor, transform.scale.y * factor),
         ..*transform
@@ -1050,15 +1058,12 @@ pub enum EventKind {
     Die { piece_index: usize },
 }
 
-/// Tunable constants for camera-dependent rendering (grid dimming, depth
-/// scaling/taper, shadow fade). Single source of truth for the spec Decision
-/// 1 defaults — downstream tasks (b3-t1, b4-t2, b6-t1, b7-t1) read these
-/// fields rather than re-hardcoding the literals.
+/// Tunable constants for camera-dependent rendering (grid dimming, shadow
+/// fade). Depth scaling (spec 41 Decision 4) is derived directly from the
+/// active camera's `forward_distance`, not a tunable here.
 #[derive(Clone, Copy, PartialEq, Debug, Inspectable)]
 pub struct BattleViewerTuning {
     pub grid_dim_alpha: u8,
-    pub depth_scale_per_world_unit: f32,
-    pub depth_scale_min: f32,
     pub shadow_fade_ms: u32,
 }
 
@@ -1066,8 +1071,6 @@ impl Default for BattleViewerTuning {
     fn default() -> Self {
         Self {
             grid_dim_alpha: 0x28,
-            depth_scale_per_world_unit: 0.05,
-            depth_scale_min: 0.6,
             shadow_fade_ms: 150,
         }
     }
@@ -1237,7 +1240,7 @@ impl BattleViewer {
         let anchor = geom.camera.vertical_anchor();
         let mut draws = Vec::with_capacity(shadow_bufs.len() * 2);
         for (i, (p, sprite)) in self.drawable_pieces().enumerate() {
-            let transform = depth_scaled_transform(&p.transform, &geom.camera, &self.tuning);
+            let transform = depth_scaled_transform(&p.transform, &geom.camera);
             draws.push(SpriteDraw {
                 content: SpriteContent::Prerasterized(&shadow_bufs[i]),
                 translate: p.transform.translate,
@@ -2324,13 +2327,11 @@ mod depth_scale_tests {
         AnimatedSprite::new(vec![DynamicImage::from(raw)], Duration::from_millis(100))
     }
 
-    /// At `elevation_deg = 90.0` (Top-Down), `depth_scale_factor` is exactly
-    /// `1.0` for any `pos` — `(1.0 - k) == 0.0` cancels the whole distance
-    /// term regardless of `depth_scale_per_world_unit`/`depth_scale_min`.
+    /// Top-Down has no `PerspectiveCamera` backing it, so `depth_scale_factor`
+    /// is exactly `1.0` for any `pos`, in-board or not.
     #[test]
     fn top_down_factor_always_one() {
         let mode = BattleCamera::top_down_preset();
-        let tuning = BattleViewerTuning::default();
         for pos in [
             WorldPos::new(0.5, 0.5),
             WorldPos::new(3.5, 3.5),
@@ -2338,67 +2339,74 @@ mod depth_scale_tests {
             WorldPos::new(-10.0, 40.0),
         ] {
             assert_eq!(
-                depth_scale_factor(&mode, &tuning, pos),
+                depth_scale_factor(&mode, pos),
                 1.0,
                 "Top-Down depth_scale_factor must be exactly 1.0 at pos {pos:?}"
             );
         }
     }
 
-    /// Under Over-the-shoulder (`elevation_deg = 30.0`, depth axis = Row),
-    /// the factor is exactly `1.0` at zero distance from `camera_depth`,
-    /// strictly decreases as distance grows, then clamps at
-    /// `tuning.depth_scale_min` once the term saturates.
+    /// Under Over-the-shoulder (depth axis = Row), the factor at the board's
+    /// near depth-axis edge (Row 0.0) is exactly `1.0`, and strictly
+    /// decreases as the depth-axis coordinate moves farther from the camera
+    /// across in-board depths — every value stays in `(0.0, 1.0]`. No
+    /// `depth_scale_min` clamp: the new normalization is self-bounding.
     #[test]
-    fn over_shoulder_factor_decreases_with_distance_then_clamps() {
+    fn over_shoulder_factor_decreases_with_forward_distance() {
         let mode = BattleCamera::over_shoulder_preset();
-        let BattleCamera::OverShoulder(camera) = mode else {
-            unreachable!()
-        };
-        let tuning = BattleViewerTuning::default();
+        let spread = 3.5;
 
-        let near = depth_scale_factor(&mode, &tuning, WorldPos::new(3.5, camera.camera_depth));
-        let mid = depth_scale_factor(&mode, &tuning, WorldPos::new(3.5, camera.camera_depth - 2.0));
-        let far = depth_scale_factor(&mode, &tuning, WorldPos::new(3.5, camera.camera_depth - 20.0));
-        let very_far = depth_scale_factor(&mode, &tuning, WorldPos::new(3.5, camera.camera_depth - 50.0));
+        let at_edge = depth_scale_factor(&mode, WorldPos::new(spread, 0.0));
+        let near = depth_scale_factor(&mode, WorldPos::new(spread, 0.5));
+        let mid = depth_scale_factor(&mode, WorldPos::new(spread, 3.5));
+        let far = depth_scale_factor(&mode, WorldPos::new(spread, 6.5));
 
-        assert_eq!(near, 1.0, "zero distance from camera_depth must yield exactly 1.0");
-        assert!(mid < near, "factor must strictly decrease as distance grows: mid={mid} near={near}");
-        assert!(far < mid, "factor must keep decreasing as distance grows further: far={far} mid={mid}");
-        assert_eq!(
-            far, tuning.depth_scale_min,
-            "far enough away, the factor must clamp at tuning.depth_scale_min"
-        );
-        assert_eq!(
-            very_far, tuning.depth_scale_min,
-            "even farther away, the factor must not go below tuning.depth_scale_min"
-        );
+        assert_eq!(at_edge, 1.0, "factor at the near board edge (Row 0.0) must be exactly 1.0");
+        assert!(near < at_edge, "factor must strictly decrease moving away from the near edge: near={near} at_edge={at_edge}");
+        assert!(mid < near, "factor must keep decreasing farther from the camera: mid={mid} near={near}");
+        assert!(far < mid, "factor must keep decreasing farther still: far={far} mid={mid}");
+        for f in [at_edge, near, mid, far] {
+            assert!((0.0..=1.0).contains(&f) && f > 0.0, "factor must stay in (0.0, 1.0]: got {f}");
+        }
+    }
+
+    /// Sideline analog of `over_shoulder_factor_decreases_with_forward_distance`
+    /// (depth axis = Col) — the "farther = strictly smaller, bounded in
+    /// (0.0, 1.0]" property must hold per non-Top-Down preset, not just one.
+    #[test]
+    fn sideline_factor_decreases_with_forward_distance() {
+        let mode = BattleCamera::sideline_preset();
+        let spread = 3.5;
+
+        let at_edge = depth_scale_factor(&mode, WorldPos::new(0.0, spread));
+        let near = depth_scale_factor(&mode, WorldPos::new(0.5, spread));
+        let mid = depth_scale_factor(&mode, WorldPos::new(3.5, spread));
+        let far = depth_scale_factor(&mode, WorldPos::new(6.5, spread));
+
+        assert_eq!(at_edge, 1.0, "factor at the near board edge (Col 0.0) must be exactly 1.0");
+        assert!(near < at_edge, "factor must strictly decrease moving away from the near edge: near={near} at_edge={at_edge}");
+        assert!(mid < near, "factor must keep decreasing farther from the camera: mid={mid} near={near}");
+        assert!(far < mid, "factor must keep decreasing farther still: far={far} mid={mid}");
+        for f in [at_edge, near, mid, far] {
+            assert!((0.0..=1.0).contains(&f) && f > 0.0, "factor must stay in (0.0, 1.0]: got {f}");
+        }
     }
 
     /// A farther piece's rasterized sprite must be smaller than a nearer
     /// piece's under Over-the-shoulder — the visible depth cue this task
     /// adds. Only `translate`'s depth coordinate (world-y, since
-    /// Over-the-shoulder's depth axis is Row) differs between the two.
+    /// Over-the-shoulder's depth axis is Row) differs between the two;
+    /// both are in-board positions.
     #[test]
     fn depth_scaled_transform_shrinks_farther_piece_under_over_shoulder() {
         let mode = BattleCamera::over_shoulder_preset();
-        let BattleCamera::OverShoulder(camera) = mode else {
-            unreachable!()
-        };
-        let tuning = BattleViewerTuning::default();
         let sprite = solid_sprite(20);
 
-        let near_transform = Transform {
-            translate: WorldPos::new(3.5, camera.camera_depth),
-            ..Transform::default()
-        };
-        let far_transform = Transform {
-            translate: WorldPos::new(3.5, camera.camera_depth - 10.0),
-            ..Transform::default()
-        };
+        let near_transform = Transform { translate: WorldPos::new(3.5, 0.5), ..Transform::default() };
+        let far_transform = Transform { translate: WorldPos::new(3.5, 6.5), ..Transform::default() };
 
-        let near_scaled = depth_scaled_transform(&near_transform, &mode, &tuning);
-        let far_scaled = depth_scaled_transform(&far_transform, &mode, &tuning);
+        let near_scaled = depth_scaled_transform(&near_transform, &mode);
+        let far_scaled = depth_scaled_transform(&far_transform, &mode);
 
         let near_buf = sprite.rasterize_at(Duration::ZERO, &near_scaled, 20);
         let far_buf = sprite.rasterize_at(Duration::ZERO, &far_scaled, 20);
@@ -2418,14 +2426,13 @@ mod depth_scale_tests {
     #[test]
     fn depth_scaled_transform_equal_size_under_top_down() {
         let mode = BattleCamera::top_down_preset();
-        let tuning = BattleViewerTuning::default();
         let sprite = solid_sprite(20);
 
         let near_transform = Transform { translate: WorldPos::new(3.5, 3.5), ..Transform::default() };
         let far_transform = Transform { translate: WorldPos::new(3.5, 30.0), ..Transform::default() };
 
-        let near_scaled = depth_scaled_transform(&near_transform, &mode, &tuning);
-        let far_scaled = depth_scaled_transform(&far_transform, &mode, &tuning);
+        let near_scaled = depth_scaled_transform(&near_transform, &mode);
+        let far_scaled = depth_scaled_transform(&far_transform, &mode);
 
         let near_buf = sprite.rasterize_at(Duration::ZERO, &near_scaled, 20);
         let far_buf = sprite.rasterize_at(Duration::ZERO, &far_scaled, 20);
@@ -2447,11 +2454,7 @@ mod depth_scale_tests {
     #[test]
     fn depth_scaled_transform_preserves_existing_tweened_scale() {
         let mode = BattleCamera::over_shoulder_preset();
-        let BattleCamera::OverShoulder(camera) = mode else {
-            unreachable!()
-        };
-        let tuning = BattleViewerTuning::default();
-        let pos = WorldPos::new(3.5, camera.camera_depth - 10.0);
+        let pos = WorldPos::new(3.5, 6.5);
 
         let full_scale_transform = Transform {
             translate: pos,
@@ -2464,8 +2467,8 @@ mod depth_scale_tests {
             ..Transform::default()
         };
 
-        let full_scaled = depth_scaled_transform(&full_scale_transform, &mode, &tuning);
-        let half_scaled = depth_scaled_transform(&half_scale_transform, &mode, &tuning);
+        let full_scaled = depth_scaled_transform(&full_scale_transform, &mode);
+        let half_scaled = depth_scaled_transform(&half_scale_transform, &mode);
 
         assert_eq!(
             half_scaled.scale.x,
@@ -4397,50 +4400,41 @@ mod inspectable_tests {
     /// the spec Decision 1 values. `grid_dim_alpha` is excluded (b1-t2): it
     /// is a visual-tuning value chosen by rendering, guarded instead by
     /// `dim_grid_reads_meaningfully_dimmer_than_opaque`'s invariant, never a
-    /// pinned constant here. `grid_taper_*` no longer exists (b3-t1: dead
-    /// once Sideline/OverShoulder no longer use `ObliqueCamera`'s taper
-    /// mechanism).
+    /// pinned constant here. `grid_taper_*` (b3-t1) and `depth_scale_*`
+    /// (b6-t1) no longer exist — depth scaling is derived from the camera's
+    /// own `forward_distance`, not a tunable.
     #[test]
     fn battle_viewer_tuning_default_matches_spec_values() {
         let tuning = BattleViewerTuning::default();
-        assert_eq!(tuning.depth_scale_per_world_unit, 0.05);
-        assert_eq!(tuning.depth_scale_min, 0.6);
         assert_eq!(tuning.shadow_fade_ms, 150);
     }
 
     /// DELIVERABLE (b2-t1): `BattleViewer::schema()` has a `tuning` child
-    /// that is a `Struct` with the 4 tuning leaves (b3-t1: `grid_taper_*`
-    /// removed), none readonly.
+    /// that is a `Struct` with the 2 remaining tuning leaves (b3-t1:
+    /// `grid_taper_*` removed; b6-t1: `depth_scale_*` removed), none readonly.
     #[test]
     fn battle_viewer_schema_exposes_editable_tuning_struct() {
         let schema = BattleViewer::schema();
         let tuning = field(&schema, "tuning");
         assert_eq!(tuning.tag, FieldTag::Struct);
 
-        for name in [
-            "grid_dim_alpha",
-            "depth_scale_per_world_unit",
-            "depth_scale_min",
-            "shadow_fade_ms",
-        ] {
+        for name in ["grid_dim_alpha", "shadow_fade_ms"] {
             let leaf = field(tuning, name);
             assert!(!leaf.readonly, "tuning.{name} must be editable, not readonly");
         }
     }
 
     /// DELIVERABLE (b2-t1): `apply_patch` on a `BattleViewer` value for
-    /// `"tuning.depth_scale_min"` edits only that leaf — `grid_dim_alpha`
-    /// (another tuning leaf) is unchanged.
+    /// `"tuning.shadow_fade_ms"` edits only that leaf — `grid_dim_alpha`
+    /// (another tuning leaf) is unchanged. Repointed from the now-removed
+    /// `tuning.depth_scale_min` (b6-t1).
     #[test]
     fn battle_viewer_apply_patch_on_tuning_leaf_edits_only_that_field() {
         let mut scene = BattleViewer::default();
 
-        // 0.75 is exactly representable in IEEE-754 binary32, so it survives
-        // the f32 -> JSON f64 snapshot round-trip without rounding drift
-        // (unlike 0.9, which is not exactly representable in f32).
         scene
-            .apply_patch("tuning.depth_scale_min", serde_json::json!(0.75))
-            .expect("apply_patch on tuning.depth_scale_min must succeed");
+            .apply_patch("tuning.shadow_fade_ms", serde_json::json!(999))
+            .expect("apply_patch on tuning.shadow_fade_ms must succeed");
 
         let snap = scene.snapshot();
         let tuning = snap
@@ -4452,14 +4446,14 @@ mod inspectable_tests {
             .expect("tuning must be a JSON object");
 
         assert_eq!(
-            tuning.get("depth_scale_min").and_then(|v| v.as_f64()),
-            Some(0.75),
-            "depth_scale_min must reflect the patch"
+            tuning.get("shadow_fade_ms").and_then(|v| v.as_u64()),
+            Some(999),
+            "shadow_fade_ms must reflect the patch"
         );
         assert_eq!(
             tuning.get("grid_dim_alpha").and_then(|v| v.as_u64()),
             Some(u64::from(BattleViewerTuning::default().grid_dim_alpha)),
-            "grid_dim_alpha must be untouched by a depth_scale_min patch"
+            "grid_dim_alpha must be untouched by a shadow_fade_ms patch"
         );
     }
 

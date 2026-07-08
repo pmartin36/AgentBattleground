@@ -83,8 +83,10 @@ pub struct ObliqueCamera {
 
 /// Splits a world position into `(depth, spread)` per `depth_axis`: `Row` puts
 /// world-y (team-separation axis) on depth, world-x on spread (screen-x);
-/// `Col` is the reverse. Module-level `pub` — reused as-is by b6-t1's
-/// `depth_scale_factor`, not duplicated there.
+/// `Col` is the reverse. Module-level `pub` — reused by `ObliqueCamera`'s
+/// `taper_factor`/`project`/`depth_key` and `PerspectiveCamera`'s
+/// `cam_forward_raw`. b6-t1's `depth_scale_factor` (game crate) derives its
+/// scale from `PerspectiveCamera::forward_distance` instead, not this.
 pub fn axis_values(depth_axis: DepthAxis, pos: WorldPos) -> (f32, f32) {
     match depth_axis {
         DepthAxis::Row => (pos.y, pos.x),
