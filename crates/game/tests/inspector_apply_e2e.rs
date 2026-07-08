@@ -137,24 +137,13 @@ fn send_apply_state_and_split_replies(
     other.expect("a StateSnapshot or Error must be received after ApplyState")
 }
 
-/// (1) `ApplyState{"elapsed": 5.0}` changes `BattleViewer.elapsed` (visible in
+/// `ApplyState{"elapsed": 5.0}` changes `BattleViewer.elapsed` (visible in
 /// the StateSnapshot reply) and the next `render()` reflects it (differs from
 /// an elapsed=0.0 baseline — wizard.gif has 15 frames @ 100ms, so 5.0 s lands
-/// on a different frame than 0.0 s).
-///
-/// Ignored by battle-viewer-perspective-camera-rework/b3-t1: `BattleViewer`'s
-/// default camera (`camera_mode`, `#[inspect(hidden)]` so this e2e test has
-/// no wire path to override it) is `sideline_preset()`, and b3-t1 migrated
-/// Sideline to a real `PerspectiveCamera` whose on-screen framing is
-/// deliberately NOT centered yet (research.md: "b3-t1 must NOT add any
-/// centering offset — that is b4-t1's job"). Confirmed by direct render
-/// diff: the default scene's elapsed=0.0 and elapsed=5.0 renders are now
-/// byte-identical (0 differing cells) because the piece is fully clipped
-/// off the composite buffer, not because the assertion logic is wrong.
-/// Re-enable once b4-t1 lands the fit-to-viewport offset restoring Sideline's
-/// on-screen rendering.
+/// on a different frame than 0.0 s). `BattleViewer`'s default camera
+/// (`sideline_preset()`) fits the board to the viewport, so the animated
+/// piece is on-screen and its render changes across frames.
 #[test]
-#[ignore = "Sideline default renders fully clipped pending b4-t1's centering offset (battle-viewer-perspective-camera-rework/b3-t1)"]
 fn apply_state_elapsed_changes_state_and_next_render_reflects_it() {
     let mgr = run_e2e(|client| {
         let mut patch = BTreeMap::new();

@@ -50,6 +50,45 @@ pub struct BoardGeometry {
     /// `BattleCamera::grid_line_color` at its sole caller, `draw_board_lines`,
     /// without churning `draw_board_lines`'s own signature).
     pub tuning: BattleViewerTuning,
+    /// Screen-space dot offset applied on top of `camera`'s own projection
+    /// so the fitted board bbox lands at the composite buffer's origin
+    /// (b4-t1). Always `(0, 0)` for `TopDown` (its exact flat path is
+    /// unchanged); fit-derived for `Sideline`/`OverShoulder`.
+    pub screen_offset: (i32, i32),
+}
+
+/// Wraps a `BattleCamera` with a screen-space dot offset (b4-t1): every
+/// `project` result is shifted by `offset`, `depth_key` passes through
+/// unchanged (the offset never reorders draws). Grid lines and sprites both
+/// go through this so the fit-to-viewport offset (`BoardGeometry::screen_offset`)
+/// is inherited automatically rather than re-applied per call site.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct FramedCamera {
+    pub camera: BattleCamera,
+    pub offset: (i32, i32),
+}
+
+impl Camera for FramedCamera {
+    fn project(&self, pos: WorldPos) -> (i32, i32) {
+        let (x, y) = self.camera.project(pos);
+        (x + self.offset.0, y + self.offset.1)
+    }
+
+    fn depth_key(&self, pos: WorldPos) -> i32 {
+        self.camera.depth_key(pos)
+    }
+}
+
+impl BoardGeometry {
+    /// The camera to project through for on-screen output (grid lines AND
+    /// sprites) — bakes in `screen_offset` so callers never need to apply it
+    /// separately.
+    pub fn framed_camera(&self) -> FramedCamera {
+        FramedCamera {
+            camera: self.camera,
+            offset: self.screen_offset,
+        }
+    }
 }
 
 /// Derive the board geometry for a given render `area` under the given
@@ -59,18 +98,104 @@ pub struct BoardGeometry {
 /// always rebuilt from the area-derived scale (see `BattleCamera::with_scale_dots`),
 /// not taken from whatever scale the caller's `mode` happened to carry in.
 pub fn board_geometry(area: Rect, mode: BattleCamera, tuning: BattleViewerTuning) -> BoardGeometry {
-    let cell_height_rows = (area.width / (2 * BOARD_COLS))
-        .min(area.height / BOARD_ROWS)
-        .max(1);
-    let cell_width_cols = 2 * cell_height_rows;
+    match mode {
+        BattleCamera::TopDown(_) => {
+            let cell_height_rows = (area.width / (2 * BOARD_COLS))
+                .min(area.height / BOARD_ROWS)
+                .max(1);
+            let cell_width_cols = 2 * cell_height_rows;
 
-    let w = cell_width_cols * BOARD_COLS;
-    let bh = cell_height_rows * BOARD_ROWS;
-    let bx = area.left() + area.width.saturating_sub(w) / 2;
-    let by = area.top() + area.height.saturating_sub(bh) / 2;
-    let board_rect = Rect::new(bx, by, w, bh);
+            let w = cell_width_cols * BOARD_COLS;
+            let bh = cell_height_rows * BOARD_ROWS;
+            let bx = area.left() + area.width.saturating_sub(w) / 2;
+            let by = area.top() + area.height.saturating_sub(bh) / 2;
+            let board_rect = Rect::new(bx, by, w, bh);
 
-    let camera = mode.with_scale_dots((cell_height_rows * 4) as f32);
+            let camera = mode.with_scale_dots((cell_height_rows * 4) as f32);
+
+            BoardGeometry {
+                cell_width_cols,
+                cell_height_rows,
+                board_rect,
+                camera,
+                tuning,
+                screen_offset: (0, 0),
+            }
+        }
+        BattleCamera::Sideline(_) | BattleCamera::OverShoulder(_) => {
+            fit_perspective_geometry(area, mode, tuning)
+        }
+    }
+}
+
+/// The board's 4 world-space corners, in a fixed order — reused by both the
+/// reference and fitted projections in `fit_perspective_geometry` (never a
+/// bare-literal corner list elsewhere).
+fn board_world_corners() -> [WorldPos; 4] {
+    [
+        WorldPos::new(0.0, 0.0),
+        WorldPos::new(BOARD_COLS as f32, 0.0),
+        WorldPos::new(0.0, BOARD_ROWS as f32),
+        WorldPos::new(BOARD_COLS as f32, BOARD_ROWS as f32),
+    ]
+}
+
+/// Axis-aligned dot bbox (`min_x, max_x, min_y, max_y`) of a set of projected
+/// screen-dot points.
+fn dot_bbox(pts: &[(i32, i32)]) -> (i32, i32, i32, i32) {
+    let min_x = pts.iter().map(|p| p.0).min().unwrap();
+    let max_x = pts.iter().map(|p| p.0).max().unwrap();
+    let min_y = pts.iter().map(|p| p.1).min().unwrap();
+    let max_y = pts.iter().map(|p| p.1).max().unwrap();
+    (min_x, max_x, min_y, max_y)
+}
+
+/// Large reference scale for the fit solve: big enough that `project`'s
+/// final `.round()` is negligible relative to the bbox span, so scaling by
+/// a linear ratio (rather than iterating/binary-searching) lands accurately.
+const FIT_REF_SCALE: f32 = 4096.0;
+
+/// Fit-to-viewport geometry for the perspective (`Sideline`/`OverShoulder`)
+/// presets (b4-t1). Unlike `TopDown`'s flat integer sizing, `board_rect`
+/// spans the full render `area` (perspective projection isn't board-cell
+/// aligned) and `screen_offset` shifts the fitted, camera-projected bbox to
+/// the composite buffer's origin. Solve is closed-form: projected dot coords
+/// are exactly proportional to `scale_dots` (mod rounding), so projecting the
+/// 4 board corners at `FIT_REF_SCALE` and comparing their bbox to the
+/// available dot area gives the fill ratio directly — no iteration.
+fn fit_perspective_geometry(area: Rect, mode: BattleCamera, tuning: BattleViewerTuning) -> BoardGeometry {
+    let corners = board_world_corners();
+
+    let cam_ref = mode.with_scale_dots(FIT_REF_SCALE);
+    let rpts: Vec<(i32, i32)> = corners.iter().map(|&p| cam_ref.project(p)).collect();
+    let (rmin_x, rmax_x, rmin_y, rmax_y) = dot_bbox(&rpts);
+    let bbox_w = (rmax_x - rmin_x).max(1) as f32;
+    let bbox_h = (rmax_y - rmin_y).max(1) as f32;
+
+    let avail_w = (area.width as f32 * 2.0).max(1.0);
+    let avail_h = (area.height as f32 * 4.0).max(1.0);
+    let f = (avail_w / bbox_w).min(avail_h / bbox_h);
+    let scale = FIT_REF_SCALE * f;
+
+    let camera = mode.with_scale_dots(scale);
+    let fpts: Vec<(i32, i32)> = corners.iter().map(|&p| camera.project(p)).collect();
+    let (fmin_x, fmax_x, fmin_y, fmax_y) = dot_bbox(&fpts);
+    let span_x = (fmax_x - fmin_x).max(1);
+    let span_y = (fmax_y - fmin_y).max(1);
+
+    let bw_cells = (((span_x as f32) / 2.0).ceil() as u16).clamp(1, area.width.max(1));
+    let bh_cells = (((span_y as f32) / 4.0).ceil() as u16).clamp(1, area.height.max(1));
+    let bx = area.left() + area.width.saturating_sub(bw_cells) / 2;
+    let by = area.top() + area.height.saturating_sub(bh_cells) / 2;
+    let board_rect = Rect::new(bx, by, bw_cells, bh_cells);
+
+    let buf_w = bw_cells as i32 * 2;
+    let buf_h = bh_cells as i32 * 4;
+    let off_x = -fmin_x + (buf_w - span_x) / 2;
+    let off_y = -fmin_y + (buf_h - span_y) / 2;
+
+    let cell_width_cols = (bw_cells / BOARD_COLS).max(1);
+    let cell_height_rows = (bh_cells / BOARD_ROWS).max(1);
 
     BoardGeometry {
         cell_width_cols,
@@ -78,6 +203,7 @@ pub fn board_geometry(area: Rect, mode: BattleCamera, tuning: BattleViewerTuning
         board_rect,
         camera,
         tuning,
+        screen_offset: (off_x, off_y),
     }
 }
 
@@ -114,13 +240,14 @@ pub fn draw_board_lines(buf: &mut Buffer, geom: &BoardGeometry) {
 
     let mut dots = DotBuffer::new(buf_cols, buf_rows);
     let line_color = geom.camera.grid_line_color(&geom.tuning);
+    let cam = geom.framed_camera();
 
     let vertical_samples = GRID_LINE_SAMPLES_PER_UNIT * BOARD_ROWS as usize + 1;
     for i in 0..=BOARD_COLS {
         let x = i as f32;
         rasterize_grid_line(
             &mut dots,
-            &geom.camera,
+            &cam,
             WorldPos::new(x, 0.0),
             WorldPos::new(x, BOARD_ROWS as f32),
             vertical_samples,
@@ -133,7 +260,7 @@ pub fn draw_board_lines(buf: &mut Buffer, geom: &BoardGeometry) {
         let y = j as f32;
         rasterize_grid_line(
             &mut dots,
-            &geom.camera,
+            &cam,
             WorldPos::new(0.0, y),
             WorldPos::new(BOARD_COLS as f32, y),
             horizontal_samples,
@@ -1225,7 +1352,8 @@ impl Scene for BattleViewer {
 
         let w = (geom.board_rect.width * 2) as usize;
         let h = (geom.board_rect.height * 4) as usize;
-        let grid = composite_scene(w, h, &geom.camera, &draws);
+        let cam = geom.framed_camera();
+        let grid = composite_scene(w, h, &cam, &draws);
         draw_grid(frame.buffer_mut(), geom.board_rect, &grid);
     }
 
@@ -1276,37 +1404,41 @@ mod board_geometry_tests {
 
     /// Exact-fit area: 128x64 against a 7x7 grid — 126x63 is the largest
     /// board that nearly fills the area (128x64 is not an exact fit for 7
-    /// cells; see the point-7 rounding in `board_geometry`). Sideline mode:
-    /// byte-for-byte identical geometry/scale to pre-b3-t2 behavior.
+    /// cells; see the point-7 rounding in `board_geometry`). TopDown mode
+    /// (b4-t1): the flat integer-sizing path this pins is TopDown-only once
+    /// perspective presets get a real bbox fit — re-pointed from Sideline.
     #[test]
     fn exact_fit_area() {
-        let g = board_geometry(Rect::new(0, 0, 128, 64), sideline(), tuning());
+        let g = board_geometry(Rect::new(0, 0, 128, 64), BattleCamera::top_down_preset(), tuning());
         assert_eq!(g.cell_height_rows, 9);
         assert_eq!(g.cell_width_cols, 18);
         assert_eq!(g.board_rect, Rect::new(1, 0, 126, 63));
-        assert_eq!(g.camera, sideline().with_scale_dots(36.0));
+        assert_eq!(g.camera, BattleCamera::top_down_preset().with_scale_dots(36.0));
     }
 
-    /// Oversized area: geometry is centered within the larger area.
+    /// Oversized area: geometry is centered within the larger area. TopDown
+    /// mode (b4-t1, re-pointed from Sideline — see `exact_fit_area`).
     #[test]
     fn oversized_area_is_centered() {
-        let g = board_geometry(Rect::new(5, 5, 200, 100), sideline(), tuning());
+        let g = board_geometry(Rect::new(5, 5, 200, 100), BattleCamera::top_down_preset(), tuning());
         assert_eq!(g.cell_height_rows, 14);
         assert_eq!(g.board_rect, Rect::new(7, 6, 196, 98));
     }
 
-    /// Height-constrained area: height is the limiting dimension.
+    /// Height-constrained area: height is the limiting dimension. TopDown
+    /// mode (b4-t1, re-pointed from Sideline — see `exact_fit_area`).
     #[test]
     fn height_constrained_area() {
-        let g = board_geometry(Rect::new(0, 0, 300, 40), sideline(), tuning());
+        let g = board_geometry(Rect::new(0, 0, 300, 40), BattleCamera::top_down_preset(), tuning());
         assert_eq!(g.cell_height_rows, 5);
         assert_eq!(g.board_rect, Rect::new(115, 2, 70, 35));
     }
 
-    /// Width-constrained area: width is the limiting dimension.
+    /// Width-constrained area: width is the limiting dimension. TopDown mode
+    /// (b4-t1, re-pointed from Sideline — see `exact_fit_area`).
     #[test]
     fn width_constrained_area() {
-        let g = board_geometry(Rect::new(0, 0, 50, 300), sideline(), tuning());
+        let g = board_geometry(Rect::new(0, 0, 50, 300), BattleCamera::top_down_preset(), tuning());
         assert_eq!(g.cell_height_rows, 3);
         assert_eq!(g.board_rect, Rect::new(4, 139, 42, 21));
     }
@@ -1319,7 +1451,8 @@ mod board_geometry_tests {
     }
 
     /// Invariant: cell_width_cols == 2 * cell_height_rows must hold for every
-    /// area tested above.
+    /// area tested above. TopDown mode (b4-t1, re-pointed from Sideline —
+    /// see `exact_fit_area`).
     #[test]
     fn cell_width_is_always_double_cell_height() {
         let areas = [
@@ -1330,7 +1463,7 @@ mod board_geometry_tests {
             Rect::new(0, 0, 10, 5),
         ];
         for area in areas {
-            let g = board_geometry(area, sideline(), tuning());
+            let g = board_geometry(area, BattleCamera::top_down_preset(), tuning());
             assert_eq!(
                 g.cell_width_cols,
                 2 * g.cell_height_rows,
@@ -1339,28 +1472,32 @@ mod board_geometry_tests {
         }
     }
 
-    /// TopDown mode: same area-derived `board_rect`/cell fields as Sideline
-    /// (mode-independent), but `camera` is the TopDown variant rebuilt at the
-    /// area-derived scale — proving `board_geometry` actually threads `mode`
-    /// through rather than hardcoding Sideline.
+    /// TopDown mode: yields the exact flat area-derived `board_rect`/cell
+    /// fields (same formula `exact_fit_area` pins) AND `camera` is the
+    /// TopDown variant rebuilt at the area-derived scale. (b4-t1: dropped
+    /// the cross-mode equality against Sideline — perspective presets are now
+    /// fit-sized, not flat, so that equality no longer holds; TopDown's own
+    /// flat values are asserted directly instead.)
     #[test]
     fn top_down_mode_shares_geometry_but_has_topdown_camera() {
         let area = Rect::new(0, 0, 128, 64);
-        let g_side = board_geometry(area, sideline(), tuning());
         let g_top = board_geometry(area, BattleCamera::top_down_preset(), tuning());
 
-        assert_eq!(g_top.board_rect, g_side.board_rect);
-        assert_eq!(g_top.cell_width_cols, g_side.cell_width_cols);
-        assert_eq!(g_top.cell_height_rows, g_side.cell_height_rows);
+        assert_eq!(g_top.cell_height_rows, 9);
+        assert_eq!(g_top.cell_width_cols, 18);
+        assert_eq!(g_top.board_rect, Rect::new(1, 0, 126, 63));
         assert_eq!(
             g_top.camera,
             BattleCamera::top_down_preset().with_scale_dots(36.0)
         );
-        assert_ne!(g_top, g_side, "TopDown and Sideline geometries must differ (camera variant)");
     }
 
-    /// OverShoulder mode: scale is rebuilt to the area-derived value AND the
-    /// caller-supplied `camera_depth` is preserved (not reset/discarded).
+    /// OverShoulder mode: the caller-supplied `camera_depth` is preserved
+    /// (not reset/discarded) and scale is rebuilt to some positive
+    /// area-derived value. (b4-t1: dropped the pinned `scale_dots == 36.0`
+    /// expectation — perspective presets are now fit-to-viewport sized, so
+    /// the exact scale is no longer the flat `cell_height_rows*4` value;
+    /// only positivity is asserted, per the no-pinned-constant guardrail.)
     #[test]
     fn over_shoulder_mode_rebuilds_scale_and_preserves_camera_depth() {
         let area = Rect::new(0, 0, 128, 64);
@@ -1375,16 +1512,73 @@ mod board_geometry_tests {
         });
         let g = board_geometry(area, mode, tuning());
 
-        assert_eq!(
-            g.camera,
-            mode.with_scale_dots(36.0),
-            "scale must be rebuilt to the area-derived value (36.0) while camera_depth (6.0) is preserved"
-        );
         let BattleCamera::OverShoulder(inner) = g.camera else {
             panic!("expected OverShoulder variant");
         };
-        assert_eq!(inner.camera_depth, 6.0);
-        assert_eq!(inner.scale_dots, 36.0);
+        assert_eq!(inner.camera_depth, 6.0, "camera_depth must be preserved, not reset");
+        assert!(
+            inner.scale_dots > 0.0,
+            "scale must be rebuilt to some positive area-derived value, got {}",
+            inner.scale_dots
+        );
+    }
+
+    /// PUBLIC_SURFACE #2 (b4-t1): for a perspective preset, the board's
+    /// projected bounding box (via `geom.framed_camera()`) must be (a)
+    /// CONTAINED within the composite buffer's dot rect — no negative/
+    /// overflowing corner, the exact clip bug named in the spec's Purpose
+    /// section — and (b) FILL the viewport along its limiting dimension
+    /// (>= ~90%), not the pre-fit "quarter of the screen." Currently FAILS:
+    /// `board_geometry` still derives scale from the flat
+    /// `cell_height_rows*4` formula (unrelated to the projected bbox) and
+    /// `screen_offset` is a `(0, 0)` stub, so the perspective camera's
+    /// origin-centered projection puts roughly half the board at negative
+    /// dot coordinates instead of a centered, fitted bbox.
+    fn assert_fitted_bbox_contained_and_fills(area: Rect, preset: BattleCamera) {
+        let g = board_geometry(area, preset, tuning());
+        let cam = g.framed_camera();
+        let corners = [
+            WorldPos::new(0.0, 0.0),
+            WorldPos::new(BOARD_COLS as f32, 0.0),
+            WorldPos::new(0.0, BOARD_ROWS as f32),
+            WorldPos::new(BOARD_COLS as f32, BOARD_ROWS as f32),
+        ];
+        let pts: Vec<(i32, i32)> = corners.iter().map(|&p| cam.project(p)).collect();
+        let min_x = pts.iter().map(|p| p.0).min().unwrap();
+        let max_x = pts.iter().map(|p| p.0).max().unwrap();
+        let min_y = pts.iter().map(|p| p.1).min().unwrap();
+        let max_y = pts.iter().map(|p| p.1).max().unwrap();
+
+        let avail_w = g.board_rect.width as i32 * 2;
+        let avail_h = g.board_rect.height as i32 * 4;
+
+        assert!(
+            min_x >= 0 && max_x <= avail_w && min_y >= 0 && max_y <= avail_h,
+            "projected board bbox [{min_x},{max_x}]x[{min_y},{max_y}] must be contained \
+             in the composite buffer's dot rect [0,{avail_w}]x[0,{avail_h}]"
+        );
+
+        let span_x = (max_x - min_x) as f32;
+        let span_y = (max_y - min_y) as f32;
+        let fill = (span_x / avail_w as f32).max(span_y / avail_h as f32);
+        assert!(
+            fill >= 0.9,
+            "fitted board bbox must fill at least ~90% of the viewport along its \
+             limiting dimension, got {fill} (span=({span_x},{span_y}), avail=({avail_w},{avail_h}))"
+        );
+    }
+
+    #[test]
+    fn fitted_board_bbox_fills_viewport_sideline() {
+        assert_fitted_bbox_contained_and_fills(Rect::new(0, 0, 80, 40), BattleCamera::sideline_preset());
+    }
+
+    #[test]
+    fn fitted_board_bbox_fills_viewport_over_shoulder() {
+        assert_fitted_bbox_contained_and_fills(
+            Rect::new(0, 0, 80, 40),
+            BattleCamera::over_shoulder_preset(),
+        );
     }
 
     /// No mode ever panics, even against a tiny area.
@@ -1462,11 +1656,12 @@ mod board_geometry_tests {
 
     /// Cross-check: board_geometry's centering derivation must land at the
     /// exact same (x,y) as engine_render::draw_grid's own centering formula, when
-    /// fed a Grid sized to match the geometry's board dimensions.
+    /// fed a Grid sized to match the geometry's board dimensions. TopDown
+    /// mode (b4-t1, re-pointed from Sideline — see `exact_fit_area`).
     #[test]
     fn board_rect_matches_draw_grid_centering() {
         let area = Rect::new(5, 5, 200, 100);
-        let g = board_geometry(area, sideline(), BattleViewerTuning::default());
+        let g = board_geometry(area, BattleCamera::top_down_preset(), BattleViewerTuning::default());
 
         let cols = (g.cell_width_cols * BOARD_COLS) as usize;
         let rows = (g.cell_height_rows * BOARD_ROWS) as usize;
@@ -1543,6 +1738,7 @@ mod draw_board_lines_tests {
             board_rect: Rect::new(2, 1, 28, 14),
             camera: top_down_at(8.0),
             tuning: BattleViewerTuning::default(),
+            screen_offset: (0, 0),
         }
     }
 
