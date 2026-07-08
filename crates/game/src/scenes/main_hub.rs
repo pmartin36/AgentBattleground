@@ -141,8 +141,8 @@ impl MainHub {
     /// Insets the dot-space `area` by `MENU_BOTTOM_MARGIN*4` dots on the
     /// bottom edge, then runs a single-child Column flex (`Justify::End`
     /// pins the group's bottom edge at the inset container's bottom edge,
-    /// `Align::Center` centers it horizontally) to reproduce the
-    /// pre-migration `anchor_with_margin`'s BottomCenter placement exactly.
+    /// `Align::Center` centers it horizontally) to place the group at the
+    /// bottom-center of the container.
     fn menu_container(area: Rect) -> Rect {
         let container =
             Self::cell_rect_to_dots(area).inset(0, 0, 0, Self::MENU_BOTTOM_MARGIN as i32 * 4);
@@ -699,8 +699,7 @@ mod layout_tests {
 
     /// `title_rect` is exactly a single-child `flex()` Row (Justify::Center,
     /// Align::Start) over `cell_rect_to_dots(area)`, `.to_cell_rect()`'d —
-    /// the mechanism, not hand-derived arithmetic (research.md's proven
-    /// formula-equivalent replacement for `anchor(.., Anchor::TopCenter)`).
+    /// the mechanism, not hand-derived arithmetic.
     #[test]
     fn title_rect_is_top_center_anchor() {
         let a = area();
@@ -737,15 +736,10 @@ mod layout_tests {
         assert!(h >= 10, "title height {h} must be tall enough to read a wordmark logo");
     }
 
-    /// `menu_container`'s pre-migration `anchor_with_margin(area, (MENU_W,
-    /// MENU_H), Anchor::BottomCenter, (0, MENU_BOTTOM_MARGIN))` output must
-    /// stay byte-identical once re-expressed via `flex`/`DotRect` (research.md
-    /// b3-t1 blueprint). These literals ARE that pre-migration output,
-    /// hand-computed and proven in research.md — a direct value assertion
+    /// `menu_container`'s output for the two b1 fixture geometries (120x50
+    /// and 40x20, covering both x-parity paths) — a direct value assertion
     /// beyond the two existing property-only tests below, which would not
-    /// catch an off-by-margin/axis slip in the new inset/Justify::End
-    /// formula. Covers both distinct b1 fixture geometries (120x50 and
-    /// 40x20) and both x-parity paths.
+    /// catch an off-by-margin/axis slip in the inset/Justify::End formula.
     #[test]
     fn menu_container_matches_pre_migration_rect() {
         assert_eq!(MainHub::menu_container(Rect::new(0, 0, 120, 50)), Rect::new(50, 37, 20, 11));
@@ -819,8 +813,8 @@ mod layout_tests {
     }
 
     /// `menu_container`'s height must be at least the stacked group's total
-    /// height (3 buttons + 2 gaps) — guards the container/stack desync
-    /// pitfall the blueprint calls out.
+    /// height (3 buttons + 2 gaps) — guards against the container being too
+    /// short for the button column.
     #[test]
     fn menu_container_height_fits_three_buttons() {
         let container = MainHub::menu_container(area());
@@ -890,12 +884,11 @@ mod render_timing_tests {
     }
 }
 
-/// b1-t2: pre-`flex()`-migration golden-fixture gate. Freezes the CURRENT
-/// (pre-migration, `anchor`/`stack`-based) `MainHub` render at 3
+/// Golden-fixture gate. Freezes the reference `MainHub` render at 3
 /// deterministic scenarios into committed fixtures under
 /// `crates/game/tests/fixtures/main_hub/`, decoded through the exact
-/// `decode_braille_cell`/`diff_dots` channel the b2/b3 `flex()` migration is
-/// re-checked against. Mirrors `roster_manager.rs`'s `golden_fixture_tests`
+/// `decode_braille_cell`/`diff_dots` channel live code must match
+/// dot-for-dot. Mirrors `roster_manager.rs`'s `golden_fixture_tests`
 /// precedent.
 #[cfg(test)]
 mod golden_fixture_tests {
