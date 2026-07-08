@@ -1,3 +1,6 @@
+> # ⚠️ MAJOR ISSUES — flagged 2026-07-08
+> Implementation shipped and its own gate is green, but the project owner has identified major issues with the result, to be discussed and addressed in a follow-up session. Do not treat this spec as complete or as a safe foundation to build on until that discussion resolves it.
+
 # Battle Viewer — Camera, Perspective & Piece Rendering Rework
 
 ## Purpose

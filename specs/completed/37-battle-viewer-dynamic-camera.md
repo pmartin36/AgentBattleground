@@ -1,3 +1,6 @@
+> # ✅ DONE! — Completed 2026-07-08
+> Status: implemented (mechanism). The three-camera-mode `BattleCamera` enum, key 1/2/3 direct-selection switching, camera-dependent grid-line prominence, and full removal of the global digit-key scene-switcher are all in place and tested. The camera *formulas* this spec originally shipped (`TopDownView`/`OverShoulderView`) were later replaced by `39-battle-viewer-camera-perspective-rework`'s unified `ObliqueCamera`; that formula rework — and its own flagged issues — are `39`'s concern, not this spec's. `cargo test --workspace` green.
+
 # Battle Viewer — Dynamic Camera
 
 ## Purpose

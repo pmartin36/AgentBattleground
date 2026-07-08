@@ -1,3 +1,6 @@
+> # ✅ DONE! — Completed 2026-07-08
+> Status: implemented. `BOARD_COLS`/`BOARD_ROWS` are 7×7; `pieces()` emits exactly 8 `Piece`s (3 active + 1 bench per side), reserves unrendered; row layout (bench/active/…/active/bench) and centered active columns match spec exactly; bench pieces share the same tint/scale/animation treatment as active pieces, with no `SquadRole`-derived rendering branch. `cargo test --workspace` green.
+
 # Battle Viewer — Squad Layout
 
 ## Purpose

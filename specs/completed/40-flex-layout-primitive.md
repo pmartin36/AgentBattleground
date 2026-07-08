@@ -1,3 +1,6 @@
+> # ✅ DONE! — Completed 2026-07-08
+> Status: implemented. `flex()`/`DotRect`/`FlexChild`/`FlexStyle`/`DotRectTween` shipped in `crates/engine/render/src/flex.rs`, with `decode_braille_cell`/`diff_dots` and a debug cell-boundary gridline overlay; the `tdd-pipeline` ran all 21 tasks GREEN. `roster_manager.rs`'s entire positioning surface was migrated onto the primitive as a lossless refactor, independently verified against the live compiled binary as byte-identical pre/post-migration at 5 terminal sizes. The `main_hub.rs` migration (title, menu-container, button-stack) also landed on top of the same primitive. One real bug was caught by the pipeline's own scope-validator and fixed (a debug overlay was destroying plain-text cells). Full workspace test gate is green.
+
 # Flex Layout Primitive — `engine-render`
 
 ## Purpose
