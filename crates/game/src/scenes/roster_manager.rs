@@ -72,7 +72,6 @@ struct Slide {
 struct RosterLayout {
     name: Rect,
     level: Rect,
-    stat_bar: Rect,
     sprite: Rect,
     dot_row: Rect,
 }
@@ -322,33 +321,20 @@ impl RosterManager {
         }
     }
 
-    /// Dot-precise geometry for the RIGHT column (exhaustion directly above
-    /// ability_list, the details panel) — factored out of `layout()` into
-    /// its own function so `details_panel_rects` can draw the panel's
-    /// border at genuine dot precision, instead of re-deriving dots from
-    /// `RosterLayout`'s already-cell-floored `exhaustion`/`ability_list`
-    /// fields (which have permanently lost any sub-cell remainder the
-    /// instant `layout()` calls `.to_cell_rect()` on them — re-expanding a
-    /// floored cell value back into dots via `cell_rect_to_dots` cannot
-    /// recover what `.to_cell_rect()` already threw away). This was the
-    /// actual cause of the details panel's border rendering 2 dots off
-    /// from `stat_bar`'s — not a wrong lift/growth amount.
-    ///
-    /// Width = `area.width - left_w`, right edge inset `EDGE_MARGIN` from
-    /// `area`'s edge. Its TOP is pushed below the home button plus a
-    /// deliberate `DETAILS_TOP_GAP` so the panel never jams against the
-    /// home button in the shared top-right column; it still bottoms out at
-    /// `dot_row`'s top. Two further, distinct adjustments compose on top of
-    /// that: `DETAILS_PANEL_TOP_LIFT_DOTS` is a pure translate (shifts the
-    /// whole container, top AND bottom, up by that amount), then
-    /// `DETAILS_PANEL_TOP_GROWTH_DOTS` is a height-only, non-aspect-
-    /// preserving grow anchored at the already-translated top, so only the
-    /// top moves the extra distance and the bottom stays exactly where the
-    /// translate left it.
-    fn right_col_dots(area: Rect) -> [engine_render::DotRect; 2] {
+    /// Raw, UNFLOORED dot geometry for the top-level vertical bands — the
+    /// single source both `layout()` (which floors `top_bands[1]`/`[2]`/`[4]`
+    /// into its `name`/`level`/`dot_row` fields), `right_col_dots` (which
+    /// clamps to `top_bands[4].to_cell_rect().y`), and `render()` (which
+    /// hands `top_bands[4]` straight to `render_dot_row` at dot precision)
+    /// derive from. Extracted so the `flex()` call is written ONCE and the
+    /// dot precision flows, unfloored, to the draw site — the same discipline
+    /// as `right_col_dots`. A blank `HEADER_GAP_H` top-margin row, then
+    /// `name`/`level` tight to each other, a spacer `body` child (the sole
+    /// grow child, absorbing leftover main-axis space), then `dot_row` pinned
+    /// to the bottom.
+    fn top_bands_dots(area: Rect) -> [engine_render::DotRect; 5] {
         let area_dots = Self::cell_rect_to_dots(area);
-
-        let top_bands = engine_render::flex(
+        let bands = engine_render::flex(
             area_dots,
             engine_render::FlexStyle {
                 direction: engine_render::Direction::Column,
@@ -380,7 +366,88 @@ impl RosterManager {
                 },
             ],
         );
-        let dot_row = top_bands[4].to_cell_rect();
+        [bands[0], bands[1], bands[2], bands[3], bands[4]]
+    }
+
+    /// Raw, UNFLOORED dot geometry for the LEFT column: `[stat_bar, sprite]`,
+    /// `stat_bar` directly above `sprite` (identical column range). The sole
+    /// source both `layout()` (which floors each into its `stat_bar`/`sprite`
+    /// fields) and `render()` (which hands `left_col_dots(area)[0]` straight
+    /// to `render_stat_bars` at dot precision) derive from — the same
+    /// discipline as `right_col_dots`, so the stat-bar band's dot position
+    /// survives, unfloored, all the way to the draw site instead of being
+    /// re-expanded from an already-cell-floored `Rect`.
+    ///
+    /// This container's own top sits `STAT_BAR_TOP_LIFT_CELLS` higher than
+    /// `details_top`, with height extended to match, so the container's BOTTOM
+    /// (still `dot_row`'s top) doesn't move. `stat_bar` (Fixed) shifts up by
+    /// exactly that lift; `sprite` (the sole grow child) absorbs the freed
+    /// space at its TOP. `left_w`/`details_top` stay integer-cell math and are
+    /// fed in as cell-aligned `Basis::Fixed` dots.
+    fn left_col_dots(area: Rect) -> [engine_render::DotRect; 2] {
+        let dot_row = Self::top_bands_dots(area)[4].to_cell_rect();
+        let left_w = area.width * 2 / 3;
+        let home_bottom = area
+            .y
+            .saturating_add(Self::EDGE_MARGIN)
+            .saturating_add(Self::HOME_H);
+        let details_top = home_bottom
+            .saturating_add(Self::DETAILS_TOP_GAP)
+            .min(dot_row.y);
+        let body_h_dots = dot_row.y.saturating_sub(details_top) as i32 * 4;
+
+        let left_col = engine_render::flex(
+            engine_render::DotRect {
+                x: area.x as i32 * 2,
+                y: (details_top as i32 - Self::STAT_BAR_TOP_LIFT_CELLS as i32) * 4,
+                w: left_w as i32 * 2,
+                h: body_h_dots + Self::STAT_BAR_TOP_LIFT_CELLS as i32 * 4,
+            },
+            engine_render::FlexStyle {
+                direction: engine_render::Direction::Column,
+                justify_content: engine_render::Justify::Start,
+                align_items: engine_render::Align::Stretch,
+                gap: 0,
+            },
+            &[
+                engine_render::FlexChild {
+                    basis: engine_render::Basis::Fixed(Self::STAT_BAR_BAND_H as i32 * 4),
+                    grow: 0.0,
+                    shrink: 0.0,
+                },
+                engine_render::FlexChild { basis: engine_render::Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
+            ],
+        );
+        [left_col[0], left_col[1]]
+    }
+
+    /// Dot-precise geometry for the RIGHT column (exhaustion directly above
+    /// ability_list, the details panel) — factored out of `layout()` into
+    /// its own function so `details_panel_rects` can draw the panel's
+    /// border at genuine dot precision, instead of re-deriving dots from
+    /// `RosterLayout`'s already-cell-floored `exhaustion`/`ability_list`
+    /// fields (which have permanently lost any sub-cell remainder the
+    /// instant `layout()` calls `.to_cell_rect()` on them — re-expanding a
+    /// floored cell value back into dots via `cell_rect_to_dots` cannot
+    /// recover what `.to_cell_rect()` already threw away). This was the
+    /// actual cause of the details panel's border rendering 2 dots off
+    /// from `stat_bar`'s — not a wrong lift/growth amount.
+    ///
+    /// Width = `area.width - left_w`, right edge inset `EDGE_MARGIN` from
+    /// `area`'s edge. Its TOP is pushed below the home button plus a
+    /// deliberate `DETAILS_TOP_GAP` so the panel never jams against the
+    /// home button in the shared top-right column; it still bottoms out at
+    /// `dot_row`'s top. Two further, distinct adjustments compose on top of
+    /// that: `DETAILS_PANEL_TOP_LIFT_DOTS` is a pure translate (shifts the
+    /// whole container, top AND bottom, up by that amount), then
+    /// `DETAILS_PANEL_TOP_GROWTH_DOTS` is a height-only, non-aspect-
+    /// preserving grow anchored at the already-translated top, so only the
+    /// top moves the extra distance and the bottom stays exactly where the
+    /// translate left it.
+    fn right_col_dots(area: Rect) -> [engine_render::DotRect; 2] {
+        let area_dots = Self::cell_rect_to_dots(area);
+
+        let dot_row = Self::top_bands_dots(area)[4].to_cell_rect();
 
         let left_w = area.width * 2 / 3;
         let details_w = area.width.saturating_sub(left_w);
@@ -453,102 +520,22 @@ impl RosterManager {
     /// throughout so small `area`s degrade to zero-height/width rects
     /// instead of panicking.
     fn layout(area: Rect) -> RosterLayout {
-        let area_dots = Self::cell_rect_to_dots(area);
-
-        // Top-level vertical bands: a blank `HEADER_GAP_H` top-margin row,
-        // then `name`/`level` tight to each other, a spacer `body` child
-        // that (as the sole grow child) absorbs all leftover main-axis
-        // space, then `dot_row` pinned to the bottom.
-        let top_bands = engine_render::flex(
-            area_dots,
-            engine_render::FlexStyle {
-                direction: engine_render::Direction::Column,
-                justify_content: engine_render::Justify::Start,
-                align_items: engine_render::Align::Stretch,
-                gap: 0,
-            },
-            &[
-                engine_render::FlexChild {
-                    basis: engine_render::Basis::Fixed(Self::HEADER_GAP_H as i32 * 4),
-                    grow: 0.0,
-                    shrink: 0.0,
-                },
-                engine_render::FlexChild {
-                    basis: engine_render::Basis::Fixed(Self::NAME_H as i32 * 4),
-                    grow: 0.0,
-                    shrink: 0.0,
-                },
-                engine_render::FlexChild {
-                    basis: engine_render::Basis::Fixed(Self::LEVEL_H as i32 * 4),
-                    grow: 0.0,
-                    shrink: 0.0,
-                },
-                engine_render::FlexChild { basis: engine_render::Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
-                engine_render::FlexChild {
-                    basis: engine_render::Basis::Fixed(Self::DOT_H as i32 * 4),
-                    grow: 0.0,
-                    shrink: 0.0,
-                },
-            ],
-        );
+        // Top-level vertical bands (`top_bands_dots`): `name`/`level` floored
+        // out of the header block, `dot_row` pinned to the bottom.
+        // `top_bands[0]` (the blank `HEADER_GAP_H` top margin) and
+        // `top_bands[3]` (the spacer `body` grow child) are unused here — the
+        // left/right columns anchor to `details_top`, not to those rects.
+        let top_bands = Self::top_bands_dots(area);
         let name = top_bands[1].to_cell_rect();
         let level = top_bands[2].to_cell_rect();
-        // `top_bands[3]` (the spacer `body` child) is unused — the left/right
-        // columns anchor to `details_top` below, not to this rect.
         let dot_row = top_bands[4].to_cell_rect();
 
-        // RIGHT column (details panel): width = area.width - left_w, right
-        // edge inset EDGE_MARGIN from area's edge. Its TOP is pushed below
-        // the home button plus a deliberate DETAILS_TOP_GAP so the panel
-        // never jams against the home button in the shared top-right column;
-        // it still bottoms out at dot_row's top, so this shrinks the panel's
-        // height rather than pushing anything off-screen.
-        let left_w = area.width * 2 / 3;
-        let home_bottom = area
-            .y
-            .saturating_add(Self::EDGE_MARGIN)
-            .saturating_add(Self::HOME_H);
-        let details_top = home_bottom
-            .saturating_add(Self::DETAILS_TOP_GAP)
-            .min(dot_row.y);
-
-        let body_h_dots = dot_row.y.saturating_sub(details_top) as i32 * 4;
-        let body_style = engine_render::FlexStyle {
-            direction: engine_render::Direction::Column,
-            justify_content: engine_render::Justify::Start,
-            align_items: engine_render::Align::Stretch,
-            gap: 0,
-        };
-
-        // LEFT column: stat_bar directly above sprite, both spanning the
-        // same column range (no ARROW_W inset — arrows move to dot_row).
-        // Independent of the RIGHT column's `details_top`-anchored flex
-        // below — this container's own top sits `STAT_BAR_TOP_LIFT_CELLS`
-        // higher, with height extended to match, so the container's BOTTOM
-        // (unaffected, still `dot_row`'s top) doesn't move. `stat_bar`
-        // (Fixed) shifts up by exactly that lift, in whole cells (it sizes a
-        // text/border band, which is inherently cell-granular); `sprite`
-        // (the sole grow child) automatically absorbs the freed space at
-        // its TOP — a real `flex`-`grow` outcome, not a manual computation.
-        let left_col = engine_render::flex(
-            engine_render::DotRect {
-                x: area.x as i32 * 2,
-                y: (details_top as i32 - Self::STAT_BAR_TOP_LIFT_CELLS as i32) * 4,
-                w: left_w as i32 * 2,
-                h: body_h_dots + Self::STAT_BAR_TOP_LIFT_CELLS as i32 * 4,
-            },
-            body_style,
-            &[
-                engine_render::FlexChild {
-                    basis: engine_render::Basis::Fixed(Self::STAT_BAR_BAND_H as i32 * 4),
-                    grow: 0.0,
-                    shrink: 0.0,
-                },
-                engine_render::FlexChild { basis: engine_render::Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
-            ],
-        );
-        let stat_bar = left_col[0].to_cell_rect();
-        let sprite = left_col[1].to_cell_rect();
+        // LEFT column: `sprite`, floored out of the shared, dot-precise
+        // `left_col_dots`. `stat_bar` (`left_col_dots[0]`) is NOT stored here
+        // — nothing in production reads a cell-floored copy (`render()` hands
+        // it to `render_stat_bars` unfloored); tests call `stat_bar_rect`.
+        // Mirrors the `exhaustion`/`ability_list` case.
+        let sprite = Self::left_col_dots(area)[1].to_cell_rect();
 
         // RIGHT column (exhaustion/ability_list, the details panel): NOT
         // computed here — `RosterLayout` no longer carries cell-floored
@@ -561,7 +548,6 @@ impl RosterManager {
         RosterLayout {
             name,
             level,
-            stat_bar,
             sprite,
             dot_row,
         }
@@ -837,6 +823,16 @@ impl RosterManager {
     #[cfg(test)]
     fn home_rect(area: Rect) -> Rect {
         Self::home_dot_rect(area).to_cell_rect()
+    }
+
+    /// Cell-space view of `left_col_dots(area)[0]` (`stat_bar`), for tests
+    /// only — production code that needs dot precision calls `left_col_dots`
+    /// directly instead (`render()` hands it to `render_stat_bars` unfloored;
+    /// see `left_col_dots`'s doc comment). `RosterLayout` no longer carries a
+    /// cell-floored copy, mirroring the `exhaustion`/`ability_list` case.
+    #[cfg(test)]
+    fn stat_bar_rect(area: Rect) -> Rect {
+        Self::left_col_dots(area)[0].to_cell_rect()
     }
 
     /// Cell-space view of `right_col_dots(area)[0]` (`exhaustion`), for
@@ -1247,19 +1243,38 @@ impl RosterManager {
     /// caps (see `STAT_BAR_OUTLINE_H`), the border always renders as a
     /// complete, crisp bracket at any fill amount, including zero. A
     /// plain-text `stat_label(kind)` sits on the row immediately beneath.
-    fn render_stat_bars(&self, buf: &mut Buffer, rect: Rect) {
+    ///
+    /// `rect` (the stat-bar band) is honored at DOT precision, not floored to
+    /// the nearest cell first — the same sub-cell placement technique
+    /// `draw_dot_border` uses. The band's whole-cell footprint (`to_cell_rect`)
+    /// drives `stat_slice_parts`' cell-granular slice/outline/label geometry,
+    /// while the band's sub-cell remainder `(dx, dy)` offsets every slice's
+    /// DOT content uniformly inside its buffer before the single per-slice
+    /// `draw_grid`, so the whole band's true dot position survives the floor.
+    /// Labels are text, so they render at cell granularity (offset by the
+    /// same floored origin) — text can't be placed sub-cell. Today `(dx, dy)`
+    /// is `(0, 0)` (the band is cell-aligned), so this is byte-identical to a
+    /// cell-only draw; the offset only bites once an upstream sub-cell dot
+    /// value is introduced, exactly as it did for `draw_dot_border`.
+    fn render_stat_bars(&self, buf: &mut Buffer, rect: engine_render::DotRect) {
+        let cell_rect = rect.to_cell_rect();
+        let (dxr, dyr) = rect.cell_remainder();
+        let (dx, dy) = (dxr as usize, dyr as usize);
         for ((outline, fill, label), kind) in
-            Self::stat_slice_parts(rect).into_iter().zip(crate::stats::StatKind::ALL)
+            Self::stat_slice_parts(cell_rect).into_iter().zip(crate::stats::StatKind::ALL)
         {
             let dot_cols = outline.width as usize * 2;
             let dot_rows = outline.height as usize * 4;
             if dot_cols > 0 && dot_rows > 0 && fill.width > 0 && fill.height > 0 {
-                let mut dots = DotBuffer::new(dot_cols, dot_rows);
+                // Buffer sized to include the sub-cell remainder; all content
+                // is drawn OFFSET by `(dx, dy)` within it, so the outline's
+                // true position survives the eventual cell floor.
+                let mut dots = DotBuffer::new(dot_cols + dx, dot_rows + dy);
 
                 // Fill-cell dot bounds within the outline's dot grid (the
-                // middle cell — see `stat_slice_parts`).
-                let fx0 = (fill.x - outline.x) as usize * 2;
-                let fy0 = (fill.y - outline.y) as usize * 4;
+                // middle cell — see `stat_slice_parts`), shifted by `(dx, dy)`.
+                let fx0 = dx + (fill.x - outline.x) as usize * 2;
+                let fy0 = dy + (fill.y - outline.y) as usize * 4;
                 let fill_dot_cols = fill.width as usize * 2;
                 let fill_dot_rows = fill.height as usize * 4;
 
@@ -1268,13 +1283,13 @@ impl RosterManager {
                 // sides spanning that same hugged range, chamfered corners.
                 let hug_top = fy0.saturating_sub(Self::STAT_BAR_HUG_CAP_DOTS);
                 let hug_bottom = (fy0 + fill_dot_rows + Self::STAT_BAR_HUG_CAP_DOTS)
-                    .min(dot_rows)
+                    .min(dot_rows + dy)
                     .saturating_sub(1);
                 Self::draw_dot_cap_box(
                     &mut dots,
-                    0,
+                    dx,
                     hug_top,
-                    dot_cols - 1,
+                    dx + dot_cols - 1,
                     hug_bottom,
                     Self::STAT_BAR_HUG_CAP_DOTS,
                     Self::BORDER_COLOR,
@@ -1288,7 +1303,13 @@ impl RosterManager {
                 }
 
                 let grid = dots_to_grid(&dots);
-                engine_render::draw_grid(buf, outline, &grid);
+                let draw_area = Rect {
+                    x: outline.x,
+                    y: outline.y,
+                    width: grid.cols() as u16,
+                    height: grid.rows() as u16,
+                };
+                engine_render::draw_grid(buf, draw_area, &grid);
             }
 
             engine_render::label(buf, label, Self::stat_label(kind), Self::DOT_LABEL_COLOR);
@@ -1512,7 +1533,14 @@ impl RosterManager {
     /// centering would place it. Composites the aspect-fitted circle into a
     /// slot-sized `DotBuffer` at the dot-precise offset (never a whole-cell
     /// round), then blits it 1:1. A zero-fit slot is a no-op.
-    fn draw_dot_slot(buf: &mut Buffer, slot: Rect, bytes: &'static [u8]) {
+    ///
+    /// `(band_dx, band_dy)` is the dot-row band's sub-cell remainder (see
+    /// `render_dot_row`): the slot's cell footprint drives the aspect-fit and
+    /// cell-centering, while this remainder shifts the composited circle's
+    /// dots uniformly inside a buffer grown to match, so the whole band's true
+    /// dot position survives the eventual cell floor. Today it is `(0, 0)`, so
+    /// this is byte-identical to a cell-only blit.
+    fn draw_dot_slot(buf: &mut Buffer, slot: Rect, band_dx: usize, band_dy: usize, bytes: &'static [u8]) {
         let slot_dc = slot.width as usize * 2;
         let slot_dr = slot.height as usize * 4;
         if slot_dc == 0 || slot_dr == 0 {
@@ -1536,16 +1564,22 @@ impl RosterManager {
         let off_x = (slot.width.saturating_sub(fc as u16) / 2) as usize * 2;
         let off_y = slot_dr.saturating_sub(fr * 4) / 2;
 
-        let mut target = DotBuffer::new(slot_dc, slot_dr);
+        let mut target = DotBuffer::new(slot_dc + band_dx, slot_dr + band_dy);
         for r in 0..circle.rows() {
             for c in 0..circle.cols() {
                 if let Dot::Lit(color) = circle.get(c, r) {
-                    target.set(off_x + c, off_y + r, Dot::Lit(color));
+                    target.set(band_dx + off_x + c, band_dy + off_y + r, Dot::Lit(color));
                 }
             }
         }
         let grid = dots_to_grid(&target);
-        engine_render::draw_grid(buf, slot, &grid);
+        let draw_area = Rect {
+            x: slot.x,
+            y: slot.y,
+            width: grid.cols() as u16,
+            height: grid.rows() as u16,
+        };
+        engine_render::draw_grid(buf, draw_area, &grid);
     }
 
     /// Draws the `squad_role::ROSTER_SIZE`-slot dot row statically into
@@ -1557,8 +1591,23 @@ impl RosterManager {
     /// (`asset_cache::convert` + `draw_grid`, unchanged mechanic); labels are
     /// plain text, so they go through `engine_render::label` (CLAUDE.md
     /// constraint 4).
-    fn render_dot_row(&self, buf: &mut Buffer, dot_row_rect: Rect) {
-        let slots = Self::dot_slots(dot_row_rect);
+    ///
+    /// `dot_row_rect` (the dot-row band) is honored at DOT precision, not
+    /// floored to the nearest cell first — the same sub-cell placement
+    /// technique `draw_dot_border` uses. The band's whole-cell footprint
+    /// (`to_cell_rect`) drives `dot_slots`/`dot_bands`/`dot_cluster_rects`'
+    /// cell-granular geometry, while the band's sub-cell remainder `(dx, dy)`
+    /// offsets each slot's DOT content uniformly (via `draw_dot_slot`) so the
+    /// whole band's true dot position survives the floor. Labels are text, so
+    /// they render at cell granularity off the floored origin. Today `(dx, dy)`
+    /// is `(0, 0)` (the band is cell-aligned), so this is byte-identical to a
+    /// cell-only draw.
+    fn render_dot_row(&self, buf: &mut Buffer, dot_row_rect: engine_render::DotRect) {
+        let cell_rect = dot_row_rect.to_cell_rect();
+        let (dxr, dyr) = dot_row_rect.cell_remainder();
+        let (dx, dy) = (dxr as usize, dyr as usize);
+
+        let slots = Self::dot_slots(cell_rect);
         self.current_dot.borrow_mut().set_rect(slots[self.current_index]);
 
         for (i, slot) in slots.iter().enumerate() {
@@ -1572,10 +1621,10 @@ impl RosterManager {
             } else {
                 crate::assets::DOT_UNFILLED
             };
-            Self::draw_dot_slot(buf, *slot, bytes);
+            Self::draw_dot_slot(buf, *slot, dx, dy, bytes);
         }
 
-        let (dots_band, label_band) = Self::dot_bands(dot_row_rect);
+        let (dots_band, label_band) = Self::dot_bands(cell_rect);
         let clusters = Self::dot_cluster_rects(dots_band);
         for (cluster_rect, (_count, label)) in clusters.iter().zip(Self::CLUSTERS.iter()) {
             let label_w = label.chars().count() as u16;
@@ -1586,7 +1635,7 @@ impl RosterManager {
                 label_w,
                 label_band.height,
             )
-            .intersection(dot_row_rect);
+            .intersection(cell_rect);
             engine_render::label(buf, label_rect, label, Self::DOT_LABEL_COLOR);
         }
     }
@@ -1638,14 +1687,14 @@ impl Scene for RosterManager {
         let (name_idx, name_color) = self.name_display();
         self.render_name(frame.buffer_mut(), l.name, name_idx, name_color);
         self.render_level(frame.buffer_mut(), l.level, self.current_index);
-        self.render_stat_bars(frame.buffer_mut(), l.stat_bar);
+        self.render_stat_bars(frame.buffer_mut(), Self::left_col_dots(area)[0]);
         if self.active_slide().is_none() {
             let (border, ex_text, ability_text) = Self::details_panel_rects(area);
             Self::draw_dot_border(frame.buffer_mut(), border, Self::BORDER_COLOR);
             self.render_exhaustion(frame.buffer_mut(), ex_text, self.current_index);
             self.render_ability_list(frame.buffer_mut(), ability_text, self.current_index);
         }
-        self.render_dot_row(frame.buffer_mut(), l.dot_row);
+        self.render_dot_row(frame.buffer_mut(), Self::top_bands_dots(area)[4]);
 
         let (left_dr, right_dr) = Self::arrow_dot_rects(area);
         {
@@ -1811,6 +1860,7 @@ mod layout_tests {
     fn layout_rects_ordered_top_to_bottom() {
         let area = Rect::new(0, 0, 80, 30);
         let l = RosterManager::layout(area);
+        let stat_bar = RosterManager::stat_bar_rect(area);
 
         assert!(l.name.y < l.level.y, "name.y ({}) must be above level.y ({})", l.name.y, l.level.y);
         assert_eq!(
@@ -1819,15 +1869,15 @@ mod layout_tests {
             l.name.y, l.name.height, l.level.y
         );
         assert!(
-            l.level.y + l.level.height <= l.stat_bar.y,
+            l.level.y + l.level.height <= stat_bar.y,
             "stat_bar must not start above level's bottom edge (level {}+{} vs stat_bar.y {}); note this gap comes from \
              stat_bar's independent details_top anchoring, not from HEADER_GAP_H (which is now a top margin above name)",
-            l.level.y, l.level.height, l.stat_bar.y
+            l.level.y, l.level.height, stat_bar.y
         );
         let exhaustion = RosterManager::exhaustion_rect(area);
         let ability_list = RosterManager::ability_list_rect(area);
         assert!(exhaustion.y < ability_list.y, "exhaustion.y ({}) must be above ability_list.y ({})", exhaustion.y, ability_list.y);
-        assert!(l.stat_bar.y < l.sprite.y, "stat_bar.y ({}) must be above sprite.y ({})", l.stat_bar.y, l.sprite.y);
+        assert!(stat_bar.y < l.sprite.y, "stat_bar.y ({}) must be above sprite.y ({})", stat_bar.y, l.sprite.y);
         assert!(l.sprite.y < l.dot_row.y, "sprite.y ({}) must be above dot_row.y ({})", l.sprite.y, l.dot_row.y);
     }
 
@@ -1841,6 +1891,7 @@ mod layout_tests {
         for (w, h) in [(80u16, 30u16), (40u16, 20u16), (60u16, 24u16)] {
             let area = Rect::new(0, 0, w, h);
             let l = RosterManager::layout(area);
+            let stat_bar = RosterManager::stat_bar_rect(area);
             assert_eq!(
                 l.name.y,
                 area.y + RosterManager::HEADER_GAP_H,
@@ -1858,7 +1909,7 @@ mod layout_tests {
             // be dot-identical, only close enough to round to the same
             // cell; see `stat_bar_top_and_details_panel_top_share_a_cell`).
             assert_eq!(
-                l.stat_bar.y, RosterManager::exhaustion_rect(area).y,
+                stat_bar.y, RosterManager::exhaustion_rect(area).y,
                 "w={w},h={h}: body position unchanged by the header shift"
             );
         }
@@ -1882,12 +1933,13 @@ mod layout_tests {
     fn stat_bar_spans_sprite_columns_and_sits_above() {
         let area = Rect::new(0, 0, 80, 30);
         let l = RosterManager::layout(area);
-        assert_eq!(l.stat_bar.left(), l.sprite.left(), "stat_bar.left() must equal sprite.left()");
-        assert_eq!(l.stat_bar.right(), l.sprite.right(), "stat_bar.right() must equal sprite.right()");
+        let stat_bar = RosterManager::stat_bar_rect(area);
+        assert_eq!(stat_bar.left(), l.sprite.left(), "stat_bar.left() must equal sprite.left()");
+        assert_eq!(stat_bar.right(), l.sprite.right(), "stat_bar.right() must equal sprite.right()");
         assert!(
-            l.stat_bar.y + l.stat_bar.height <= l.sprite.y,
+            stat_bar.y + stat_bar.height <= l.sprite.y,
             "stat_bar ({}+{}) must sit above sprite.y ({})",
-            l.stat_bar.y, l.stat_bar.height, l.sprite.y
+            stat_bar.y, stat_bar.height, l.sprite.y
         );
     }
 
@@ -1906,12 +1958,12 @@ mod layout_tests {
     fn stat_bar_top_and_details_panel_top_share_a_cell() {
         for (w, h) in [(80u16, 30u16), (40u16, 20u16), (60u16, 24u16)] {
             let area = Rect::new(0, 0, w, h);
-            let l = RosterManager::layout(area);
+            let stat_bar = RosterManager::stat_bar_rect(area);
             let exhaustion = RosterManager::exhaustion_rect(area);
             assert_eq!(
-                l.stat_bar.y, exhaustion.y,
+                stat_bar.y, exhaustion.y,
                 "w={w},h={h}: stat_bar.y ({}) and the details panel top exhaustion.y ({}) must share a cell row",
-                l.stat_bar.y, exhaustion.y
+                stat_bar.y, exhaustion.y
             );
         }
     }
@@ -1933,11 +1985,11 @@ mod layout_tests {
 
         let scene = RosterManager::new();
         let area = Rect::new(0, 0, 80, 30);
-        let l = RosterManager::layout(area);
         let exhaustion = RosterManager::exhaustion_rect(area);
         let buf = render_to_buffer(&scene, 80, 30);
 
-        let stat_bar_top = topmost_lit_dot_row(&buf, l.stat_bar.x + 2, l.stat_bar.y);
+        let stat_bar = RosterManager::stat_bar_rect(area);
+        let stat_bar_top = topmost_lit_dot_row(&buf, stat_bar.x + 2, stat_bar.y);
         let details_top = topmost_lit_dot_row(&buf, exhaustion.x + 2, exhaustion.y);
         assert_eq!(
             stat_bar_top, details_top,
@@ -1953,11 +2005,12 @@ mod layout_tests {
     #[test]
     fn real_gap_between_header_and_stat_bar() {
         let l = RosterManager::layout(Rect::new(0, 0, 80, 30));
-        let gap = l.stat_bar.y.saturating_sub(l.level.y + l.level.height);
+        let stat_bar = RosterManager::stat_bar_rect(Rect::new(0, 0, 80, 30));
+        let gap = stat_bar.y.saturating_sub(l.level.y + l.level.height);
         assert!(
             gap >= 1,
             "expected a real blank gap (>=1 row) between level (bottom={}) and stat_bar (top={}), got {gap}",
-            l.level.y + l.level.height, l.stat_bar.y
+            l.level.y + l.level.height, stat_bar.y
         );
     }
 
@@ -2238,7 +2291,7 @@ mod level_render_tests {
 }
 
 /// b1-t6: 4 stat bars (STR/DEX/INT/VIT, `StatKind::ALL` order) rendered as
-/// side-by-side outlined+labeled column slices within `layout().stat_bar`
+/// side-by-side outlined+labeled column slices within `stat_bar_rect(area)`
 /// (spec 38 "Stat bars layout"). `stat_slice_parts` is the SOLE geometry
 /// source both `render_stat_bars` and these tests call — no re-derived
 /// per-test slice math (research.md CLEANLINESS). Supersedes the b2-t3
@@ -2292,8 +2345,8 @@ mod stat_bar_tests {
 
         for (w, h) in [(80u16, 30u16), (40u16, 20u16), (60u16, 24u16)] {
             let area = Rect::new(0, 0, w, h);
-            let l = RosterManager::layout(area);
-            let slices = RosterManager::stat_slice_parts(l.stat_bar);
+            let stat_bar = RosterManager::stat_bar_rect(area);
+            let slices = RosterManager::stat_slice_parts(stat_bar);
             let (last_outline, _fill, _label) = *slices.last().unwrap();
             let panel_left = RosterManager::exhaustion_rect(area).x; // details panel border's left column
 
@@ -2316,8 +2369,8 @@ mod stat_bar_tests {
     /// `stat_bar_band_is_tight_and_sprite_grows`).
     #[test]
     fn stat_bar_fill_is_short_and_band_is_tight() {
-        let l = RosterManager::layout(area());
-        let slices = RosterManager::stat_slice_parts(l.stat_bar);
+        let stat_bar = RosterManager::stat_bar_rect(area());
+        let slices = RosterManager::stat_slice_parts(stat_bar);
         for (i, (outline, _fill, label)) in slices.iter().enumerate() {
             assert_eq!(
                 outline.height, RosterManager::STAT_BAR_OUTLINE_H,
@@ -2327,15 +2380,15 @@ mod stat_bar_tests {
             let content_bottom = label.y + label.height;
             assert_eq!(
                 content_bottom,
-                l.stat_bar.bottom(),
+                stat_bar.bottom(),
                 "slice {i}: outline+label ({content_bottom}) must fill the stat_bar band exactly (bottom={})",
-                l.stat_bar.bottom()
+                stat_bar.bottom()
             );
             assert_eq!(
-                l.stat_bar.height,
+                stat_bar.height,
                 outline.height + label.height,
                 "slice {i}: stat_bar band ({}) must be exactly outline+label ({}+{})",
-                l.stat_bar.height, outline.height, label.height
+                stat_bar.height, outline.height, label.height
             );
         }
     }
@@ -2355,11 +2408,12 @@ mod stat_bar_tests {
         for (w, h) in [(80u16, 30u16), (60u16, 24u16), (40u16, 20u16)] {
             let area = Rect::new(0, 0, w, h);
             let l = RosterManager::layout(area);
+            let stat_bar = RosterManager::stat_bar_rect(area);
 
             // The sprite opens directly below the stat_bar band...
             assert_eq!(
                 l.sprite.y,
-                l.stat_bar.y + l.stat_bar.height,
+                stat_bar.y + stat_bar.height,
                 "w={w},h={h}: sprite must open directly below the stat_bar band"
             );
             // ...and bottoms out flush against dot_row (baseline pinned).
@@ -2374,7 +2428,7 @@ mod stat_bar_tests {
             let sprite_if_band_padded = l
                 .dot_row
                 .y
-                .saturating_sub(l.stat_bar.y + l.stat_bar.height + 1);
+                .saturating_sub(stat_bar.y + stat_bar.height + 1);
             assert!(
                 l.sprite.height > sprite_if_band_padded,
                 "w={w},h={h}: sprite ({}) must claim the row a padding cell would otherwise take ({sprite_if_band_padded})",
@@ -2389,8 +2443,8 @@ mod stat_bar_tests {
     #[test]
     fn slices_are_four_disjoint_ordered_columns() {
         for w in [40u16, 80u16] {
-            let l = RosterManager::layout(Rect::new(0, 0, w, 30));
-            let slices = RosterManager::stat_slice_parts(l.stat_bar);
+            let stat_bar = RosterManager::stat_bar_rect(Rect::new(0, 0, w, 30));
+            let slices = RosterManager::stat_slice_parts(stat_bar);
             assert_eq!(slices.len(), 4, "expected 4 stat slices at width {w}");
 
             for i in 0..slices.len() - 1 {
@@ -2415,8 +2469,8 @@ mod stat_bar_tests {
     #[test]
     fn zero_fill_slice_still_outlined() {
         let buf = render_with_stats(only_stat(StatKind::Strength, 0));
-        let l = RosterManager::layout(area());
-        let slices = RosterManager::stat_slice_parts(l.stat_bar);
+        let stat_bar = RosterManager::stat_bar_rect(area());
+        let slices = RosterManager::stat_slice_parts(stat_bar);
         let (outline, _fill, _label) = slices[0]; // Strength == StatKind::ALL[0]
 
         // Top and bottom edges of the border box, across the bar's width.
@@ -2457,8 +2511,8 @@ mod stat_bar_tests {
     /// non-space" would always hit the border edge and never scale).
     #[test]
     fn fill_length_scales_with_stat_value() {
-        let l = RosterManager::layout(area());
-        let slices = RosterManager::stat_slice_parts(l.stat_bar);
+        let stat_bar = RosterManager::stat_bar_rect(area());
+        let slices = RosterManager::stat_slice_parts(stat_bar);
         let (outline, _fill, _label) = slices[1]; // Dexterity == StatKind::ALL[1]
 
         // Rightmost column within `outline` whose fg is green-dominant (the
@@ -2492,7 +2546,7 @@ mod stat_bar_tests {
     fn no_numeric_text_in_stat_bar() {
         let scene = RosterManager::new(); // index 0: Ember Wolf, real demo_roster stats
         let buf = render_to_buffer(&scene, area().width, area().height);
-        let rect = RosterManager::layout(area()).stat_bar;
+        let rect = RosterManager::stat_bar_rect(area());
 
         assert!(
             has_non_space(&buf, rect),
@@ -2511,8 +2565,8 @@ mod stat_bar_tests {
     #[test]
     fn label_renders_beneath_its_own_bar() {
         let buf = render_to_buffer(&RosterManager::new(), area().width, area().height);
-        let l = RosterManager::layout(area());
-        let slices = RosterManager::stat_slice_parts(l.stat_bar);
+        let stat_bar = RosterManager::stat_bar_rect(area());
+        let slices = RosterManager::stat_slice_parts(stat_bar);
 
         for (i, kind) in StatKind::ALL.into_iter().enumerate() {
             let (outline, _fill, label_rect) = slices[i];
@@ -2538,7 +2592,7 @@ mod stat_bar_tests {
     /// fill at progress==0 equals the outgoing value (no positional slide).
     #[test]
     fn stat_bars_do_not_slide_positionally_at_trigger() {
-        let stat_bar = RosterManager::layout(area()).stat_bar;
+        let stat_bar = RosterManager::stat_bar_rect(area());
         // Content region only: excludes the rightmost `EDGE_MARGIN +
         // DETAILS_LEFT_SHIFT` columns, which overlap the details panel's own
         // border and are only conditionally painted (the panel is hidden
@@ -2588,8 +2642,8 @@ mod stat_bar_tests {
         // `stat_fill_dots` is the sole source of fill length for both the
         // render path and this assertion, so this still exercises the real
         // lerp logic end-to-end via a real `RosterManager` slide.
-        let l = RosterManager::layout(area());
-        let slices = RosterManager::stat_slice_parts(l.stat_bar);
+        let stat_bar = RosterManager::stat_bar_rect(area());
+        let slices = RosterManager::stat_slice_parts(stat_bar);
         let (_outline, dex_fill, _label) = slices[1]; // Dexterity == StatKind::ALL[1]
         let dot_cols = dex_fill.width as usize * 2;
 
@@ -2632,8 +2686,8 @@ mod stat_bar_tests {
         // A zero stat so the border is fully visible everywhere (no green fill
         // to luma-blend over the border rows).
         let buf = render_with_stats(only_stat(StatKind::Strength, 0));
-        let l = RosterManager::layout(area());
-        let slices = RosterManager::stat_slice_parts(l.stat_bar);
+        let stat_bar = RosterManager::stat_bar_rect(area());
+        let slices = RosterManager::stat_slice_parts(stat_bar);
         let (outline, _fill, label) = slices[0]; // Strength == StatKind::ALL[0]
 
         const CELL_TOP_HALF: u32 = (1 << 0) | (1 << 3) | (1 << 1) | (1 << 4);
@@ -2684,16 +2738,16 @@ mod stat_bar_tests {
     #[test]
     fn first_bar_has_left_margin() {
         for w in [40u16, 60u16, 80u16] {
-            let l = RosterManager::layout(Rect::new(0, 0, w, 30));
-            let slices = RosterManager::stat_slice_parts(l.stat_bar);
+            let stat_bar = RosterManager::stat_bar_rect(Rect::new(0, 0, w, 30));
+            let slices = RosterManager::stat_slice_parts(stat_bar);
             let (first_outline, _fill, _label) = slices[0];
             assert_eq!(
                 first_outline.left(),
-                l.stat_bar.x + RosterManager::STAT_BAR_LEFT_MARGIN,
+                stat_bar.x + RosterManager::STAT_BAR_LEFT_MARGIN,
                 "w={w}: first bar must start STAT_BAR_LEFT_MARGIN in from stat_bar.x, not flush at the edge"
             );
             assert!(
-                first_outline.left() > l.stat_bar.x,
+                first_outline.left() > stat_bar.x,
                 "w={w}: first bar must have a real, non-zero left margin off the stat_bar edge"
             );
         }
@@ -2704,8 +2758,8 @@ mod stat_bar_tests {
     /// with zero blank spacer rows between the bar and its label.
     #[test]
     fn label_sits_immediately_below_bar() {
-        let l = RosterManager::layout(area());
-        let slices = RosterManager::stat_slice_parts(l.stat_bar);
+        let stat_bar = RosterManager::stat_bar_rect(area());
+        let slices = RosterManager::stat_slice_parts(stat_bar);
         for (i, (outline, _fill, label)) in slices.iter().enumerate() {
             assert_eq!(
                 label.y,
@@ -4628,5 +4682,78 @@ mod nudge_constant_removal_tests {
                  not a bolted-on constant"
             );
         }
+    }
+}
+
+/// Precision-safety regression (mirrors `draw_dot_border`'s sub-cell test):
+/// `render_stat_bars`/`render_dot_row` take a `DotRect` and honor its
+/// sub-cell remainder, so a band positioned one DOT off a cell boundary
+/// renders its content one dot lower — not snapped back to the nearest cell.
+/// Guards the same class of bug that made the details-panel border land 2
+/// dots off from `stat_bar`'s before the `draw_dot_border` fix: an
+/// intermediate `.to_cell_rect()` in the draw chain silently discarding the
+/// sub-cell offset. Today every value feeding these bands is cell-aligned, so
+/// nothing exercises the offset in the live render — these tests inject the
+/// remainder deliberately to prove the plumbing carries it.
+#[cfg(test)]
+mod sub_cell_precision_tests {
+    use super::*;
+    use crate::scenes::test_util::topmost_lit_dot_row;
+
+    fn buf(w: u16, h: u16) -> Buffer {
+        Buffer::empty(Rect::new(0, 0, w, h))
+    }
+
+    /// A 1-dot sub-cell y offset on the stat-bar band moves the rendered
+    /// border/fill down exactly 1 dot — decoded from the actual braille
+    /// buffer, not the input geometry.
+    #[test]
+    fn render_stat_bars_honors_sub_cell_y_offset() {
+        let scene = RosterManager::new();
+        let base = RosterManager::cell_rect_to_dots(Rect::new(0, 0, 40, 6));
+        let shifted = engine_render::DotRect { y: base.y + 1, ..base };
+
+        let mut a = buf(40, 8);
+        let mut b = buf(40, 8);
+        scene.render_stat_bars(&mut a, base);
+        scene.render_stat_bars(&mut b, shifted);
+
+        // First slice's left border edge column: its topmost lit dot must sit
+        // exactly one dot lower in the shifted render.
+        let slices = RosterManager::stat_slice_parts(base.to_cell_rect());
+        let (outline, _fill, _label) = slices[0];
+        let col = outline.left();
+        let top_a = topmost_lit_dot_row(&a, col, outline.top());
+        let top_b = topmost_lit_dot_row(&b, col, outline.top());
+        assert_eq!(
+            top_b, top_a + 1,
+            "a 1-dot sub-cell y offset must move the stat bar's content down exactly 1 dot \
+             (cell-aligned top {top_a}, shifted top {top_b}) — not snap back to the cell"
+        );
+    }
+
+    /// A 1-dot sub-cell y offset on the dot-row band moves the rendered dot
+    /// slot down exactly 1 dot.
+    #[test]
+    fn render_dot_row_honors_sub_cell_y_offset() {
+        let scene = RosterManager::new();
+        let base = RosterManager::cell_rect_to_dots(Rect::new(0, 0, 40, 4));
+        let shifted = engine_render::DotRect { y: base.y + 1, ..base };
+
+        let mut a = buf(40, 6);
+        let mut b = buf(40, 6);
+        scene.render_dot_row(&mut a, base);
+        scene.render_dot_row(&mut b, shifted);
+
+        let slots = RosterManager::dot_slots(base.to_cell_rect());
+        let slot = slots[scene.current_index]; // the filled slot at rest
+        let col = slot.x + slot.width / 2;
+        let top_a = topmost_lit_dot_row(&a, col, slot.y);
+        let top_b = topmost_lit_dot_row(&b, col, slot.y);
+        assert_eq!(
+            top_b, top_a + 1,
+            "a 1-dot sub-cell y offset must move the dot-row content down exactly 1 dot \
+             (cell-aligned top {top_a}, shifted top {top_b}) — not snap back to the cell"
+        );
     }
 }
