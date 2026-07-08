@@ -3921,3 +3921,75 @@ mod inspectable_tests {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: Top-Down golden fixture lock (b0-t1)
+//
+// Freezes Top-Down's current rendered output BEFORE any other task in this
+// feature touches `board_geometry`/`place`/`BattleCamera`/shadow/sprite-ratio
+// code. Every later task in this feature that touches shared code must
+// re-assert byte-identity against this same fixture for Top-Down. Mirrors
+// `main_hub.rs`'s `golden_fixture_tests` precedent one-for-one.
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod golden_fixture_tests {
+    use super::*;
+    use crate::scenes::test_util::{
+        buffer_to_art, load_battle_viewer_fixture, render_to_buffer, serialize_braille_buffer,
+    };
+    use engine_render::diff_dots;
+
+    /// Top-Down, demo `pieces()` layout, `elapsed = 0.0`, rendered 80x40.
+    /// Must dot-for-dot match the committed pre-rework fixture. Run with
+    /// `UPDATE_BATTLE_VIEWER_FIXTURES=1` to (re)generate the `.fixture` +
+    /// `.preview.txt` from the current render — only do this before any
+    /// shared-code task lands, and only after a manual visual pass over the
+    /// preview (see `crates/game/tests/fixtures/battle_viewer/README.md`).
+    #[test]
+    fn top_down_golden_matches_baseline() {
+        let generate = std::env::var("UPDATE_BATTLE_VIEWER_FIXTURES").is_ok();
+
+        let scene = BattleViewer {
+            camera_mode: BattleCamera::top_down_preset(),
+            ..BattleViewer::default()
+        };
+        let actual = render_to_buffer(&scene, 80, 40);
+
+        if generate {
+            let fixture_path = format!(
+                "{}/tests/fixtures/battle_viewer/top_down_golden.fixture",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            let preview_path = format!(
+                "{}/tests/fixtures/battle_viewer/top_down_golden.preview.txt",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            std::fs::write(&fixture_path, serialize_braille_buffer(&actual))
+                .unwrap_or_else(|e| panic!("failed to write {fixture_path}: {e}"));
+            std::fs::write(&preview_path, buffer_to_art(&actual))
+                .unwrap_or_else(|e| panic!("failed to write {preview_path}: {e}"));
+            return;
+        }
+
+        let serialized = serialize_braille_buffer(&actual);
+        assert!(
+            serialized.lines().count() > 1,
+            "Top-Down render must produce at least one lit braille cell \
+             (got an empty/all-blank render — a vacuous fixture would never \
+             catch a real regression)"
+        );
+
+        let fixture = load_battle_viewer_fixture("top_down_golden");
+        let diff = diff_dots(&fixture, &actual);
+        assert!(
+            diff.is_match(),
+            "Top-Down's current render diverges from the committed golden \
+             fixture ({} dot mismatch(es) of {} compared); no task in this \
+             feature may change Top-Down's rendered dots — regenerate with \
+             UPDATE_BATTLE_VIEWER_FIXTURES=1 only if this is bucket b0 \
+             itself (re-run the manual visual pass first)",
+            diff.mismatches.len(),
+            diff.dots_compared
+        );
+    }
+}

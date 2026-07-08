@@ -220,6 +220,12 @@ pub(crate) fn load_main_hub_fixture(name: &str) -> Buffer {
     load_fixture("main_hub", name)
 }
 
+/// Load a committed Battle Viewer fixture by scenario `name` from
+/// `tests/fixtures/battle_viewer/{name}.fixture`.
+pub(crate) fn load_battle_viewer_fixture(name: &str) -> Buffer {
+    load_fixture("battle_viewer", name)
+}
+
 #[cfg(test)]
 mod golden_fixture_helper_tests {
     use super::*;
