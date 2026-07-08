@@ -204,19 +204,15 @@ impl RosterManager {
     /// its pinned baseline above `dot_row`.
     const STAT_BAR_BAND_H: u16 =
         Self::STAT_BAR_OUTLINE_H + Self::STAT_LABEL_H;
-    /// Height (in cells) of each stat-bar OUTLINE. 3 cells = 12 dot rows. The
-    /// green fill occupies exactly the MIDDLE cell (dot rows 4-7); the border
-    /// box spans the FULL outline (top edge on dot row 0, level with the
-    /// details-panel border; bottom edge on dot row 11, immediately above the
-    /// label cell; left/right edges one dot outside the fill's own columns).
-    /// Because the fill is confined to its own single cell, and the border's
-    /// left/right edge columns always land in a DIFFERENT 2-column braille cell
-    /// than the fill's columns, no braille cell ever contains both a border dot
-    /// and a fill dot — so `dots_to_grid`'s adaptive-luma masking (which drops
-    /// the dimmer color's dots whenever a cell mixes colors) never eats any part
-    /// of the border. The border therefore renders as a complete, solid box on
-    /// all four sides at any fill amount, including 0% and 100%.
-    const STAT_BAR_OUTLINE_H: u16 = 3;
+    /// Height (in cells) of each stat-bar OUTLINE. 2 cells = 8 dot rows: a
+    /// 1-dot chamfered border wraps the whole outline, and the green fill
+    /// occupies the interior (dot rows 1..7), starting one dot in from the
+    /// left border. The top/bottom braille cells contain both a border dot
+    /// (the outline's own top/bottom edge) and fill dots, so those cells
+    /// render as a muted grey-green blend — an accepted trade-off for a
+    /// compact bar; the left/right edge columns never mix with fill, so those
+    /// stay pure border color.
+    const STAT_BAR_OUTLINE_H: u16 = 2;
     /// Reserved blank cells on the RIGHT of `stat_bar` that the 4 slices never
     /// occupy, so the rightmost bar keeps genuine horizontal clearance from
     /// the details panel's left border. The panel's left edge sits
@@ -828,15 +824,14 @@ impl RosterManager {
                 // blank gap row between the bar and its label.
                 let label_y = (s.y + outline_h).min(s.bottom().saturating_sub(label_h));
                 let label = Rect::new(s.x, label_y, s.width, label_h);
-                // `fill` is exactly the outline's MIDDLE cell — inset one full
-                // cell on every side — so it never shares a braille cell with
-                // the border box drawn around the full outline (see
-                // `STAT_BAR_OUTLINE_H`).
+                // `fill` is the interior column span between the left/right
+                // borders (inset one cell each side), full outline height — the
+                // region the proportional green occupies.
                 let fill = Rect::new(
                     outline.x.saturating_add(1),
-                    outline.y.saturating_add(1),
+                    outline.y,
                     outline.width.saturating_sub(2),
-                    outline.height.saturating_sub(2),
+                    outline.height,
                 );
                 (outline, fill, label)
             })
@@ -863,38 +858,34 @@ impl RosterManager {
     /// `STAT_BAR_COLOR` fill are built into ONE `DotBuffer` spanning the
     /// `outline` rect and drawn with a single `draw_grid` (non-text chrome, so
     /// they render through the dot pipeline — never `engine_render::fill`,
-    /// CLAUDE.md constraint 4): a chamfered-corner border spans the FULL
-    /// `outline` (via `draw_dot_box`), and the fill lights `fill` — the
-    /// outline's own middle cell — proportionally to `stat_fill_dots`. Because
-    /// `fill` never shares a braille cell with the border (see
-    /// `STAT_BAR_OUTLINE_H`), the border always renders as a complete, solid
-    /// box on all four sides, at any fill amount, including zero (visible
-    /// outline even at zero fill). A plain-text `stat_label(kind)` sits on the
-    /// row immediately beneath.
+    /// CLAUDE.md constraint 4): a 1-dot chamfered-corner border wraps the whole
+    /// `outline` (via `draw_dot_box`) and the fill lights the interior (dot rows
+    /// 1..dot_rows-1) proportionally to `stat_fill_dots`, starting one dot in
+    /// from the left border. Border and fill share the top/bottom braille cells,
+    /// so those render as a muted grey-green blend; the unfilled remainder of
+    /// the bar shows the border alone (visible outline even at zero fill). A
+    /// plain-text `stat_label(kind)` sits on the row immediately beneath.
     fn render_stat_bars(&self, buf: &mut Buffer, rect: Rect) {
         for ((outline, fill, label), kind) in
             Self::stat_slice_parts(rect).into_iter().zip(crate::stats::StatKind::ALL)
         {
             let dot_cols = outline.width as usize * 2;
             let dot_rows = outline.height as usize * 4;
-            if dot_cols > 0 && dot_rows > 0 && fill.width > 0 && fill.height > 0 {
+            if dot_cols > 2 && dot_rows > 2 && fill.width > 0 {
                 let mut dots = DotBuffer::new(dot_cols, dot_rows);
 
-                // Border spans the full outline: top edge top-aligned (dot row
-                // 0), bottom edge snug above the label (dot row dot_rows-1).
+                // 1-dot border wrapping the whole outline (rounded corners via
+                // `draw_dot_box`), then the proportional green fill in the
+                // interior (dot rows 1..dot_rows-1), starting one dot in from the
+                // left border. The border and fill share the top/bottom cells, so
+                // those cells render as a muted grey-green blend.
                 Self::draw_dot_box(&mut dots, 0, 0, dot_cols - 1, dot_rows - 1, Self::BORDER_COLOR);
 
-                // Fill-cell dot bounds within the outline's dot grid (the
-                // middle cell — see `stat_slice_parts`).
-                let fx0 = (fill.x - outline.x) as usize * 2;
-                let fy0 = (fill.y - outline.y) as usize * 4;
-                let fill_dot_cols = fill.width as usize * 2;
-                let fill_dot_rows = fill.height as usize * 4;
-
-                let n = self.stat_fill_dots(kind, fill_dot_cols);
-                for row in fy0..fy0 + fill_dot_rows {
+                let interior_cols = dot_cols - 2;
+                let n = self.stat_fill_dots(kind, interior_cols);
+                for row in 1..dot_rows - 1 {
                     for col in 0..n {
-                        dots.set(fx0 + col, row, Dot::Lit(Self::STAT_BAR_COLOR));
+                        dots.set(1 + col, row, Dot::Lit(Self::STAT_BAR_COLOR));
                     }
                 }
 
