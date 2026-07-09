@@ -61,16 +61,24 @@ pub fn start(
 
     let (handle, cmd_rx) = ipc_server::spawn(catalog)?;
     println!("[inspect] socket: {}", handle.socket_path.display());
+    tracing::debug!(socket = %handle.socket_path.display(), "ipc server bound");
 
     // Attempt to spawn the sibling inspector binary; swallow failures so the
     // game keeps running headless (spec 14:198).
     match inspector_path() {
-        Ok(bin) => {
-            if let Err(e) = spawn_inspector(&bin, &handle.socket_path) {
+        Ok(bin) => match spawn_inspector(&bin, &handle.socket_path) {
+            Ok(_child) => {
+                tracing::debug!(inspector = %bin.display(), "inspector spawned");
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, "inspector spawn failed");
                 eprintln!("[inspect] failed to spawn inspector: {}", e);
             }
+        },
+        Err(e) => {
+            tracing::debug!(error = %e, "inspector path lookup failed");
+            eprintln!("[inspect] failed to find inspector path: {}", e);
         }
-        Err(e) => eprintln!("[inspect] failed to find inspector path: {}", e),
     }
 
     Ok(Some((handle, cmd_rx)))
@@ -165,4 +173,13 @@ mod tests {
             "spawn_inspector with a nonexistent binary must return Err, not Ok"
         );
     }
+
+    // `start`'s DEBUG logging (b5-t1) is covered by
+    // `tests/inspect_debug_logging.rs`, its own integration-test binary —
+    // not here. A `with_default`-guarded test in this same `#[cfg(test)] mod`
+    // races the unguarded `start(..)` calls in the sibling tests above
+    // (which install no subscriber at all): `tracing`'s per-callsite
+    // interest cache is process-global and whichever test's dispatcher is
+    // absent when a callsite first fires can permanently disable it for the
+    // rest of the process (validator.md, iter 1).
 }

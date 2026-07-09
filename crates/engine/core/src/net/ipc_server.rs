@@ -135,6 +135,7 @@ pub fn spawn(catalog: Arc<dyn SceneCatalog>) -> std::io::Result<(IpcHandle, Rece
                     .is_err()
                 {
                     // Already have a client — refuse by dropping (EOF to caller).
+                    tracing::debug!("ipc connection refused: client already connected");
                     drop(stream);
                     continue;
                 }
@@ -245,9 +246,11 @@ fn reader_loop(
     connected: Arc<AtomicBool>,
     catalog: Arc<dyn SceneCatalog>,
 ) {
+    tracing::debug!("ipc client connected");
     loop {
         match read_frame(&mut stream) {
             Ok(env) => {
+                tracing::debug!(seq = env.seq, "ipc command received");
                 match env.body {
                     Message::SwitchScene(ss) => {
                         let target = SceneKey::new(ss.target.clone());
@@ -302,6 +305,7 @@ fn reader_loop(
                     *guard = None;
                 }
                 connected.store(false, Ordering::SeqCst);
+                tracing::debug!("ipc client disconnected");
                 return;
             }
             Err(e) => {
@@ -592,6 +596,16 @@ mod tests {
             }
         }
     }
+
+    // reader_loop's DEBUG logging (b5-t1) is covered by
+    // `tests/ipc_debug_logging.rs`, its own integration-test binary — not
+    // here. `reader_loop`'s DEBUG events run on `spawn`'s spawned
+    // accept/reader threads, which only inherit a *global* default
+    // dispatcher, not a thread-local `with_default` one; and several
+    // unguarded tests in this same module (below) drive `reader_loop` via
+    // `spawn()` with no subscriber installed at all, which races /
+    // permanently poisons `tracing`'s per-callsite interest cache against a
+    // `with_default`-based test living in this file (validator.md, iter 1).
 
     // ── drop_handle_removes_socket_file ───────────────────────────────────────
 
