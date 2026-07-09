@@ -4,11 +4,9 @@ use engine_core::Inspectable;
 
 use crate::transform::VerticalAnchor;
 
-mod free_roam;
 mod orthographic;
 mod perspective;
 
-pub use free_roam::FreeRoamCamera;
 pub use orthographic::OrthographicCamera;
 pub use perspective::PerspectiveCamera;
 
@@ -51,7 +49,7 @@ pub trait Camera {
     /// elevation checks (spec 42 Decision 1). Default `90.0` (flat/
     /// straight-down, no elevation) — correct for
     /// `OrthographicCamera`; overridden by `PerspectiveCamera`, which
-    /// carries a real elevation field.
+    /// carries a real pitch field.
     fn elevation_deg(&self) -> f32 {
         90.0
     }
@@ -63,26 +61,6 @@ pub trait Camera {
     fn local_dots_per_world_unit(&self, pos: WorldPos) -> f32;
 }
 
-/// Which world axis is "depth" (compressed by elevation, into the screen);
-/// the other axis becomes screen-x unchanged (spec 39 Decision 1).
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum DepthAxis {
-    Row,
-    Col,
-}
-
-/// Splits a world position into `(depth, spread)` per `depth_axis`: `Row` puts
-/// world-y (team-separation axis) on depth, world-x on spread (screen-x);
-/// `Col` is the reverse. Module-level `pub` — reused by `PerspectiveCamera`'s
-/// `cam_forward_raw`. b6-t1's `depth_scale_factor` (game crate) derives its
-/// scale from `PerspectiveCamera::forward_distance` instead, not this.
-pub fn axis_values(depth_axis: DepthAxis, pos: WorldPos) -> (f32, f32) {
-    match depth_axis {
-        DepthAxis::Row => (pos.y, pos.x),
-        DepthAxis::Col => (pos.x, pos.y),
-    }
-}
-
 /// Small positive floor on the perspective-divide forward term: prevents
 /// divide-by-zero and sign-flip when a point is at/behind the camera plane.
 /// Divide-safety floor, not a visual-tuning constant (spec 41 Decision 1).
@@ -90,11 +68,13 @@ const NEAR_EPS: f32 = 0.01;
 
 /// One value type over the engine's projection kinds — the single exhaustive
 /// match on "which camera kind" for rendering behavior (spec 42 Decision 2).
+/// Exactly 2 variants (spec 42 Decision 4 consolidation, b2-t1): the former
+/// dev-only `FreeRoam` kind folded into `Perspective` — same shape, same
+/// formula, no separate variant.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum AnyCamera {
     Orthographic(OrthographicCamera),
     Perspective(PerspectiveCamera),
-    FreeRoam(FreeRoamCamera),
 }
 
 impl Camera for AnyCamera {
@@ -102,7 +82,6 @@ impl Camera for AnyCamera {
         match self {
             AnyCamera::Orthographic(c) => c.project(pos),
             AnyCamera::Perspective(c) => c.project(pos),
-            AnyCamera::FreeRoam(c) => c.project(pos),
         }
     }
 
@@ -110,7 +89,6 @@ impl Camera for AnyCamera {
         match self {
             AnyCamera::Orthographic(c) => c.depth_key(pos),
             AnyCamera::Perspective(c) => c.depth_key(pos),
-            AnyCamera::FreeRoam(c) => c.depth_key(pos),
         }
     }
 
@@ -118,7 +96,6 @@ impl Camera for AnyCamera {
         match self {
             AnyCamera::Orthographic(c) => c.vertical_anchor_hint(),
             AnyCamera::Perspective(c) => c.vertical_anchor_hint(),
-            AnyCamera::FreeRoam(c) => c.vertical_anchor_hint(),
         }
     }
 
@@ -126,7 +103,6 @@ impl Camera for AnyCamera {
         match self {
             AnyCamera::Orthographic(c) => c.elevation_deg(),
             AnyCamera::Perspective(c) => c.elevation_deg(),
-            AnyCamera::FreeRoam(c) => c.elevation_deg(),
         }
     }
 
@@ -134,7 +110,6 @@ impl Camera for AnyCamera {
         match self {
             AnyCamera::Orthographic(c) => c.local_dots_per_world_unit(pos),
             AnyCamera::Perspective(c) => c.local_dots_per_world_unit(pos),
-            AnyCamera::FreeRoam(c) => c.local_dots_per_world_unit(pos),
         }
     }
 }
@@ -146,7 +121,6 @@ impl AnyCamera {
         match self {
             AnyCamera::Orthographic(_) => AnyCamera::Orthographic(OrthographicCamera { scale_dots }),
             AnyCamera::Perspective(c) => AnyCamera::Perspective(PerspectiveCamera { scale_dots, ..*c }),
-            AnyCamera::FreeRoam(c) => AnyCamera::FreeRoam(FreeRoamCamera { scale_dots, ..*c }),
         }
     }
 }
@@ -154,22 +128,7 @@ impl AnyCamera {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::free_roam::free_roam_representative_cam;
     use super::perspective::representative_cam;
-
-    /// `axis_values(Col, pos)` must put world-x on depth and world-y on
-    /// spread — the reverse of `Row`. Still exercised directly here since
-    /// `PerspectiveCamera` (not `OrthographicCamera`) is `axis_values`'s
-    /// remaining consumer.
-    #[test]
-    fn sideline_depth_axis_is_col() {
-        let pos = WorldPos::new(3.0, 5.0);
-        assert_eq!(
-            axis_values(DepthAxis::Col, pos),
-            (3.0, 5.0),
-            "Col depth axis: depth=x, spread=y"
-        );
-    }
 
     // ── PerspectiveCamera (b2-t1) ───────────────────────────────────────────
 
@@ -217,27 +176,6 @@ mod tests {
         assert_ne!(any.elevation_deg(), 90.0, "must forward the real override, not the trait default");
     }
 
-    /// Every `AnyCamera::FreeRoam` trait-method call must equal calling the
-    /// same method directly on the wrapped concrete camera — including the
-    /// two DEFAULTED methods (mirrors the Perspective case above).
-    #[test]
-    fn any_camera_free_roam_delegates_to_wrapped() {
-        let concrete = free_roam_representative_cam();
-        let any = AnyCamera::FreeRoam(concrete);
-        for pos in [WorldPos::new(2.0, 6.0), WorldPos::new(-1.0, 3.0)] {
-            assert_eq!(any.project(pos), concrete.project(pos));
-            assert_eq!(any.depth_key(pos), concrete.depth_key(pos));
-            assert_eq!(
-                any.local_dots_per_world_unit(pos),
-                concrete.local_dots_per_world_unit(pos)
-            );
-        }
-        assert_eq!(any.vertical_anchor_hint(), concrete.vertical_anchor_hint());
-        assert_eq!(any.vertical_anchor_hint(), VerticalAnchor::Bottom);
-        assert_eq!(any.elevation_deg(), concrete.elevation_deg());
-        assert_ne!(any.elevation_deg(), 90.0, "must forward the real override, not the trait default");
-    }
-
     /// `with_scale_dots` on an `Orthographic` variant returns the same
     /// variant with only `scale_dots` replaced.
     #[test]
@@ -248,8 +186,8 @@ mod tests {
     }
 
     /// `with_scale_dots` on a `Perspective` variant preserves every other
-    /// field (`facing_sign`/`depth_axis`/`camera_depth`/`camera_height`/
-    /// `spread_center`/`fov_deg`), replacing only `scale_dots`.
+    /// field (`x`/`y`/`height`/`yaw_deg`/`pitch_deg`/`fov_deg`), replacing
+    /// only `scale_dots`.
     #[test]
     fn any_camera_with_scale_dots_perspective_preserves_other_fields() {
         let cam = representative_cam();
@@ -258,20 +196,6 @@ mod tests {
         assert_eq!(
             updated,
             AnyCamera::Perspective(PerspectiveCamera { scale_dots: 99.0, ..cam })
-        );
-    }
-
-    /// `with_scale_dots` on a `FreeRoam` variant preserves every other field
-    /// (`x`/`y`/`height`/`yaw_deg`/`pitch_deg`/`fov_deg`), replacing only
-    /// `scale_dots`.
-    #[test]
-    fn any_camera_with_scale_dots_free_roam_preserves_other_fields() {
-        let cam = free_roam_representative_cam();
-        let any = AnyCamera::FreeRoam(cam);
-        let updated = any.with_scale_dots(123.0);
-        assert_eq!(
-            updated,
-            AnyCamera::FreeRoam(FreeRoamCamera { scale_dots: 123.0, ..cam })
         );
     }
 }

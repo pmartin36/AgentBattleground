@@ -2,7 +2,7 @@ use super::*;
 
 /// Sample density for `rasterize_grid_line`, in samples per world unit along
 /// a line's length. `4` (spacing `0.25`) lands a sample exactly on every
-/// non-Top-Down preset's half-integer `camera_depth` anchor (Over-shoulder
+/// non-Top-Down preset's half-integer depth-coordinate anchor (Over-shoulder
 /// `6.5`, Sideline `3.5`), so perspective convergence near that anchor is
 /// sampled precisely rather than approximated (b4-t1).
 const GRID_LINE_SAMPLES_PER_UNIT: usize = 4;
