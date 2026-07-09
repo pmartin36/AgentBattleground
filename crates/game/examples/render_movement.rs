@@ -1,7 +1,7 @@
 //! render_movement — wandering wizards (dot-compositor-camera demo).
 //!
 //! Three wizards drift along deterministic Lissajous paths in world x/y through
-//! the full dot-level pipeline: world position → SideView camera → dot offset →
+//! the full dot-level pipeline: world position → OrthographicCamera camera → dot offset →
 //! DotBuffer compositor → braille → terminal. Because `depth = screen-y`, a
 //! wizard moving down in y passes IN FRONT OF one higher up, so occlusion
 //! updates live — and the motion is sub-cell (dot-granularity), not cell-snapping.
@@ -28,7 +28,7 @@ use serde_json::Value as JsonValue;
 
 use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use game::scene_id::SceneId;
-use engine_render::camera::{Camera, SideView, WorldPos};
+use engine_render::camera::{Camera, OrthographicCamera, WorldPos};
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -89,7 +89,7 @@ struct Wizard {
 
 struct RenderMovementScene {
     wizards: Vec<Wizard>,
-    camera: SideView,
+    camera: OrthographicCamera,
     elapsed: Duration,
     no_inspect: engine_core::scene::NoInspect,
 }
@@ -109,7 +109,7 @@ impl RenderMovementScene {
             .collect();
         RenderMovementScene {
             wizards,
-            camera: SideView::new(SCALE_DOTS),
+            camera: OrthographicCamera::new(SCALE_DOTS),
             elapsed: Duration::ZERO,
             no_inspect: engine_core::scene::NoInspect,
         }

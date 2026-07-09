@@ -7,12 +7,10 @@ use crate::transform::VerticalAnchor;
 mod free_roam;
 mod orthographic;
 mod perspective;
-mod side_view;
 
 pub use free_roam::FreeRoamCamera;
 pub use orthographic::OrthographicCamera;
 pub use perspective::PerspectiveCamera;
-pub use side_view::SideView;
 
 /// Continuous 2D world position. Units are game-defined (spec 16).
 #[derive(Clone, Copy, PartialEq, Debug, Inspectable)]
@@ -42,7 +40,7 @@ pub trait Camera {
 
     /// Vertical billboard-anchor hint for this camera kind (spec 42 Decision
     /// 1). Default `Center` — correct for cameras with no meaningful
-    /// "ground plane" concept (`SideView`, `OrthographicCamera`); overridden
+    /// "ground plane" concept (`OrthographicCamera`); overridden
     /// by ground-relative cameras (`PerspectiveCamera`) that anchor sprites'
     /// feet to the point instead.
     fn vertical_anchor_hint(&self) -> VerticalAnchor {
@@ -51,7 +49,7 @@ pub trait Camera {
 
     /// This camera's pitch, in degrees, for `grid_line_color`-style
     /// elevation checks (spec 42 Decision 1). Default `90.0` (flat/
-    /// straight-down, no elevation) — correct for `SideView`/
+    /// straight-down, no elevation) — correct for
     /// `OrthographicCamera`; overridden by `PerspectiveCamera`, which
     /// carries a real elevation field.
     fn elevation_deg(&self) -> f32 {
@@ -60,7 +58,7 @@ pub trait Camera {
 
     /// Dots per world unit AT `pos` specifically — required, no sensible
     /// universal default (spec 42 Decision 1). Constant cameras
-    /// (`SideView`/`OrthographicCamera`) return their fixed `scale_dots`;
+    /// (`OrthographicCamera`) return their fixed `scale_dots`;
     /// perspective cameras shrink this with distance from the camera.
     fn local_dots_per_world_unit(&self, pos: WorldPos) -> f32;
 }
