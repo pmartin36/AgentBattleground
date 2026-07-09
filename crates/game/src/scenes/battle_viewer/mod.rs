@@ -287,3 +287,202 @@ pub(crate) use grid::*;
 
 #[cfg(test)]
 mod scene_integration_tests;
+
+#[cfg(test)]
+mod creature_sourcing_tests {
+    use super::*;
+
+    /// DELIVERABLE (primary): `BattleViewer::default().creatures` is exactly
+    /// `crate::creatures::all()`, in order — proves each `Piece.index` maps
+    /// 1:1 to a distinct bundled creature, not one shared sprite.
+    #[test]
+    fn default_creatures_match_creatures_all_in_order() {
+        let scene = BattleViewer::default();
+        let expected: Vec<String> = crate::creatures::all()
+            .iter()
+            .map(|c| c.name().to_string())
+            .collect();
+        let actual: Vec<String> = scene.creatures.iter().map(|c| c.name().to_string()).collect();
+
+        assert_eq!(
+            actual, expected,
+            "BattleViewer::default().creatures must equal crate::creatures::all(), in order"
+        );
+    }
+
+    /// DELIVERABLE: `piece_sprite(p.index)` resolves to `Some` (the piece's
+    /// own idle animation) for every piece the scene starts with — the
+    /// per-piece draw loop must have a distinct sprite source for each of
+    /// the 8 seeded pieces, not a shared fallback.
+    #[test]
+    fn piece_sprite_is_some_for_every_seeded_piece_index() {
+        let scene = BattleViewer::default();
+
+        for p in &scene.pieces {
+            assert!(
+                scene.piece_sprite(p.index).is_some(),
+                "piece_sprite({}) must be Some for every seeded piece index",
+                p.index
+            );
+        }
+    }
+
+    /// DELIVERABLE (render-seam distinctness): two different piece indices
+    /// resolve to two different creatures' idle sprites (by name lookup
+    /// through `creatures::all()`), not the same shared sprite instance.
+    #[test]
+    fn piece_sprite_differs_by_index_across_distinct_creatures() {
+        let scene = BattleViewer::default();
+
+        let all = crate::creatures::all();
+        assert_ne!(
+            all[0].name(),
+            all[1].name(),
+            "sanity: creatures::all()[0] and [1] must be distinct creatures"
+        );
+
+        let sprite0 = scene
+            .piece_sprite(0)
+            .expect("piece_sprite(0) must be Some");
+        let sprite1 = scene
+            .piece_sprite(1)
+            .expect("piece_sprite(1) must be Some");
+
+        assert_ne!(
+            sprite0.frame_count(),
+            0,
+            "sanity: index-0 sprite must have at least one frame"
+        );
+        assert_ne!(
+            sprite1.frame_count(),
+            0,
+            "sanity: index-1 sprite must have at least one frame"
+        );
+
+        // The two pieces' underlying creatures must be genuinely distinct
+        // (per `scene.creatures[0].name() != scene.creatures[1].name()`),
+        // proving `piece_sprite` sources per-index art rather than one
+        // shared sprite repeated across every piece.
+        assert_ne!(
+            scene.creatures[0].name(),
+            scene.creatures[1].name(),
+            "piece_sprite(0) and piece_sprite(1) must source from distinct creatures"
+        );
+    }
+}
+
+#[cfg(test)]
+mod controls_help_tests {
+    use super::*;
+    use crate::scenes::test_util::{key_event, rect_text, render_to_buffer};
+    use crossterm::event::KeyCode;
+    use engine_render::diff_dots;
+    use ratatui::buffer::Buffer;
+
+    const HINT: &str = "press t to toggle controls";
+
+    /// Every cell of `buf`, concatenated row-major with no separators —
+    /// enough to assert a single-line label's text appears somewhere,
+    /// regardless of exactly which row/column it landed on.
+    fn full_text(buf: &Buffer) -> String {
+        rect_text(buf, buf.area)
+    }
+
+    /// Default state: the one-line hint is always visible; the expanded
+    /// panel is not (nothing toggled it on yet).
+    #[test]
+    fn hint_visible_by_default_expanded_panel_is_not() {
+        let scene = BattleViewer::default();
+        assert!(!scene.show_controls_help);
+
+        let buf = render_to_buffer(&scene, 80, 40);
+        let text = full_text(&buf);
+        assert!(text.contains(HINT), "expected hint {HINT:?} in default render, got {text:?}");
+        assert!(
+            !text.contains("Sideline"),
+            "expanded panel (camera-mode key reference) must not appear before toggling"
+        );
+    }
+
+    /// Pressing lowercase 't' toggles `show_controls_help` on, and the
+    /// rendered output then includes the expanded panel's always-present
+    /// camera-mode key reference alongside the hint.
+    #[test]
+    fn t_toggles_expanded_panel_showing_camera_modes() {
+        let mut scene = BattleViewer::default();
+
+        scene.handle_input(key_event(KeyCode::Char('t')));
+        assert!(scene.show_controls_help);
+
+        let buf = render_to_buffer(&scene, 80, 40);
+        let text = full_text(&buf);
+        assert!(text.contains(HINT));
+        assert!(text.contains("Sideline"));
+        assert!(text.contains("Over-the-shoulder"));
+        assert!(text.contains("Top-down"));
+        assert!(text.contains("Free-roam"));
+    }
+
+    /// Uppercase 'T' also toggles, matching the case-insensitivity of the
+    /// free-roam movement keys.
+    #[test]
+    fn uppercase_t_also_toggles() {
+        let mut scene = BattleViewer::default();
+        scene.handle_input(key_event(KeyCode::Char('T')));
+        assert!(scene.show_controls_help, "'T' (uppercase) must toggle the help panel too");
+    }
+
+    /// Toggling 't' twice returns to the untoggled state: the field is back
+    /// to `false`, and the rendered output (both the plain-text cells and
+    /// the board's own braille dots) is identical to a render that was
+    /// never toggled at all.
+    #[test]
+    fn toggling_twice_returns_to_untoggled_state() {
+        let scene = BattleViewer::default();
+        let before = render_to_buffer(&scene, 80, 40);
+
+        let mut toggled_twice = BattleViewer::default();
+        toggled_twice.handle_input(key_event(KeyCode::Char('t')));
+        toggled_twice.handle_input(key_event(KeyCode::Char('t')));
+        assert!(!toggled_twice.show_controls_help);
+
+        let after = render_to_buffer(&toggled_twice, 80, 40);
+        assert!(
+            diff_dots(&before, &after).is_match(),
+            "board dots must be identical after toggling 't' twice"
+        );
+        assert_eq!(
+            full_text(&before),
+            full_text(&after),
+            "help text must be identical after toggling 't' twice"
+        );
+    }
+
+    /// The movement-scheme line only appears while BOTH the panel is
+    /// expanded AND the camera is currently in Free-roam — never under a
+    /// fixed preset, even with the panel expanded.
+    #[test]
+    fn movement_scheme_only_shown_in_free_roam() {
+        let mut free_roam_scene = BattleViewer {
+            camera_mode: BattleCamera::free_roam_preset(),
+            ..Default::default()
+        };
+        free_roam_scene.handle_input(key_event(KeyCode::Char('t')));
+        let free_roam_text = full_text(&render_to_buffer(&free_roam_scene, 80, 40));
+        assert!(
+            free_roam_text.contains("wasd"),
+            "expected the movement scheme in the expanded panel while in Free-roam"
+        );
+
+        let mut sideline_scene = BattleViewer {
+            camera_mode: BattleCamera::sideline_preset(),
+            ..Default::default()
+        };
+        sideline_scene.handle_input(key_event(KeyCode::Char('t')));
+        let sideline_text = full_text(&render_to_buffer(&sideline_scene, 80, 40));
+        assert!(
+            !sideline_text.contains("wasd"),
+            "movement scheme must not appear under a fixed (non-Free-roam) preset"
+        );
+    }
+}
