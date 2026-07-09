@@ -399,6 +399,11 @@ mod tests {
         fn depth_key(&self, pos: WorldPos) -> i32 {
             pos.x as i32
         }
+        // Arbitrary constant (b2-t1): this mock exists only to force fixed
+        // screen coords at distinct depths — no test exercises this method.
+        fn local_dots_per_world_unit(&self, _pos: WorldPos) -> f32 {
+            1.0
+        }
     }
 
     /// Extract `(ch-agnostic) color` from a `Cell::Glyph`, panicking with a

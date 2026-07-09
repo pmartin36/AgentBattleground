@@ -2,6 +2,8 @@
 
 use engine_core::Inspectable;
 
+use crate::transform::VerticalAnchor;
+
 /// Continuous 2D world position. Units are game-defined (spec 16).
 #[derive(Clone, Copy, PartialEq, Debug, Inspectable)]
 pub struct WorldPos {
@@ -27,6 +29,30 @@ pub trait Camera {
 
     /// Back-to-front sort key: larger = nearer (drawn on top).
     fn depth_key(&self, pos: WorldPos) -> i32;
+
+    /// Vertical billboard-anchor hint for this camera kind (spec 42 Decision
+    /// 1). Default `Center` — correct for cameras with no meaningful
+    /// "ground plane" concept (`SideView`, `OrthographicCamera`); overridden
+    /// by ground-relative cameras (`PerspectiveCamera`) that anchor sprites'
+    /// feet to the point instead.
+    fn vertical_anchor_hint(&self) -> VerticalAnchor {
+        VerticalAnchor::Center
+    }
+
+    /// This camera's pitch, in degrees, for `grid_line_color`-style
+    /// elevation checks (spec 42 Decision 1). Default `90.0` (flat/
+    /// straight-down, no elevation) — correct for `SideView`/
+    /// `OrthographicCamera`; overridden by `PerspectiveCamera`, which
+    /// carries a real elevation field.
+    fn elevation_deg(&self) -> f32 {
+        90.0
+    }
+
+    /// Dots per world unit AT `pos` specifically — required, no sensible
+    /// universal default (spec 42 Decision 1). Constant cameras
+    /// (`SideView`/`OrthographicCamera`) return their fixed `scale_dots`;
+    /// perspective cameras shrink this with distance from the camera.
+    fn local_dots_per_world_unit(&self, pos: WorldPos) -> f32;
 }
 
 /// Side-view camera. `scale_dots` = dots per world unit.
@@ -51,6 +77,10 @@ impl Camera for SideView {
 
     fn depth_key(&self, pos: WorldPos) -> i32 {
         (pos.y * self.scale_dots).round() as i32
+    }
+
+    fn local_dots_per_world_unit(&self, _pos: WorldPos) -> f32 {
+        self.scale_dots
     }
 }
 
@@ -92,6 +122,10 @@ impl Camera for OrthographicCamera {
 
     fn depth_key(&self, pos: WorldPos) -> i32 {
         (pos.y * self.scale_dots).round() as i32
+    }
+
+    fn local_dots_per_world_unit(&self, _pos: WorldPos) -> f32 {
+        self.scale_dots
     }
 }
 
@@ -189,6 +223,18 @@ impl Camera for PerspectiveCamera {
 
     fn depth_key(&self, pos: WorldPos) -> i32 {
         (-self.cam_forward_raw(pos) * self.scale_dots).round() as i32
+    }
+
+    fn local_dots_per_world_unit(&self, pos: WorldPos) -> f32 {
+        self.dots_per_world_unit(self.forward_distance(pos))
+    }
+
+    fn vertical_anchor_hint(&self) -> VerticalAnchor {
+        VerticalAnchor::Bottom
+    }
+
+    fn elevation_deg(&self) -> f32 {
+        self.elevation_deg
     }
 }
 
@@ -476,5 +522,89 @@ mod tests {
         let cam = representative_cam();
         let (x, _) = cam.project(WorldPos::new(cam.spread_center, 0.0));
         assert_eq!(x, 0, "point on the aim line must project to screen_x == 0");
+    }
+
+    // ── Camera trait defaults + per-kind overrides (b2-t1, spec 42 Decision 1) ─
+
+    /// `SideView::local_dots_per_world_unit` must equal `scale_dots`,
+    /// independent of `pos`.
+    #[test]
+    fn sideview_local_dots_per_world_unit_is_constant_scale_dots() {
+        let cam = SideView::new(7.0);
+        assert_eq!(cam.local_dots_per_world_unit(WorldPos::new(0.0, 0.0)), 7.0);
+        assert_eq!(cam.local_dots_per_world_unit(WorldPos::new(100.0, -50.0)), 7.0);
+    }
+
+    /// `SideView` takes the trait defaults: `Center` anchor, `90.0` elevation.
+    #[test]
+    fn sideview_defaults_center_and_90() {
+        let cam = SideView::new(7.0);
+        assert_eq!(cam.vertical_anchor_hint(), VerticalAnchor::Center);
+        assert_eq!(cam.elevation_deg(), 90.0);
+    }
+
+    /// `OrthographicCamera::local_dots_per_world_unit` must equal
+    /// `scale_dots`, independent of `pos`.
+    #[test]
+    fn orthographic_local_dots_per_world_unit_is_constant_scale_dots() {
+        let cam = OrthographicCamera { scale_dots: 5.0 };
+        assert_eq!(cam.local_dots_per_world_unit(WorldPos::new(0.0, 0.0)), 5.0);
+        assert_eq!(cam.local_dots_per_world_unit(WorldPos::new(-3.0, 9.0)), 5.0);
+    }
+
+    /// `OrthographicCamera` takes the trait defaults: `Center` anchor,
+    /// `90.0` elevation.
+    #[test]
+    fn orthographic_defaults_center_and_90() {
+        let cam = OrthographicCamera { scale_dots: 5.0 };
+        assert_eq!(cam.vertical_anchor_hint(), VerticalAnchor::Center);
+        assert_eq!(cam.elevation_deg(), 90.0);
+    }
+
+    /// `PerspectiveCamera::local_dots_per_world_unit(pos)` must equal
+    /// `dots_per_world_unit(forward_distance(pos))` exactly — the same
+    /// already-validated pipeline, exposed through the trait.
+    #[test]
+    fn perspective_local_dots_per_world_unit_matches_forward_distance_pipeline() {
+        let cam = representative_cam();
+        for pos in [WorldPos::new(0.0, 0.0), WorldPos::new(2.0, 4.0)] {
+            let expected = cam.dots_per_world_unit(cam.forward_distance(pos));
+            assert_eq!(
+                cam.local_dots_per_world_unit(pos),
+                expected,
+                "local_dots_per_world_unit(pos={pos:?}) must match dots_per_world_unit(forward_distance(pos))"
+            );
+        }
+    }
+
+    /// A nearer position must yield a strictly larger per-world-unit rate
+    /// than a farther one (mirrors the shrink-with-distance semantic).
+    #[test]
+    fn perspective_local_dots_shrinks_with_distance() {
+        let cam = representative_cam();
+        let near = cam.local_dots_per_world_unit(WorldPos::new(0.0, 0.0));
+        let far = cam.local_dots_per_world_unit(WorldPos::new(0.0, 6.0));
+        assert!(
+            near > far,
+            "nearer position must yield a strictly larger local_dots_per_world_unit: near={near} far={far}"
+        );
+    }
+
+    /// `PerspectiveCamera` overrides `vertical_anchor_hint` to `Bottom`
+    /// (ground-relative camera; sprites' feet anchor to the point).
+    #[test]
+    fn perspective_vertical_anchor_hint_is_bottom() {
+        let cam = representative_cam();
+        assert_eq!(cam.vertical_anchor_hint(), VerticalAnchor::Bottom);
+    }
+
+    /// `PerspectiveCamera` overrides `elevation_deg` to return its own
+    /// `elevation_deg` field — proven with a value != 90.0 (the trait
+    /// default) so the assertion can't pass by accident.
+    #[test]
+    fn perspective_elevation_deg_returns_field() {
+        let cam = representative_cam();
+        assert_ne!(cam.elevation_deg, 90.0, "test fixture must use a non-default elevation");
+        assert_eq!(cam.elevation_deg(), cam.elevation_deg);
     }
 }

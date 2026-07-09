@@ -72,6 +72,10 @@ impl Camera for FramedCamera {
     fn depth_key(&self, pos: WorldPos) -> i32 {
         self.camera.depth_key(pos)
     }
+
+    fn local_dots_per_world_unit(&self, pos: WorldPos) -> f32 {
+        self.camera.local_dots_per_world_unit(pos)
+    }
 }
 
 impl BoardGeometry {
@@ -389,6 +393,24 @@ impl Camera for BattleCamera {
             BattleCamera::OverShoulder(c) => c.depth_key(pos),
         }
     }
+
+    /// Dots per world unit AT `pos` specifically (not a single near-reference
+    /// value like `sprite_scale_dots`) — i.e. "how many dots wide is exactly
+    /// one board cell, right where this piece actually stands." `TopDown` is
+    /// constant everywhere (`c.scale_dots`); `Sideline`/`OverShoulder` shrink
+    /// with distance from the camera, using the piece's own `forward_distance`
+    /// rather than a shared reference point. This is what per-piece sprite
+    /// and shadow sizing key off so they shrink smoothly with distance
+    /// instead of using one flat per-frame size for every piece regardless
+    /// of how far away it actually is.
+    fn local_dots_per_world_unit(&self, pos: WorldPos) -> f32 {
+        match self {
+            BattleCamera::TopDown(c) => c.scale_dots,
+            BattleCamera::Sideline(c) | BattleCamera::OverShoulder(c) => {
+                c.dots_per_world_unit(c.forward_distance(pos))
+            }
+        }
+    }
 }
 
 impl BattleCamera {
@@ -411,24 +433,6 @@ impl BattleCamera {
             BattleCamera::TopDown(c) => c.scale_dots,
             BattleCamera::Sideline(c) | BattleCamera::OverShoulder(c) => {
                 c.dots_per_world_unit(near_reference_forward_distance(c))
-            }
-        }
-    }
-
-    /// Dots per world unit AT `pos` specifically (not a single near-reference
-    /// value like `sprite_scale_dots`) — i.e. "how many dots wide is exactly
-    /// one board cell, right where this piece actually stands." `TopDown` is
-    /// constant everywhere (`c.scale_dots`); `Sideline`/`OverShoulder` shrink
-    /// with distance from the camera, using the piece's own `forward_distance`
-    /// rather than a shared reference point. This is what per-piece sprite
-    /// and shadow sizing key off so they shrink smoothly with distance
-    /// instead of using one flat per-frame size for every piece regardless
-    /// of how far away it actually is.
-    pub fn local_dots_per_world_unit(&self, pos: WorldPos) -> f32 {
-        match self {
-            BattleCamera::TopDown(c) => c.scale_dots,
-            BattleCamera::Sideline(c) | BattleCamera::OverShoulder(c) => {
-                c.dots_per_world_unit(c.forward_distance(pos))
             }
         }
     }
