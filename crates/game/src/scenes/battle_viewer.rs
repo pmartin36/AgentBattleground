@@ -136,13 +136,28 @@ pub fn board_geometry(area: Rect, mode: BattleCamera, tuning: BattleViewerTuning
             let cell_width_cols = (area.width / BOARD_COLS).max(1);
             let cell_height_rows = (area.height / BOARD_ROWS).max(1);
 
+            // NOT `(0, 0)`: free-roam deliberately has no auto-fit-to-content
+            // (the whole point is the user controls framing directly — spec
+            // 42 Decision 5), but a raw `project()` result of `(0, 0)`
+            // (looking at the camera's own aim point) still needs to land
+            // SOMEWHERE — an unshifted origin puts it at the buffer's
+            // top-left corner, not the middle of the screen, so entering
+            // free-roam rendered as a tiny wedge jammed in one corner
+            // (shipped bug). Centering the origin doesn't reintroduce any
+            // scale-fitting — `scale_dots` is still whatever the camera
+            // itself carries, untouched.
+            let screen_offset = (
+                (board_rect.width as i32 * 2) / 2,
+                (board_rect.height as i32 * 4) / 2,
+            );
+
             BoardGeometry {
                 cell_width_cols,
                 cell_height_rows,
                 board_rect,
                 camera: mode,
                 tuning,
-                screen_offset: (0, 0),
+                screen_offset,
             }
         }
     }
@@ -1185,6 +1200,13 @@ pub struct BattleViewer {
     /// Camera-dependent rendering tuning constants (b2-t1). Not yet consumed
     /// by any renderer — wired in by b3-t1/b4-t2/b6-t1/b7-t1.
     pub tuning: BattleViewerTuning,
+    /// Toggled by `t`/`T` in `handle_input` (case-insensitive, like the
+    /// free-roam movement keys). Controls whether `render()` draws just the
+    /// one-line "press t to toggle controls" hint (top-right corner) or
+    /// also the expanded key-scheme reference beneath it. Debug/dev HUD
+    /// state, not part of the inspectable surface.
+    #[inspect(hidden)]
+    show_controls_help: bool,
 }
 
 impl Default for BattleViewer {
@@ -1200,6 +1222,7 @@ impl Default for BattleViewer {
             settled_events: std::collections::HashSet::new(),
             camera_mode: Self::default_camera_mode(),
             tuning: BattleViewerTuning::default(),
+            show_controls_help: false,
         }
     }
 }
@@ -1431,27 +1454,72 @@ impl BattleViewer {
         }
     }
 
-    /// Discrete-nudge free-roam movement keys (spec 42 Decision 5). One
-    /// effect per keypress, no continuous/velocity state. Keys are
-    /// UPPERCASE — lowercase `'q'` is intercepted upstream by
-    /// `SceneManager::route_key` as the global quit signal, so a lowercase
-    /// yaw key would never reach here.
+    /// Discrete-nudge free-roam movement keys (spec 42 Decision 5, revised).
+    /// One effect per keypress, no continuous/velocity state.
+    ///
+    /// Move/height letter keys are matched case-insensitively (`'w'` and
+    /// `'W'` both apply): `crossterm` reports the literal character a
+    /// keypress produces, which is lowercase for a normal press (no shift)
+    /// and uppercase with shift/caps-lock — the original all-uppercase
+    /// scheme meant a normal keypress matched NOTHING here (shipped bug: "I
+    /// press the keys but nothing happens"), and matching lowercase only
+    /// would reintroduce the same class of bug for shift/caps-lock users.
+    /// Yaw/pitch are on the arrow keys, not letters at all: lowercase `'q'`
+    /// specifically is intercepted upstream by `SceneManager::route_key` as
+    /// the global quit signal before it ever reaches a scene, so no key
+    /// scheme reachable by normal typing could ever put a real action on
+    /// `q` — confirmed with the project owner that `q`/`Q` must never be
+    /// bound to anything here. Arrow keys have no case and no such
+    /// conflict.
     fn nudge_free_roam(cam: &mut FreeRoamCamera, code: crossterm::event::KeyCode) {
         use crossterm::event::KeyCode;
         match code {
-            KeyCode::Char('W') => cam.nudge(0.5, 0.0, 0.0, 0.0, 0.0),
-            KeyCode::Char('S') => cam.nudge(-0.5, 0.0, 0.0, 0.0, 0.0),
-            KeyCode::Char('D') => cam.nudge(0.0, 0.5, 0.0, 0.0, 0.0),
-            KeyCode::Char('A') => cam.nudge(0.0, -0.5, 0.0, 0.0, 0.0),
-            KeyCode::Char('E') => cam.nudge(0.0, 0.0, 5.0, 0.0, 0.0),
-            KeyCode::Char('Q') => cam.nudge(0.0, 0.0, -5.0, 0.0, 0.0),
-            KeyCode::Char('R') => cam.nudge(0.0, 0.0, 0.0, 5.0, 0.0),
-            KeyCode::Char('F') => cam.nudge(0.0, 0.0, 0.0, -5.0, 0.0),
-            KeyCode::Char('X') => cam.nudge(0.0, 0.0, 0.0, 0.0, 0.5),
-            KeyCode::Char('Z') => cam.nudge(0.0, 0.0, 0.0, 0.0, -0.5),
+            KeyCode::Char('w') | KeyCode::Char('W') => cam.nudge(0.5, 0.0, 0.0, 0.0, 0.0),
+            KeyCode::Char('s') | KeyCode::Char('S') => cam.nudge(-0.5, 0.0, 0.0, 0.0, 0.0),
+            KeyCode::Char('d') | KeyCode::Char('D') => cam.nudge(0.0, 0.5, 0.0, 0.0, 0.0),
+            KeyCode::Char('a') | KeyCode::Char('A') => cam.nudge(0.0, -0.5, 0.0, 0.0, 0.0),
+            KeyCode::Right => cam.nudge(0.0, 0.0, 5.0, 0.0, 0.0),
+            KeyCode::Left => cam.nudge(0.0, 0.0, -5.0, 0.0, 0.0),
+            KeyCode::Up => cam.nudge(0.0, 0.0, 0.0, 5.0, 0.0),
+            KeyCode::Down => cam.nudge(0.0, 0.0, 0.0, -5.0, 0.0),
+            KeyCode::Char('x') | KeyCode::Char('X') => cam.nudge(0.0, 0.0, 0.0, 0.0, 0.5),
+            KeyCode::Char('z') | KeyCode::Char('Z') => cam.nudge(0.0, 0.0, 0.0, 0.0, -0.5),
             KeyCode::Char(']') => cam.scale_dots *= 1.1,
             KeyCode::Char('[') => cam.scale_dots *= 0.9,
             _ => {}
+        }
+    }
+
+    /// Plain-terminal-text color for the controls-help hint/panel (CLAUDE.md:
+    /// text always stays plain characters, never the dot pipeline).
+    const HELP_TEXT_COLOR: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
+
+    /// Draws the always-visible one-line "press t to toggle controls" hint
+    /// in `area`'s top-right corner, plus — only while
+    /// `show_controls_help` is toggled on — the expanded key-scheme
+    /// reference beneath it: camera-mode keys always, and (only while
+    /// currently in Free-roam) the movement scheme too. Plain `Buffer`
+    /// text, not the braille/dot pipeline (CLAUDE.md: text is the one
+    /// exception to "everything renders through the dot pipeline") — drawn
+    /// last in `render()` so it sits on top of the board, and free to
+    /// overwrite whatever board content is beneath it (no background box,
+    /// no dot-pipeline border — not worth the complexity for a debug hint).
+    fn draw_controls_help(&self, buf: &mut Buffer, area: Rect) {
+        let mut lines: Vec<&str> = vec!["press t to toggle controls"];
+        if self.show_controls_help {
+            lines.push("1 Sideline  2 Over-the-shoulder  3 Top-down  4 Free-roam");
+            if matches!(self.camera_mode.camera, AnyCamera::FreeRoam(_)) {
+                lines.push("move wasd  height z/x  look arrow keys  zoom [ ]");
+            }
+        }
+        for (i, line) in lines.iter().enumerate() {
+            let y = area.top() + i as u16;
+            if y >= area.bottom() {
+                break;
+            }
+            let w = (line.chars().count() as u16).min(area.width);
+            let x = area.right().saturating_sub(w);
+            engine_render::label(buf, Rect::new(x, y, w, 1), line, Self::HELP_TEXT_COLOR);
         }
     }
 }
@@ -1484,6 +1552,8 @@ impl Scene for BattleViewer {
         let cam = geom.framed_camera();
         let grid = composite_scene(w, h, &cam, &draws);
         draw_grid(frame.buffer_mut(), geom.board_rect, &grid);
+
+        self.draw_controls_help(frame.buffer_mut(), area);
     }
 
     fn handle_input(&mut self, ev: InputEvent) -> Option<Transition> {
@@ -1500,6 +1570,12 @@ impl Scene for BattleViewer {
                 // position/orientation back to the starting preset.
                 KeyCode::Char('4') if !matches!(self.camera_mode.camera, AnyCamera::FreeRoam(_)) => {
                     self.camera_mode = BattleCamera::free_roam_preset();
+                }
+                // Case-insensitive toggle for the controls-help HUD hint
+                // (never `q`/`Q` — that's the global quit key, intercepted
+                // upstream of this scene entirely).
+                KeyCode::Char('t') | KeyCode::Char('T') => {
+                    self.show_controls_help = !self.show_controls_help;
                 }
                 code => {
                     if let AnyCamera::FreeRoam(fr) = &mut self.camera_mode.camera {
@@ -4498,28 +4574,34 @@ mod handle_input_camera_tests {
         );
     }
 
-    /// spec 42 Decision 5 movement keys (b6-t2): from `AnyCamera::FreeRoam`,
-    /// each of the 12 keys applies exactly its pinned delta to the wrapped
-    /// `FreeRoamCamera` and never requests a transition. Expected values are
-    /// computed by applying the same `nudge`/`scale_dots` op the prod code
-    /// must use, on a copy of the starting camera — this proves the key is
-    /// wired to the exact pinned args, not just "something changed".
+    /// spec 42 Decision 5 movement keys (b6-t2, revised): from
+    /// `AnyCamera::FreeRoam`, each of the 12 keys applies exactly its pinned
+    /// delta to the wrapped `FreeRoamCamera` and never requests a
+    /// transition. Expected values are computed by applying the same
+    /// `nudge`/`scale_dots` op the prod code must use, on a copy of the
+    /// starting camera — this proves the key is wired to the exact pinned
+    /// args, not just "something changed". Move/height keys are the
+    /// lowercase letter (case-insensitivity itself is covered separately by
+    /// `free_roam_letter_keys_are_case_insensitive`); yaw/pitch are the
+    /// arrow keys, never `q`/`e`/`r`/`f` (see `nudge_free_roam`'s doc
+    /// comment for why `q` in particular can never be bound to anything
+    /// here).
     #[test]
     fn free_roam_movement_keys_apply_exact_delta() {
         type NudgeFn = fn(&mut FreeRoamCamera);
-        let cases: [(char, NudgeFn); 12] = [
-            ('W', |c| c.nudge(0.5, 0.0, 0.0, 0.0, 0.0)),
-            ('S', |c| c.nudge(-0.5, 0.0, 0.0, 0.0, 0.0)),
-            ('D', |c| c.nudge(0.0, 0.5, 0.0, 0.0, 0.0)),
-            ('A', |c| c.nudge(0.0, -0.5, 0.0, 0.0, 0.0)),
-            ('E', |c| c.nudge(0.0, 0.0, 5.0, 0.0, 0.0)),
-            ('Q', |c| c.nudge(0.0, 0.0, -5.0, 0.0, 0.0)),
-            ('R', |c| c.nudge(0.0, 0.0, 0.0, 5.0, 0.0)),
-            ('F', |c| c.nudge(0.0, 0.0, 0.0, -5.0, 0.0)),
-            ('X', |c| c.nudge(0.0, 0.0, 0.0, 0.0, 0.5)),
-            ('Z', |c| c.nudge(0.0, 0.0, 0.0, 0.0, -0.5)),
-            (']', |c| c.scale_dots *= 1.1),
-            ('[', |c| c.scale_dots *= 0.9),
+        let cases: [(KeyCode, NudgeFn); 12] = [
+            (KeyCode::Char('w'), |c| c.nudge(0.5, 0.0, 0.0, 0.0, 0.0)),
+            (KeyCode::Char('s'), |c| c.nudge(-0.5, 0.0, 0.0, 0.0, 0.0)),
+            (KeyCode::Char('d'), |c| c.nudge(0.0, 0.5, 0.0, 0.0, 0.0)),
+            (KeyCode::Char('a'), |c| c.nudge(0.0, -0.5, 0.0, 0.0, 0.0)),
+            (KeyCode::Right, |c| c.nudge(0.0, 0.0, 5.0, 0.0, 0.0)),
+            (KeyCode::Left, |c| c.nudge(0.0, 0.0, -5.0, 0.0, 0.0)),
+            (KeyCode::Up, |c| c.nudge(0.0, 0.0, 0.0, 5.0, 0.0)),
+            (KeyCode::Down, |c| c.nudge(0.0, 0.0, 0.0, -5.0, 0.0)),
+            (KeyCode::Char('x'), |c| c.nudge(0.0, 0.0, 0.0, 0.0, 0.5)),
+            (KeyCode::Char('z'), |c| c.nudge(0.0, 0.0, 0.0, 0.0, -0.5)),
+            (KeyCode::Char(']'), |c| c.scale_dots *= 1.1),
+            (KeyCode::Char('['), |c| c.scale_dots *= 0.9),
         ];
 
         for (key, apply) in cases {
@@ -4533,25 +4615,74 @@ mod handle_input_camera_tests {
             let mut expected = start;
             apply(&mut expected);
 
-            let transition = scene.handle_input(key_event(KeyCode::Char(key)));
+            let transition = scene.handle_input(key_event(key));
 
-            assert!(transition.is_none(), "'{key}' must never request a scene transition");
+            assert!(transition.is_none(), "{key:?} must never request a scene transition");
             assert_eq!(
                 scene.camera_mode,
                 BattleCamera { camera: AnyCamera::FreeRoam(expected) },
-                "'{key}' from FreeRoam must apply its pinned delta exactly"
+                "{key:?} from FreeRoam must apply its pinned delta exactly"
             );
         }
     }
 
-    /// spec 42 Decision 5 movement keys (b6-t2): under EACH fixed preset
-    /// (Sideline/OverShoulder/TopDown), every one of the 12 movement keys
-    /// must be a complete no-op — `camera_mode` byte-value unchanged and no
-    /// transition requested. Guards against movement handling leaking into
-    /// fixed-preset behavior.
+    /// Case-insensitivity property (spec 42 Decision 5 revision, explicit
+    /// project-owner requirement): each move/height letter key applies the
+    /// IDENTICAL delta regardless of case, not merely "some mapping exists"
+    /// per case in isolation. Also asserts the key actually changes the
+    /// camera (guards against a vacuously-true comparison if both scenes
+    /// were no-ops).
+    #[test]
+    fn free_roam_letter_keys_are_case_insensitive() {
+        let pairs: [(char, char); 6] =
+            [('w', 'W'), ('s', 'S'), ('d', 'D'), ('a', 'A'), ('x', 'X'), ('z', 'Z')];
+
+        for (lower, upper) in pairs {
+            let mut lower_scene = BattleViewer {
+                camera_mode: BattleCamera::free_roam_preset(),
+                ..Default::default()
+            };
+            lower_scene.handle_input(key_event(KeyCode::Char(lower)));
+
+            let mut upper_scene = BattleViewer {
+                camera_mode: BattleCamera::free_roam_preset(),
+                ..Default::default()
+            };
+            upper_scene.handle_input(key_event(KeyCode::Char(upper)));
+
+            assert_ne!(
+                lower_scene.camera_mode,
+                BattleCamera::free_roam_preset(),
+                "'{lower}' must actually change the camera, not be a no-op"
+            );
+            assert_eq!(
+                lower_scene.camera_mode, upper_scene.camera_mode,
+                "'{lower}' and '{upper}' must apply the identical delta"
+            );
+        }
+    }
+
+    /// spec 42 Decision 5 movement keys (b6-t2, revised): under EACH fixed
+    /// preset (Sideline/OverShoulder/TopDown), every one of the 12 movement
+    /// keys must be a complete no-op — `camera_mode` byte-value unchanged
+    /// and no transition requested. Guards against movement handling
+    /// leaking into fixed-preset behavior.
     #[test]
     fn free_roam_movement_keys_are_noop_under_fixed_presets() {
-        let keys = ['W', 'S', 'D', 'A', 'Q', 'E', 'R', 'F', 'Z', 'X', '[', ']'];
+        let keys = [
+            KeyCode::Char('w'),
+            KeyCode::Char('s'),
+            KeyCode::Char('d'),
+            KeyCode::Char('a'),
+            KeyCode::Char('z'),
+            KeyCode::Char('x'),
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Char('['),
+            KeyCode::Char(']'),
+        ];
         let starts: [BattleCamera; 3] = [
             BattleCamera::sideline_preset(),
             BattleCamera::over_shoulder_preset(),
@@ -4565,12 +4696,12 @@ mod handle_input_camera_tests {
                     ..Default::default()
                 };
 
-                let transition = scene.handle_input(key_event(KeyCode::Char(key)));
+                let transition = scene.handle_input(key_event(key));
 
-                assert!(transition.is_none(), "'{key}' must never request a scene transition");
+                assert!(transition.is_none(), "{key:?} must never request a scene transition");
                 assert_eq!(
                     scene.camera_mode, start,
-                    "'{key}' from {:?} (non-FreeRoam) must be a complete no-op",
+                    "{key:?} from {:?} (non-FreeRoam) must be a complete no-op",
                     start
                 );
             }
@@ -5111,11 +5242,12 @@ mod golden_fixture_tests {
     /// b7-t1: free-roam actually renders content, and driving movement keys
     /// through the real `handle_input` changes the rendered dots. Renders
     /// `free_roam_preset()`'s pinned starting transform, feeds
-    /// `['W','W','W','E','R']` (forward x3, yaw +5deg, pitch +5deg) through
-    /// `handle_input`, renders again. This is a genuine, potentially-failing
-    /// check: no existing test renders free-roam to a buffer, so a blank
-    /// frame (everything off-screen / degenerate scale) or a no-op render
-    /// would fail here and is a real defect, not a test bug.
+    /// `['w','w','w', Right, Up]` (forward x3, yaw +5deg, pitch +5deg)
+    /// through `handle_input`, renders again. This is a genuine,
+    /// potentially-failing check: no existing test renders free-roam to a
+    /// buffer, so a blank frame (everything off-screen / degenerate scale)
+    /// or a no-op render would fail here and is a real defect, not a test
+    /// bug.
     #[test]
     fn free_roam_movement_changes_rendered_output() {
         let before_scene = BattleViewer {
@@ -5135,8 +5267,14 @@ mod golden_fixture_tests {
             camera_mode: BattleCamera::free_roam_preset(),
             ..BattleViewer::default()
         };
-        for c in ['W', 'W', 'W', 'E', 'R'] {
-            after_scene.handle_input(key_event(crossterm::event::KeyCode::Char(c)));
+        for code in [
+            crossterm::event::KeyCode::Char('w'),
+            crossterm::event::KeyCode::Char('w'),
+            crossterm::event::KeyCode::Char('w'),
+            crossterm::event::KeyCode::Right,
+            crossterm::event::KeyCode::Up,
+        ] {
+            after_scene.handle_input(key_event(code));
         }
         let after = render_to_buffer(&after_scene, 80, 40);
 
@@ -5144,7 +5282,127 @@ mod golden_fixture_tests {
             !diff_dots(&before, &after).is_match(),
             "free-roam movement keys must change the rendered output; got \
              identical dots before and after driving \
-             ['W','W','W','E','R'] through handle_input"
+             ['w','w','w', Right, Up] through handle_input"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: `t`/`T` controls-help HUD hint
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod controls_help_tests {
+    use super::*;
+    use crate::scenes::test_util::{key_event, rect_text, render_to_buffer};
+    use crossterm::event::KeyCode;
+    use engine_render::diff_dots;
+    use ratatui::buffer::Buffer;
+
+    const HINT: &str = "press t to toggle controls";
+
+    /// Every cell of `buf`, concatenated row-major with no separators —
+    /// enough to assert a single-line label's text appears somewhere,
+    /// regardless of exactly which row/column it landed on.
+    fn full_text(buf: &Buffer) -> String {
+        rect_text(buf, buf.area)
+    }
+
+    /// Default state: the one-line hint is always visible; the expanded
+    /// panel is not (nothing toggled it on yet).
+    #[test]
+    fn hint_visible_by_default_expanded_panel_is_not() {
+        let scene = BattleViewer::default();
+        assert!(!scene.show_controls_help);
+
+        let buf = render_to_buffer(&scene, 80, 40);
+        let text = full_text(&buf);
+        assert!(text.contains(HINT), "expected hint {HINT:?} in default render, got {text:?}");
+        assert!(
+            !text.contains("Sideline"),
+            "expanded panel (camera-mode key reference) must not appear before toggling"
+        );
+    }
+
+    /// Pressing lowercase 't' toggles `show_controls_help` on, and the
+    /// rendered output then includes the expanded panel's always-present
+    /// camera-mode key reference alongside the hint.
+    #[test]
+    fn t_toggles_expanded_panel_showing_camera_modes() {
+        let mut scene = BattleViewer::default();
+
+        scene.handle_input(key_event(KeyCode::Char('t')));
+        assert!(scene.show_controls_help);
+
+        let buf = render_to_buffer(&scene, 80, 40);
+        let text = full_text(&buf);
+        assert!(text.contains(HINT));
+        assert!(text.contains("Sideline"));
+        assert!(text.contains("Over-the-shoulder"));
+        assert!(text.contains("Top-down"));
+        assert!(text.contains("Free-roam"));
+    }
+
+    /// Uppercase 'T' also toggles, matching the case-insensitivity of the
+    /// free-roam movement keys.
+    #[test]
+    fn uppercase_t_also_toggles() {
+        let mut scene = BattleViewer::default();
+        scene.handle_input(key_event(KeyCode::Char('T')));
+        assert!(scene.show_controls_help, "'T' (uppercase) must toggle the help panel too");
+    }
+
+    /// Toggling 't' twice returns to the untoggled state: the field is back
+    /// to `false`, and the rendered output (both the plain-text cells and
+    /// the board's own braille dots) is identical to a render that was
+    /// never toggled at all.
+    #[test]
+    fn toggling_twice_returns_to_untoggled_state() {
+        let scene = BattleViewer::default();
+        let before = render_to_buffer(&scene, 80, 40);
+
+        let mut toggled_twice = BattleViewer::default();
+        toggled_twice.handle_input(key_event(KeyCode::Char('t')));
+        toggled_twice.handle_input(key_event(KeyCode::Char('t')));
+        assert!(!toggled_twice.show_controls_help);
+
+        let after = render_to_buffer(&toggled_twice, 80, 40);
+        assert!(
+            diff_dots(&before, &after).is_match(),
+            "board dots must be identical after toggling 't' twice"
+        );
+        assert_eq!(
+            full_text(&before),
+            full_text(&after),
+            "help text must be identical after toggling 't' twice"
+        );
+    }
+
+    /// The movement-scheme line only appears while BOTH the panel is
+    /// expanded AND the camera is currently in Free-roam — never under a
+    /// fixed preset, even with the panel expanded.
+    #[test]
+    fn movement_scheme_only_shown_in_free_roam() {
+        let mut free_roam_scene = BattleViewer {
+            camera_mode: BattleCamera::free_roam_preset(),
+            ..Default::default()
+        };
+        free_roam_scene.handle_input(key_event(KeyCode::Char('t')));
+        let free_roam_text = full_text(&render_to_buffer(&free_roam_scene, 80, 40));
+        assert!(
+            free_roam_text.contains("wasd"),
+            "expected the movement scheme in the expanded panel while in Free-roam"
+        );
+
+        let mut sideline_scene = BattleViewer {
+            camera_mode: BattleCamera::sideline_preset(),
+            ..Default::default()
+        };
+        sideline_scene.handle_input(key_event(KeyCode::Char('t')));
+        let sideline_text = full_text(&render_to_buffer(&sideline_scene, 80, 40));
+        assert!(
+            !sideline_text.contains("wasd"),
+            "movement scheme must not appear under a fixed (non-Free-roam) preset"
         );
     }
 }
