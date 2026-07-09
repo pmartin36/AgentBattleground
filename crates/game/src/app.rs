@@ -2,10 +2,10 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use crossterm::{
-    cursor::{Hide, Show},
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEvent},
+    cursor::Hide,
+    event::{self, EnableMouseCapture, Event, KeyEvent},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{enable_raw_mode, EnterAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 
@@ -43,8 +43,7 @@ impl TerminalGuard {
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen, Show);
+        engine_core::terminal::restore_terminal();
     }
 }
 
