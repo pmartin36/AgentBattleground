@@ -7,6 +7,7 @@ pub mod net;
 pub mod scene;
 pub mod scene_key;
 pub mod ipc;
+pub mod terminal;
 
 /// Shared mock fixtures for this crate's own test suites (`catalog.rs`,
 /// `scene::manager`) — private (test-only) since no other crate needs it.

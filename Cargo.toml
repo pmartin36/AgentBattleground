@@ -19,3 +19,7 @@ egui = "0.35"
 syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2"
+directories = "6"
