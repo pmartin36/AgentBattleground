@@ -156,11 +156,13 @@ impl SceneManager {
     pub fn process_pending(&mut self) -> Option<SceneKey> {
         let transition = self.pending.take()?;
         self.pending_is_debug = false;
+        let prev_id = self.active.id();
         self.active.exit(&mut self.ctx);
         let mut new_scene = self.catalog.construct(&transition.target);
         new_scene.enter(&mut self.ctx, transition.params);
         let new_id = new_scene.id();
         self.active = new_scene;
+        tracing::info!(from = ?prev_id, to = ?new_id, "scene transition");
         Some(new_id)
     }
 
@@ -775,6 +777,89 @@ mod tests {
             None,
             "digit-key scene switching moved to game::app (b3-t2); \
              route_key must not queue a transition"
+        );
+    }
+
+    // ------------------------------------------------- scene transition logging (b4-t1)
+
+    /// Local in-memory `tracing` collector: a `Fn() -> W: Write` closure over a
+    /// shared buffer, installed via `tracing::subscriber::with_default` (thread-local,
+    /// never the process-global `logging::init`) so this test cannot race others'
+    /// subscriber state.
+    #[derive(Clone)]
+    struct SharedBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedBuf {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().write(buf)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn collecting_subscriber() -> (impl tracing::Subscriber, std::sync::Arc<std::sync::Mutex<Vec<u8>>>)
+    {
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let make_writer = {
+            let buf = buf.clone();
+            move || SharedBuf(buf.clone())
+        };
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(make_writer)
+            .with_ansi(false)
+            .finish();
+        (subscriber, buf)
+    }
+
+    #[test]
+    fn process_pending_logs_info_scene_transition_with_from_and_to() {
+        let (subscriber, buf) = collecting_subscriber();
+
+        let mut mgr = SceneManager::new(SceneKey::new("A"), Box::new(MockCatalog));
+        mgr.set_gameplay_transition(Transition {
+            target: SceneKey::new("B"),
+            params: None,
+        });
+
+        tracing::subscriber::with_default(subscriber, || {
+            mgr.process_pending();
+        });
+
+        let output = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        assert!(
+            output.contains("scene transition"),
+            "expected a 'scene transition' event, got: {output:?}"
+        );
+        assert!(
+            output.contains("INFO"),
+            "expected the event logged at INFO level, got: {output:?}"
+        );
+        assert!(
+            output.contains("from=SceneKey(\"A\")"),
+            "expected from=SceneKey(\"A\"), got: {output:?}"
+        );
+        assert!(
+            output.contains("to=SceneKey(\"B\")"),
+            "expected to=SceneKey(\"B\"), got: {output:?}"
+        );
+    }
+
+    #[test]
+    fn process_pending_noop_emits_no_scene_transition_event() {
+        let (subscriber, buf) = collecting_subscriber();
+
+        let mut mgr = SceneManager::new(SceneKey::new("A"), Box::new(MockCatalog));
+
+        tracing::subscriber::with_default(subscriber, || {
+            let result = mgr.process_pending();
+            assert_eq!(result, None);
+        });
+
+        let output = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        assert!(
+            output.is_empty(),
+            "a no-op process_pending (no pending transition) must emit nothing, got: {output:?}"
         );
     }
 }
