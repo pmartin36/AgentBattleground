@@ -3,7 +3,9 @@ use std::time::Duration;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use engine_render::camera::{AnyCamera, Camera, DepthAxis, OrthographicCamera, PerspectiveCamera, WorldPos};
+use engine_render::camera::{
+    AnyCamera, Camera, DepthAxis, FreeRoamCamera, OrthographicCamera, PerspectiveCamera, WorldPos,
+};
 use engine_render::composite::{composite_scene, SpriteContent, SpriteDraw};
 use engine_render::dots::{dots_to_grid, Dot, DotBuffer};
 use engine_render::transform::{Transform, Vec2, VerticalAnchor};
@@ -489,6 +491,22 @@ impl BattleCamera {
     /// (spec 42 Decision 0) — no tilt, no taper, no depth-anchor.
     pub fn top_down_preset() -> Self {
         BattleCamera { camera: AnyCamera::Orthographic(OrthographicCamera { scale_dots: 0.0 }) }
+    }
+
+    /// Free-roam preset (spec 42 Decision 5, dev-only 4th mode, key `4`):
+    /// pinned starting transform for `AnyCamera::FreeRoam`.
+    pub fn free_roam_preset() -> Self {
+        BattleCamera {
+            camera: AnyCamera::FreeRoam(FreeRoamCamera {
+                x: SIDELINE_CAMERA_DEPTH,
+                y: BOARD_CENTER_COL,
+                height: 2.5,
+                yaw_deg: 90.0,
+                pitch_deg: 10.0,
+                fov_deg: 55.0,
+                scale_dots: 40.0,
+            }),
+        }
     }
 }
 
@@ -1412,6 +1430,30 @@ impl BattleViewer {
             }
         }
     }
+
+    /// Discrete-nudge free-roam movement keys (spec 42 Decision 5). One
+    /// effect per keypress, no continuous/velocity state. Keys are
+    /// UPPERCASE — lowercase `'q'` is intercepted upstream by
+    /// `SceneManager::route_key` as the global quit signal, so a lowercase
+    /// yaw key would never reach here.
+    fn nudge_free_roam(cam: &mut FreeRoamCamera, code: crossterm::event::KeyCode) {
+        use crossterm::event::KeyCode;
+        match code {
+            KeyCode::Char('W') => cam.nudge(0.5, 0.0, 0.0, 0.0, 0.0),
+            KeyCode::Char('S') => cam.nudge(-0.5, 0.0, 0.0, 0.0, 0.0),
+            KeyCode::Char('D') => cam.nudge(0.0, 0.5, 0.0, 0.0, 0.0),
+            KeyCode::Char('A') => cam.nudge(0.0, -0.5, 0.0, 0.0, 0.0),
+            KeyCode::Char('E') => cam.nudge(0.0, 0.0, 5.0, 0.0, 0.0),
+            KeyCode::Char('Q') => cam.nudge(0.0, 0.0, -5.0, 0.0, 0.0),
+            KeyCode::Char('R') => cam.nudge(0.0, 0.0, 0.0, 5.0, 0.0),
+            KeyCode::Char('F') => cam.nudge(0.0, 0.0, 0.0, -5.0, 0.0),
+            KeyCode::Char('X') => cam.nudge(0.0, 0.0, 0.0, 0.0, 0.5),
+            KeyCode::Char('Z') => cam.nudge(0.0, 0.0, 0.0, 0.0, -0.5),
+            KeyCode::Char(']') => cam.scale_dots *= 1.1,
+            KeyCode::Char('[') => cam.scale_dots *= 0.9,
+            _ => {}
+        }
+    }
 }
 
 impl Scene for BattleViewer {
@@ -1453,7 +1495,17 @@ impl Scene for BattleViewer {
                 KeyCode::Char('1') => self.camera_mode = BattleCamera::sideline_preset(),
                 KeyCode::Char('2') => self.camera_mode = BattleCamera::over_shoulder_preset(),
                 KeyCode::Char('3') => self.camera_mode = BattleCamera::top_down_preset(),
-                _ => {}
+                // Free-roam entry (spec 42 Decision 5): re-pressing '4' while
+                // already in FreeRoam must NOT clobber a flown-to
+                // position/orientation back to the starting preset.
+                KeyCode::Char('4') if !matches!(self.camera_mode.camera, AnyCamera::FreeRoam(_)) => {
+                    self.camera_mode = BattleCamera::free_roam_preset();
+                }
+                code => {
+                    if let AnyCamera::FreeRoam(fr) = &mut self.camera_mode.camera {
+                        Self::nudge_free_roam(fr, code);
+                    }
+                }
             }
         }
         None
@@ -4354,11 +4406,12 @@ mod handle_input_camera_tests {
         }
     }
 
-    /// A non-digit key (and an out-of-range digit) must leave camera_mode
-    /// untouched and never trigger a transition.
+    /// A genuinely-unmapped key must leave camera_mode untouched and never
+    /// trigger a transition. `'4'` is NOT covered here — since b6-t1 it maps
+    /// to free-roam entry (see `key_4_from_fixed_presets_enters_free_roam`).
     #[test]
     fn non_digit_key_leaves_camera_mode_unchanged() {
-        for code in [KeyCode::Char('x'), KeyCode::Char('4')] {
+        for code in [KeyCode::Char('x'), KeyCode::Char('5')] {
             let mut scene = BattleViewer {
                 camera_mode: BattleCamera::top_down_preset(),
                 ..Default::default()
@@ -4373,6 +4426,154 @@ mod handle_input_camera_tests {
                 code,
                 scene.camera_mode
             );
+        }
+    }
+
+    /// Pinned starting transform (spec 42 Decision 5) — reuses
+    /// `SIDELINE_CAMERA_DEPTH`/`BOARD_CENTER_COL`, not new literals.
+    #[test]
+    fn free_roam_preset_has_pinned_starting_transform() {
+        let cam = BattleCamera::free_roam_preset();
+        let AnyCamera::FreeRoam(fr) = cam.camera else {
+            panic!("free_roam_preset() must wrap AnyCamera::FreeRoam, got {:?}", cam.camera);
+        };
+        assert_eq!(fr.x, SIDELINE_CAMERA_DEPTH);
+        assert_eq!(fr.y, BOARD_CENTER_COL);
+        assert_eq!(fr.height, 2.5);
+        assert_eq!(fr.yaw_deg, 90.0);
+        assert_eq!(fr.pitch_deg, 10.0);
+        assert_eq!(fr.fov_deg, 55.0);
+        assert_eq!(fr.scale_dots, 40.0);
+    }
+
+    /// Pressing '4' from any fixed preset (Sideline/OverShoulder/TopDown)
+    /// switches directly to the pinned `free_roam_preset()` starting
+    /// transform — never a no-op, never a partial/relative change.
+    #[test]
+    fn key_4_from_fixed_presets_enters_free_roam() {
+        let starts: [BattleCamera; 3] = [
+            BattleCamera::sideline_preset(),
+            BattleCamera::over_shoulder_preset(),
+            BattleCamera::top_down_preset(),
+        ];
+
+        for start in starts {
+            let mut scene = BattleViewer {
+                camera_mode: start,
+                ..Default::default()
+            };
+
+            let transition = scene.handle_input(key_event(KeyCode::Char('4')));
+
+            assert!(transition.is_none(), "'4' must never request a scene transition");
+            assert_eq!(
+                scene.camera_mode,
+                BattleCamera::free_roam_preset(),
+                "'4' from {:?} must select free_roam_preset() directly",
+                start
+            );
+        }
+    }
+
+    /// Re-pressing '4' while already in FreeRoam must NOT clobber a
+    /// flown-to position/orientation back to the starting preset.
+    #[test]
+    fn key_4_from_nudged_free_roam_is_noop() {
+        let mut scene = BattleViewer {
+            camera_mode: BattleCamera::free_roam_preset(),
+            ..Default::default()
+        };
+        let AnyCamera::FreeRoam(ref mut fr) = scene.camera_mode.camera else {
+            panic!("expected AnyCamera::FreeRoam");
+        };
+        fr.nudge(1.0, 0.0, 15.0, 0.0, 0.5);
+        let nudged = scene.camera_mode;
+
+        let transition = scene.handle_input(key_event(KeyCode::Char('4')));
+
+        assert!(transition.is_none(), "'4' must never request a scene transition");
+        assert_eq!(
+            scene.camera_mode, nudged,
+            "'4' from an already-FreeRoam session must not reset the flown-to transform"
+        );
+    }
+
+    /// spec 42 Decision 5 movement keys (b6-t2): from `AnyCamera::FreeRoam`,
+    /// each of the 12 keys applies exactly its pinned delta to the wrapped
+    /// `FreeRoamCamera` and never requests a transition. Expected values are
+    /// computed by applying the same `nudge`/`scale_dots` op the prod code
+    /// must use, on a copy of the starting camera — this proves the key is
+    /// wired to the exact pinned args, not just "something changed".
+    #[test]
+    fn free_roam_movement_keys_apply_exact_delta() {
+        type NudgeFn = fn(&mut FreeRoamCamera);
+        let cases: [(char, NudgeFn); 12] = [
+            ('W', |c| c.nudge(0.5, 0.0, 0.0, 0.0, 0.0)),
+            ('S', |c| c.nudge(-0.5, 0.0, 0.0, 0.0, 0.0)),
+            ('D', |c| c.nudge(0.0, 0.5, 0.0, 0.0, 0.0)),
+            ('A', |c| c.nudge(0.0, -0.5, 0.0, 0.0, 0.0)),
+            ('E', |c| c.nudge(0.0, 0.0, 5.0, 0.0, 0.0)),
+            ('Q', |c| c.nudge(0.0, 0.0, -5.0, 0.0, 0.0)),
+            ('R', |c| c.nudge(0.0, 0.0, 0.0, 5.0, 0.0)),
+            ('F', |c| c.nudge(0.0, 0.0, 0.0, -5.0, 0.0)),
+            ('X', |c| c.nudge(0.0, 0.0, 0.0, 0.0, 0.5)),
+            ('Z', |c| c.nudge(0.0, 0.0, 0.0, 0.0, -0.5)),
+            (']', |c| c.scale_dots *= 1.1),
+            ('[', |c| c.scale_dots *= 0.9),
+        ];
+
+        for (key, apply) in cases {
+            let mut scene = BattleViewer {
+                camera_mode: BattleCamera::free_roam_preset(),
+                ..Default::default()
+            };
+            let AnyCamera::FreeRoam(start) = scene.camera_mode.camera else {
+                panic!("expected AnyCamera::FreeRoam");
+            };
+            let mut expected = start;
+            apply(&mut expected);
+
+            let transition = scene.handle_input(key_event(KeyCode::Char(key)));
+
+            assert!(transition.is_none(), "'{key}' must never request a scene transition");
+            assert_eq!(
+                scene.camera_mode,
+                BattleCamera { camera: AnyCamera::FreeRoam(expected) },
+                "'{key}' from FreeRoam must apply its pinned delta exactly"
+            );
+        }
+    }
+
+    /// spec 42 Decision 5 movement keys (b6-t2): under EACH fixed preset
+    /// (Sideline/OverShoulder/TopDown), every one of the 12 movement keys
+    /// must be a complete no-op — `camera_mode` byte-value unchanged and no
+    /// transition requested. Guards against movement handling leaking into
+    /// fixed-preset behavior.
+    #[test]
+    fn free_roam_movement_keys_are_noop_under_fixed_presets() {
+        let keys = ['W', 'S', 'D', 'A', 'Q', 'E', 'R', 'F', 'Z', 'X', '[', ']'];
+        let starts: [BattleCamera; 3] = [
+            BattleCamera::sideline_preset(),
+            BattleCamera::over_shoulder_preset(),
+            BattleCamera::top_down_preset(),
+        ];
+
+        for start in starts {
+            for key in keys {
+                let mut scene = BattleViewer {
+                    camera_mode: start,
+                    ..Default::default()
+                };
+
+                let transition = scene.handle_input(key_event(KeyCode::Char(key)));
+
+                assert!(transition.is_none(), "'{key}' must never request a scene transition");
+                assert_eq!(
+                    scene.camera_mode, start,
+                    "'{key}' from {:?} (non-FreeRoam) must be a complete no-op",
+                    start
+                );
+            }
         }
     }
 
