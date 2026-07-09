@@ -3,7 +3,7 @@ use std::time::Duration;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use engine_render::camera::{Camera, DepthAxis, OrthographicCamera, PerspectiveCamera, WorldPos};
+use engine_render::camera::{AnyCamera, Camera, DepthAxis, OrthographicCamera, PerspectiveCamera, WorldPos};
 use engine_render::composite::{composite_scene, SpriteContent, SpriteDraw};
 use engine_render::dots::{dots_to_grid, Dot, DotBuffer};
 use engine_render::transform::{Transform, Vec2, VerticalAnchor};
@@ -97,8 +97,8 @@ impl BoardGeometry {
 /// always rebuilt from the area-derived scale (see `BattleCamera::with_scale_dots`),
 /// not taken from whatever scale the caller's `mode` happened to carry in.
 pub fn board_geometry(area: Rect, mode: BattleCamera, tuning: BattleViewerTuning) -> BoardGeometry {
-    match mode {
-        BattleCamera::TopDown(_) => {
+    match mode.camera {
+        AnyCamera::Orthographic(_) => {
             // `BENCH_COL == BOARD_COLS`: bench sits one column past the
             // drawn grid's own 7 columns (deliberately outside it — see
             // `BENCH_COL`'s doc comment), so the allocated board_rect needs
@@ -128,8 +128,20 @@ pub fn board_geometry(area: Rect, mode: BattleCamera, tuning: BattleViewerTuning
                 screen_offset: (0, 0),
             }
         }
-        BattleCamera::Sideline(_) | BattleCamera::OverShoulder(_) => {
-            fit_perspective_geometry(area, mode, tuning)
+        AnyCamera::Perspective(_) => fit_perspective_geometry(area, mode, tuning),
+        AnyCamera::FreeRoam(_) => {
+            let board_rect = Rect::new(area.left(), area.top(), area.width.max(1), area.height.max(1));
+            let cell_width_cols = (area.width / BOARD_COLS).max(1);
+            let cell_height_rows = (area.height / BOARD_ROWS).max(1);
+
+            BoardGeometry {
+                cell_width_cols,
+                cell_height_rows,
+                board_rect,
+                camera: mode,
+                tuning,
+                screen_offset: (0, 0),
+            }
         }
     }
 }
@@ -366,131 +378,63 @@ fn plot_dot_segment(dots: &mut DotBuffer, x0: usize, y0: usize, x1: usize, y1: u
     }
 }
 
-/// Wraps the three concrete `engine_render::camera::Camera` views usable by
-/// the battle viewer. Exact passthrough: `project`/`depth_key` on any variant
-/// must equal the wrapped camera's own output for the same `WorldPos` — no
-/// recompute at this layer.
+/// Wraps the engine's `AnyCamera` kind-dispatch (spec 42 Decision 2) for the
+/// battle viewer. Exact passthrough: every `Camera` method delegates to
+/// `self.camera` — no recompute at this layer.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum BattleCamera {
-    Sideline(PerspectiveCamera),
-    TopDown(OrthographicCamera),
-    OverShoulder(PerspectiveCamera),
+pub struct BattleCamera {
+    pub camera: AnyCamera,
 }
 
 impl Camera for BattleCamera {
     fn project(&self, pos: WorldPos) -> (i32, i32) {
-        match self {
-            BattleCamera::Sideline(c) => c.project(pos),
-            BattleCamera::TopDown(c) => c.project(pos),
-            BattleCamera::OverShoulder(c) => c.project(pos),
-        }
+        self.camera.project(pos)
     }
 
     fn depth_key(&self, pos: WorldPos) -> i32 {
-        match self {
-            BattleCamera::Sideline(c) => c.depth_key(pos),
-            BattleCamera::TopDown(c) => c.depth_key(pos),
-            BattleCamera::OverShoulder(c) => c.depth_key(pos),
-        }
+        self.camera.depth_key(pos)
+    }
+
+    fn vertical_anchor_hint(&self) -> VerticalAnchor {
+        self.camera.vertical_anchor_hint()
+    }
+
+    fn elevation_deg(&self) -> f32 {
+        self.camera.elevation_deg()
     }
 
     /// Dots per world unit AT `pos` specifically (not a single near-reference
-    /// value like `sprite_scale_dots`) — i.e. "how many dots wide is exactly
-    /// one board cell, right where this piece actually stands." `TopDown` is
-    /// constant everywhere (`c.scale_dots`); `Sideline`/`OverShoulder` shrink
-    /// with distance from the camera, using the piece's own `forward_distance`
-    /// rather than a shared reference point. This is what per-piece sprite
-    /// and shadow sizing key off so they shrink smoothly with distance
-    /// instead of using one flat per-frame size for every piece regardless
-    /// of how far away it actually is.
+    /// value like the deleted `sprite_scale_dots`) — i.e. "how many dots wide
+    /// is exactly one board cell, right where this piece actually stands."
+    /// This is what per-piece sprite and shadow sizing key off so they
+    /// shrink smoothly with distance instead of using one flat per-frame
+    /// size for every piece regardless of how far away it actually is.
     fn local_dots_per_world_unit(&self, pos: WorldPos) -> f32 {
-        match self {
-            BattleCamera::TopDown(c) => c.scale_dots,
-            BattleCamera::Sideline(c) | BattleCamera::OverShoulder(c) => {
-                c.dots_per_world_unit(c.forward_distance(pos))
-            }
-        }
+        self.camera.local_dots_per_world_unit(pos)
     }
 }
 
 impl BattleCamera {
-    /// Per-world-unit dot scale of the active variant, for sizing a sprite so
-    /// it's roughly cell-sized at the camera's near reference depth. `TopDown`
-    /// (orthographic) returns its `scale_dots` directly — that field already
-    /// IS a per-world-unit rate for an orthographic camera. `Sideline`/
-    /// `OverShoulder` do NOT — their `scale_dots` is a raw NDC-to-dots
-    /// constant solved by viewport-fit, not a per-world-unit rate (using it
-    /// directly overflowed sprites, since it's typically much larger than
-    /// the actual dots-per-world-unit at any real position). The correct
-    /// rate is `PerspectiveCamera::dots_per_world_unit`, evaluated at the
-    /// SAME near-reference depth `depth_scale_factor` normalizes against, so
-    /// a piece standing at that reference edge renders at exactly this size
-    /// (matching `depth_scale_factor`'s own `1.0` there) and pieces farther
-    /// away are scaled down from it by that same factor, not scaled down
-    /// twice.
-    pub fn sprite_scale_dots(&self) -> f32 {
-        match self {
-            BattleCamera::TopDown(c) => c.scale_dots,
-            BattleCamera::Sideline(c) | BattleCamera::OverShoulder(c) => {
-                c.dots_per_world_unit(near_reference_forward_distance(c))
-            }
-        }
-    }
-
     /// Grid-line prominence for `draw_board_lines`: full-strength, opaque
-    /// `GRID_LINE_COLOR` for `TopDown`; for `Sideline`/`OverShoulder` a
-    /// translucent `Rgba::new(0xFF,0xFF,0xFF,tuning.grid_dim_alpha)` that
-    /// blends via the real alpha-blit path (b1-t3) rather than a flat dark
-    /// constant. Exhaustive match — no wildcard, so a future variant is
-    /// forced to choose a prominence.
+    /// `GRID_LINE_COLOR` when the active camera is flat/straight-down
+    /// (elevation `90.0`, i.e. `TopDown`); a translucent
+    /// `Rgba::new(0xFF,0xFF,0xFF,tuning.grid_dim_alpha)` for any elevated
+    /// camera (Sideline 10°, OverShoulder 30°) that blends via the real
+    /// alpha-blit path (b1-t3) rather than a flat dark constant.
     pub fn grid_line_color(&self, tuning: &BattleViewerTuning) -> Rgba {
-        match self {
-            BattleCamera::TopDown(_) => GRID_LINE_COLOR,
-            BattleCamera::Sideline(_) => Rgba::new(0xFF, 0xFF, 0xFF, tuning.grid_dim_alpha),
-            BattleCamera::OverShoulder(_) => Rgba::new(0xFF, 0xFF, 0xFF, tuning.grid_dim_alpha),
-        }
-    }
-
-    /// Elevation (degrees) of the active variant — exhaustive match (no
-    /// wildcard), the permanent replacement for the removed `oblique()`
-    /// accessor now that `Sideline`/`OverShoulder` no longer wrap the same
-    /// concrete type as `TopDown`. `shadow_buffers`' squash factor reads
-    /// through this.
-    pub fn elevation_deg(&self) -> f32 {
-        match self {
-            BattleCamera::Sideline(c) => c.elevation_deg,
-            BattleCamera::TopDown(_) => 90.0,
-            BattleCamera::OverShoulder(c) => c.elevation_deg,
-        }
-    }
-
-    /// Vertical anchor to use for every `SpriteDraw` (shadow and piece alike)
-    /// under the active variant. `TopDown` centers sprites on their grid
-    /// point (looking straight down, there is no "ground contact" edge);
-    /// `Sideline`/`OverShoulder` anchor sprites by their bottom edge so a
-    /// piece's feet land on its projected ground point instead of floating
-    /// centered on it. Exhaustive match — no wildcard — so a future variant
-    /// is forced to choose an anchor.
-    pub fn vertical_anchor(&self) -> VerticalAnchor {
-        match self {
-            BattleCamera::TopDown(_) => VerticalAnchor::Center,
-            BattleCamera::Sideline(_) => VerticalAnchor::Bottom,
-            BattleCamera::OverShoulder(_) => VerticalAnchor::Bottom,
+        if self.camera.elevation_deg() < 89.5 {
+            Rgba::new(0xFF, 0xFF, 0xFF, tuning.grid_dim_alpha)
+        } else {
+            GRID_LINE_COLOR
         }
     }
 
     /// Rebuild the active variant at `scale_dots`, preserving every other
     /// variant-specific world param. Scale is always area-derived (see
     /// `board_geometry`), so the incoming variant's own scale is
-    /// intentionally replaced, not read. No longer takes a `tuning` param:
-    /// the dead `grid_taper_*` threading this used to do is gone along with
-    /// those fields.
+    /// intentionally replaced, not read.
     fn with_scale_dots(self, scale_dots: f32) -> Self {
-        match self {
-            BattleCamera::TopDown(_) => BattleCamera::TopDown(OrthographicCamera { scale_dots }),
-            BattleCamera::Sideline(c) => BattleCamera::Sideline(PerspectiveCamera { scale_dots, ..c }),
-            BattleCamera::OverShoulder(c) => BattleCamera::OverShoulder(PerspectiveCamera { scale_dots, ..c }),
-        }
+        BattleCamera { camera: self.camera.with_scale_dots(scale_dots) }
     }
 
     /// Sideline preset: looks down the column (world-x) axis, mild elevation,
@@ -499,18 +443,20 @@ impl BattleCamera {
     /// so every board cell projects with a comfortably positive
     /// `forward_distance` — no near-plane clamping.
     pub fn sideline_preset() -> Self {
-        BattleCamera::Sideline(PerspectiveCamera {
-            scale_dots: 0.0,
-            depth_axis: DepthAxis::Col,
-            elevation_deg: 10.0,
-            camera_depth: SIDELINE_CAMERA_DEPTH,
-            camera_height: 2.5,
-            spread_center: BOARD_CENTER_COL,
-            fov_deg: 55.0,
-            // Camera sits on the LOW side (negative), looking toward
-            // increasing column.
-            facing_sign: 1.0,
-        })
+        BattleCamera {
+            camera: AnyCamera::Perspective(PerspectiveCamera {
+                scale_dots: 0.0,
+                depth_axis: DepthAxis::Col,
+                elevation_deg: 10.0,
+                camera_depth: SIDELINE_CAMERA_DEPTH,
+                camera_height: 2.5,
+                spread_center: BOARD_CENTER_COL,
+                fov_deg: 55.0,
+                // Camera sits on the LOW side (negative), looking toward
+                // increasing column.
+                facing_sign: 1.0,
+            }),
+        }
     }
 
     /// Over-the-shoulder preset: looks down the row (world-y, team-separation)
@@ -521,25 +467,28 @@ impl BattleCamera {
     /// `forward_distance` positive all the way to the far edge (row 0) —
     /// see both constants' doc comments.
     pub fn over_shoulder_preset() -> Self {
-        BattleCamera::OverShoulder(PerspectiveCamera {
-            scale_dots: 0.0,
-            depth_axis: DepthAxis::Row,
-            elevation_deg: 30.0,
-            camera_depth: OVER_SHOULDER_CAMERA_DEPTH,
-            camera_height: OVER_SHOULDER_CAMERA_HEIGHT,
-            spread_center: BOARD_CENTER_COL,
-            fov_deg: 55.0,
-            // Camera sits on the HIGH side (past the board's far edge),
-            // looking toward decreasing row (toward Team A) — the opposite
-            // of Sideline's facing, since it sits on the opposite side.
-            facing_sign: -1.0,
-        })
+        BattleCamera {
+            camera: AnyCamera::Perspective(PerspectiveCamera {
+                scale_dots: 0.0,
+                depth_axis: DepthAxis::Row,
+                elevation_deg: 30.0,
+                camera_depth: OVER_SHOULDER_CAMERA_DEPTH,
+                camera_height: OVER_SHOULDER_CAMERA_HEIGHT,
+                spread_center: BOARD_CENTER_COL,
+                fov_deg: 55.0,
+                // Camera sits on the HIGH side (past the board's far edge),
+                // looking toward decreasing row (toward Team A) — the
+                // opposite of Sideline's facing, since it sits on the
+                // opposite side.
+                facing_sign: -1.0,
+            }),
+        }
     }
 
     /// Top-down preset: straight-down plan view, true orthographic projection
     /// (spec 42 Decision 0) — no tilt, no taper, no depth-anchor.
     pub fn top_down_preset() -> Self {
-        BattleCamera::TopDown(OrthographicCamera { scale_dots: 0.0 })
+        BattleCamera { camera: AnyCamera::Orthographic(OrthographicCamera { scale_dots: 0.0 }) }
     }
 }
 
@@ -571,7 +520,7 @@ mod battle_camera_tests {
     #[test]
     fn sideline_project_and_depth_key_match_wrapped_perspective() {
         let inner = perspective(DepthAxis::Col, 10.0, -4.0, 4.0);
-        let cam = BattleCamera::Sideline(inner);
+        let cam = BattleCamera { camera: AnyCamera::Perspective(inner) };
         let pos = WorldPos::new(1.5, 2.5);
         assert_eq!(cam.project(pos), inner.project(pos));
         assert_eq!(cam.depth_key(pos), inner.depth_key(pos));
@@ -581,7 +530,7 @@ mod battle_camera_tests {
     #[test]
     fn topdown_project_and_depth_key_match_wrapped_orthographic() {
         let inner = OrthographicCamera { scale_dots: 4.0 };
-        let cam = BattleCamera::TopDown(inner);
+        let cam = BattleCamera { camera: AnyCamera::Orthographic(inner) };
         let pos = WorldPos::new(1.5, 2.5);
         assert_eq!(cam.project(pos), inner.project(pos));
         assert_eq!(cam.depth_key(pos), inner.depth_key(pos));
@@ -594,7 +543,7 @@ mod battle_camera_tests {
     #[test]
     fn overshoulder_project_and_depth_key_match_wrapped_perspective() {
         let inner = perspective(DepthAxis::Row, 30.0, -2.0, 4.0);
-        let cam = BattleCamera::OverShoulder(inner);
+        let cam = BattleCamera { camera: AnyCamera::Perspective(inner) };
         let pos = WorldPos::new(1.5, 5.0); // off camera_depth (-2.0)
         assert_eq!(cam.project(pos), inner.project(pos));
         assert_eq!(cam.depth_key(pos), inner.depth_key(pos));
@@ -610,9 +559,9 @@ mod battle_camera_tests {
         let side = perspective(DepthAxis::Col, 11.0, -4.0, 4.0);
         let top = OrthographicCamera { scale_dots: 4.0 };
         let over = perspective(DepthAxis::Row, 33.0, -3.0, 4.0);
-        assert_eq!(BattleCamera::Sideline(side).elevation_deg(), 11.0);
-        assert_eq!(BattleCamera::TopDown(top).elevation_deg(), 90.0);
-        assert_eq!(BattleCamera::OverShoulder(over).elevation_deg(), 33.0);
+        assert_eq!(BattleCamera { camera: AnyCamera::Perspective(side) }.elevation_deg(), 11.0);
+        assert_eq!(BattleCamera { camera: AnyCamera::Orthographic(top) }.elevation_deg(), 90.0);
+        assert_eq!(BattleCamera { camera: AnyCamera::Perspective(over) }.elevation_deg(), 33.0);
     }
 }
 
@@ -642,7 +591,7 @@ mod camera_migration_tests {
     /// near the (still mid-board) camera.
     #[test]
     fn sideline_forward_distance_positive_all_cells() {
-        let BattleCamera::Sideline(cam) = BattleCamera::sideline_preset() else {
+        let AnyCamera::Perspective(cam) = BattleCamera::sideline_preset().camera else {
             unreachable!()
         };
         for col in 0..BOARD_COLS {
@@ -663,7 +612,7 @@ mod camera_migration_tests {
     /// interim-placeholder reasoning applies).
     #[test]
     fn over_shoulder_forward_distance_positive_all_cells() {
-        let BattleCamera::OverShoulder(cam) = BattleCamera::over_shoulder_preset() else {
+        let AnyCamera::Perspective(cam) = BattleCamera::over_shoulder_preset().camera else {
             unreachable!()
         };
         for col in 0..BOARD_COLS {
@@ -688,7 +637,7 @@ mod camera_migration_tests {
     /// tuning fixes.
     #[test]
     fn non_top_down_camera_depth_outside_board_range() {
-        let BattleCamera::Sideline(side) = BattleCamera::sideline_preset() else {
+        let AnyCamera::Perspective(side) = BattleCamera::sideline_preset().camera else {
             unreachable!()
         };
         assert!(
@@ -699,7 +648,7 @@ mod camera_migration_tests {
             BOARD_COLS
         );
 
-        let BattleCamera::OverShoulder(over) = BattleCamera::over_shoulder_preset() else {
+        let AnyCamera::Perspective(over) = BattleCamera::over_shoulder_preset().camera else {
             unreachable!()
         };
         assert!(
@@ -774,7 +723,7 @@ mod camera_migration_tests {
     #[test]
     fn sideline_near_depth_spread_exceeds_far_depth() {
         let cam = BattleCamera::sideline_preset().with_scale_dots(8.0);
-        let BattleCamera::Sideline(inner) = cam else {
+        let AnyCamera::Perspective(inner) = cam.camera else {
             unreachable!()
         };
         let (near_depth, far_depth) = near_far_depths(&inner, DepthAxis::Col, BOARD_COLS);
@@ -804,7 +753,7 @@ mod camera_migration_tests {
     #[test]
     fn over_shoulder_near_depth_spread_exceeds_far_depth() {
         let cam = BattleCamera::over_shoulder_preset().with_scale_dots(8.0);
-        let BattleCamera::OverShoulder(inner) = cam else {
+        let AnyCamera::Perspective(inner) = cam.camera else {
             unreachable!()
         };
         let (near_depth, far_depth) = near_far_depths(&inner, DepthAxis::Row, BOARD_ROWS);
@@ -862,7 +811,7 @@ pub const TEAM_B_BENCH_ROW: u16 = BOARD_ROWS - 3;
 /// direction; that workaround produced a narrow, over-steep-looking shot
 /// and is gone now that `facing_sign` exists). A comfortable margin past
 /// `BOARD_ROWS` (not just barely past it) matters for a different reason:
-/// `near_reference_forward_distance` (depth-scale/sprite-size baseline)
+/// `sprite_base_dot_rows_width_fill` (depth-scale/sprite-size baseline)
 /// probes forward_distance AT the board boundary itself — too thin a margin
 /// puts that boundary almost on top of the camera, blowing up the near/far
 /// size ratio until the far piece rasterizes to a near-invisible handful of
@@ -1050,31 +999,15 @@ pub fn piece_elapsed(elapsed: Duration, index: usize) -> Duration {
     elapsed + PIECE_STAGGER * index as u32
 }
 
-/// `forward_distance` at whichever board-edge (along `cam`'s depth axis) is
-/// closer to the camera — the single reference point both `depth_scale_factor`
-/// (ratio relative to it) and `sprite_scale_dots` (absolute dots-per-world-
-/// unit AT it) key off, so a piece standing at that edge is always exactly
-/// cell-sized before any depth falloff is applied.
-fn near_reference_forward_distance(cam: &PerspectiveCamera) -> f32 {
-    let extent = match cam.depth_axis {
-        DepthAxis::Col => BOARD_COLS as f32,
-        DepthAxis::Row => BOARD_ROWS as f32,
-    };
-    let depth_pos = |d: f32| match cam.depth_axis {
-        DepthAxis::Col => WorldPos::new(d, 0.0),
-        DepthAxis::Row => WorldPos::new(0.0, d),
-    };
-    cam.forward_distance(depth_pos(0.0))
-        .min(cam.forward_distance(depth_pos(extent)))
-}
-
 /// Sprite height in dots, sized off the shared camera's per-world-unit dot
-/// scale: `(camera.sprite_scale_dots() * SPRITE_DOT_RATIO).round() as u32`.
+/// scale at the world origin:
+/// `(camera.local_dots_per_world_unit(WorldPos::new(0.0, 0.0)) * SPRITE_DOT_RATIO).round() as u32`.
 /// `TopDown`-only in practice now (see `sprite_base_dot_rows_width_fill` for
-/// Sideline/OverShoulder) — kept pos-independent since `sprite_scale_dots()`
-/// is constant everywhere for the orthographic Top-Down camera.
+/// Sideline/OverShoulder) — kept pos-independent since
+/// `local_dots_per_world_unit` is constant everywhere for the orthographic
+/// Top-Down camera (Orthographic ignores `pos`).
 pub fn sprite_base_dot_rows(camera: &BattleCamera) -> u32 {
-    (camera.sprite_scale_dots() * SPRITE_DOT_RATIO).round() as u32
+    (camera.local_dots_per_world_unit(WorldPos::new(0.0, 0.0)) * SPRITE_DOT_RATIO).round() as u32
 }
 
 /// Fraction of a cell's width, AT the piece's own position, that a creature's
@@ -1349,8 +1282,8 @@ impl BattleViewer {
         shadow_bufs: &'a [DotBuffer],
         elapsed: Duration,
     ) -> Vec<SpriteDraw<'a>> {
-        let anchor = geom.camera.vertical_anchor();
-        let is_top_down = matches!(geom.camera, BattleCamera::TopDown(_));
+        let anchor = geom.camera.vertical_anchor_hint();
+        let is_top_down = matches!(geom.camera.camera, AnyCamera::Orthographic(_));
         // Top-Down's base size is position-independent (its `scale_dots` IS
         // a constant per-world-unit rate everywhere), so it's still fine to
         // compute once per frame; Sideline/OverShoulder need it per piece
@@ -1658,20 +1591,22 @@ mod board_geometry_tests {
     #[test]
     fn over_shoulder_mode_rebuilds_scale_and_preserves_camera_depth() {
         let area = Rect::new(0, 0, 128, 64);
-        let mode = BattleCamera::OverShoulder(PerspectiveCamera {
-            scale_dots: 0.0,
-            depth_axis: DepthAxis::Row,
-            elevation_deg: 30.0,
-            camera_depth: 6.0,
-            camera_height: 4.0,
-            spread_center: BOARD_CENTER_COL,
-            fov_deg: 55.0,
-            facing_sign: -1.0,
-        });
+        let mode = BattleCamera {
+            camera: AnyCamera::Perspective(PerspectiveCamera {
+                scale_dots: 0.0,
+                depth_axis: DepthAxis::Row,
+                elevation_deg: 30.0,
+                camera_depth: 6.0,
+                camera_height: 4.0,
+                spread_center: BOARD_CENTER_COL,
+                fov_deg: 55.0,
+                facing_sign: -1.0,
+            }),
+        };
         let g = board_geometry(area, mode, tuning());
 
-        let BattleCamera::OverShoulder(inner) = g.camera else {
-            panic!("expected OverShoulder variant");
+        let AnyCamera::Perspective(inner) = g.camera.camera else {
+            panic!("expected Perspective variant");
         };
         assert_eq!(inner.camera_depth, 6.0, "camera_depth must be preserved, not reset");
         assert!(
@@ -2388,86 +2323,26 @@ mod piece_render_tests {
     }
 
     /// DELIVERABLE (4): `sprite_base_dot_rows` is a fixed, documented ratio of
-    /// the active `BattleCamera` variant's dot scale, pinned against the
-    /// `SPRITE_DOT_RATIO` constant — for all 3 camera variants, not just
-    /// Sideline (b3-t2: `sprite_base_dot_rows` now takes `&BattleCamera`).
+    /// the active `BattleCamera`'s dot scale, pinned against the
+    /// `SPRITE_DOT_RATIO` constant. `sprite_base_dot_rows` is `TopDown`-only
+    /// in practice (see `sprite_base_dot_rows_width_fill` for Sideline/
+    /// OverShoulder).
     #[test]
     fn sprite_base_dot_rows_matches_ratio_constant() {
-        // TopDown is orthographic — `sprite_scale_dots()` IS `scale_dots`
-        // directly, so `sprite_base_dot_rows` is a fixed ratio of `scale`.
+        // TopDown is orthographic — `local_dots_per_world_unit` IS
+        // `scale_dots` directly, so `sprite_base_dot_rows` is a fixed ratio
+        // of `scale`.
         for scale in [8.0f32, 32.0f32, 5.0f32] {
             let camera = at_scale(BattleCamera::top_down_preset, scale);
             let expected = (scale * SPRITE_DOT_RATIO).round() as u32;
             assert_eq!(
                 sprite_base_dot_rows(&camera),
                 expected,
-                "sprite_base_dot_rows must equal (sprite_scale_dots() * SPRITE_DOT_RATIO).round() \
+                "sprite_base_dot_rows must equal \
+                 (local_dots_per_world_unit(origin) * SPRITE_DOT_RATIO).round() \
                  for scale {scale} and camera {camera:?}"
             );
         }
-    }
-
-    /// `sprite_base_dot_rows` for the perspective presets is a fixed ratio of
-    /// `sprite_scale_dots()` too — but `sprite_scale_dots()` itself is now the
-    /// camera's `dots_per_world_unit` at its near reference depth (NOT the
-    /// raw `scale_dots` field, which is an NDC-to-dots constant, not a
-    /// per-world-unit rate — using it directly is what overflowed sprite
-    /// width under Over-the-shoulder).
-    #[test]
-    fn sprite_base_dot_rows_matches_ratio_constant_for_perspective_presets() {
-        for camera in [
-            at_scale(BattleCamera::sideline_preset, 8.0),
-            at_scale(BattleCamera::over_shoulder_preset, 5.0),
-        ] {
-            let expected = (camera.sprite_scale_dots() * SPRITE_DOT_RATIO).round() as u32;
-            assert_eq!(
-                sprite_base_dot_rows(&camera),
-                expected,
-                "sprite_base_dot_rows must equal (sprite_scale_dots() * SPRITE_DOT_RATIO).round() \
-                 for camera {camera:?}"
-            );
-        }
-    }
-
-    /// `BattleCamera::sprite_scale_dots` for `TopDown` must equal the active
-    /// variant's own `scale_dots` (orthographic — that field already IS a
-    /// per-world-unit rate).
-    #[test]
-    fn sprite_scale_dots_matches_active_variant_scale_for_top_down() {
-        assert_eq!(at_scale(BattleCamera::top_down_preset, 32.0).sprite_scale_dots(), 32.0);
-    }
-
-    /// `BattleCamera::sprite_scale_dots` for the perspective presets must
-    /// equal `dots_per_world_unit` at the camera's own near reference depth —
-    /// NOT the raw `scale_dots` field (that was the sprite-overflow bug:
-    /// `scale_dots` is an NDC-to-dots constant solved by viewport-fit, not a
-    /// per-world-unit rate, and is typically much larger than the real rate
-    /// at any actual position).
-    #[test]
-    fn sprite_scale_dots_matches_dots_per_world_unit_at_near_ref_for_perspective_presets() {
-        let sideline = at_scale(BattleCamera::sideline_preset, 8.0);
-        let BattleCamera::Sideline(inner) = sideline else { panic!("expected Sideline") };
-        assert_eq!(
-            sideline.sprite_scale_dots(),
-            inner.dots_per_world_unit(near_reference_forward_distance(&inner)),
-            "Sideline's sprite_scale_dots must equal dots_per_world_unit at its own near reference"
-        );
-
-        let over_shoulder = at_scale(BattleCamera::over_shoulder_preset, 5.0);
-        let BattleCamera::OverShoulder(inner) = over_shoulder else { panic!("expected OverShoulder") };
-        assert_eq!(
-            over_shoulder.sprite_scale_dots(),
-            inner.dots_per_world_unit(near_reference_forward_distance(&inner)),
-            "OverShoulder's sprite_scale_dots must equal dots_per_world_unit at its own near reference"
-        );
-
-        // And it must NOT equal the raw scale_dots field — that's exactly
-        // the units-mismatch bug this fixes.
-        assert_ne!(
-            sideline.sprite_scale_dots(),
-            8.0,
-            "sprite_scale_dots must not be the raw scale_dots field for a perspective preset"
-        );
     }
 
     /// b1-t3 DELIVERABLE: a Top-Down piece sprite's rasterized dot footprint
@@ -4187,9 +4062,16 @@ mod feet_anchored_placement_tests {
         let sprite = scene
             .piece_sprite(piece.index)
             .expect("Team A piece at (col, row) must have a sprite");
-        let anchor = geom.camera.vertical_anchor();
+        let anchor = geom.camera.vertical_anchor_hint();
         let transform = depth_scaled_transform(&piece.transform, &geom.camera);
-        let base_dot_rows = sprite_base_dot_rows(&geom.camera);
+        // This helper is only ever called with a perspective preset
+        // (Sideline/OverShoulder) — mirror `build_draws`'s own non-Top-Down
+        // path (`sprite_base_dot_rows_width_fill`), not the Top-Down-only
+        // `sprite_base_dot_rows`, so the reference buffer size matches what
+        // actually renders.
+        let frame = sprite.frame_at(Duration::ZERO);
+        let aspect = frame.width() as f32 / frame.height().max(1) as f32;
+        let base_dot_rows = sprite_base_dot_rows_width_fill(&geom.camera, piece.transform.translate, aspect);
         let creature_buf = sprite.rasterize_at(Duration::ZERO, &transform, base_dot_rows);
 
         let cam = geom.framed_camera();
@@ -4454,10 +4336,13 @@ mod handle_input_camera_tests {
                     "handle_input('{digit}') must never request a scene transition"
                 );
 
+                // Sideline and OverShoulder both wrap `AnyCamera::Perspective`
+                // — a variant `matches!` can't tell them apart — so compare
+                // against the exact preset via `PartialEq` instead.
                 let matched = match expect_variant {
-                    "Sideline" => matches!(scene.camera_mode, BattleCamera::Sideline(_)),
-                    "OverShoulder" => matches!(scene.camera_mode, BattleCamera::OverShoulder(_)),
-                    "TopDown" => matches!(scene.camera_mode, BattleCamera::TopDown(_)),
+                    "Sideline" => scene.camera_mode == BattleCamera::sideline_preset(),
+                    "OverShoulder" => scene.camera_mode == BattleCamera::over_shoulder_preset(),
+                    "TopDown" => matches!(scene.camera_mode.camera, AnyCamera::Orthographic(_)),
                     _ => unreachable!(),
                 };
                 assert!(
@@ -4483,7 +4368,7 @@ mod handle_input_camera_tests {
 
             assert!(transition.is_none(), "unmapped key must not request a transition");
             assert!(
-                matches!(scene.camera_mode, BattleCamera::TopDown(_)),
+                matches!(scene.camera_mode.camera, AnyCamera::Orthographic(_)),
                 "unmapped key {:?} must leave camera_mode unchanged, got {:?}",
                 code,
                 scene.camera_mode
