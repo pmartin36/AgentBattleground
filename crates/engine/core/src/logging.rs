@@ -1,11 +1,15 @@
-//! App-wide logging bootstrap (spec 43, Decisions 1-3).
+//! App-wide logging bootstrap (spec 43, Decisions 1-3) and panic hook
+//! (Decision 4).
 //!
 //! `init` resolves the OS-appropriate data directory via `directories` and
 //! delegates to `init_at`, the testable primitive that actually opens the
 //! log file, wires up the non-blocking writer, and installs the global
 //! `tracing_subscriber` (idempotently — repeat installs are ignored so test
 //! re-entry and the panic hook's own eventual use of this module never
-//! panic on "already set").
+//! panic on "already set"). `init_at` also installs (exactly once per
+//! process, via `std::sync::Once`) a panic hook that restores the terminal
+//! and logs the panic at ERROR before delegating to the previously
+//! installed hook.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -34,8 +38,12 @@ pub fn init(app_name: &str) -> io::Result<LoggingHandle> {
 /// `game-<unix-epoch-seconds>.log` inside it, install the global
 /// `tracing_subscriber` (non-blocking writer, ANSI off, `EnvFilter`
 /// defaulting to `info`), prune old logs, and return the handle.
-#[allow(dead_code)]
-fn init_at(dir: &Path) -> io::Result<LoggingHandle> {
+///
+/// `pub` (but `#[doc(hidden)]`, not part of the headline API) so the
+/// `tests/panic_hook.rs` integration binary can drive it against a tempdir
+/// instead of the real OS data dir `init` resolves.
+#[doc(hidden)]
+pub fn init_at(dir: &Path) -> io::Result<LoggingHandle> {
     std::fs::create_dir_all(dir)?;
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -48,12 +56,35 @@ fn init_at(dir: &Path) -> io::Result<LoggingHandle> {
     let subscriber = build_subscriber(non_blocking, default_filter());
     let _ = tracing::subscriber::set_global_default(subscriber);
 
+    install_panic_hook();
+
     prune_old_logs(dir, 20);
 
     Ok(LoggingHandle {
         log_path,
         _guard: guard,
     })
+}
+
+/// Install a process-wide panic hook (Decision 4), exactly once regardless
+/// of how many times `init`/`init_at` run. On panic: restore the terminal
+/// (so the message is visible even if the panic happened while raw-mode was
+/// active), log the panic at ERROR through whatever subscriber is currently
+/// active, then delegate to the previously installed hook.
+fn install_panic_hook() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            crate::terminal::restore_terminal();
+            tracing::error!(
+                panic = %info,
+                backtrace = %std::backtrace::Backtrace::force_capture(),
+                "panicked"
+            );
+            previous(info);
+        }));
+    });
 }
 
 /// Delete all but the `keep` lexicographically-largest `game-*.log` files
