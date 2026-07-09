@@ -12,6 +12,16 @@ may change Top-Down's rendered dots.
 - `top_down_golden` — `BattleViewer::default()` with `camera_mode:
   BattleCamera::top_down_preset()`, demo `pieces()` layout, `elapsed = 0.0`,
   rendered 80x40.
+- `sideline_golden` — `BattleViewer::default()` with `camera_mode:
+  BattleCamera::sideline_preset()`, demo `pieces()` layout, `elapsed = 0.0`,
+  rendered 80x40. Added at b7-t1 (`engine-camera-kind-api-free-roam`), NOT a
+  pre-refactor oracle — Sideline's projection was legitimately changed by
+  spec 41. This is captured render evidence plus a forward regression lock
+  from b7-t1 onward; the actual proof that spec 42 left Sideline's
+  param/output behavior unchanged is `battle_viewer.rs`'s b5-t1 preset
+  param/output-equivalence tests, re-run by this feature's gate.
+- `over_shoulder_golden` — same role as `sideline_golden`, with
+  `camera_mode: BattleCamera::over_shoulder_preset()`.
 
 ## Files
 
@@ -28,3 +38,8 @@ committed: an 8x4 grid of board cells (Top-Down camera), 6 creature sprites
 placed inside their cells (one cluster near the top rows, two clusters near
 the bottom rows), no blank/empty render. Confirmed correct; no divergence
 found before commit.
+
+`sideline_golden.preview.txt` and `over_shoulder_golden.preview.txt` were
+visually reviewed before commit (b7-t1): both show a perspective board grid
+with converging gridlines and creature sprite clusters visible mid-frame, no
+blank/empty render. Confirmed correct; no divergence found before commit.

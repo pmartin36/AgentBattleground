@@ -4947,7 +4947,8 @@ mod inspectable_tests {
 mod golden_fixture_tests {
     use super::*;
     use crate::scenes::test_util::{
-        buffer_to_art, load_battle_viewer_fixture, render_to_buffer, serialize_braille_buffer,
+        buffer_to_art, key_event, load_battle_viewer_fixture, render_to_buffer,
+        serialize_braille_buffer,
     };
     use engine_render::diff_dots;
 
@@ -5006,6 +5007,144 @@ mod golden_fixture_tests {
              and only after re-running the manual visual pass",
             diff.mismatches.len(),
             diff.dots_compared
+        );
+    }
+
+    /// Sideline, demo `pieces()` layout, `elapsed = 0.0`, rendered 80x40.
+    /// Captured render evidence + forward regression lock (b7-t1) — NOT a
+    /// pre-refactor oracle like `top_down_golden` (Sideline's projection was
+    /// legitimately changed by spec 41; b5-t1 already proves param/output
+    /// equivalence for the rework itself). Run with
+    /// `UPDATE_BATTLE_VIEWER_FIXTURES=1` to (re)generate the `.fixture` +
+    /// `.preview.txt`, after a manual visual pass over the preview.
+    #[test]
+    fn sideline_golden_matches_baseline() {
+        let generate = std::env::var("UPDATE_BATTLE_VIEWER_FIXTURES").is_ok();
+
+        let scene = BattleViewer {
+            camera_mode: BattleCamera::sideline_preset(),
+            ..BattleViewer::default()
+        };
+        let actual = render_to_buffer(&scene, 80, 40);
+
+        if generate {
+            let fixture_path = format!(
+                "{}/tests/fixtures/battle_viewer/sideline_golden.fixture",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            let preview_path = format!(
+                "{}/tests/fixtures/battle_viewer/sideline_golden.preview.txt",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            std::fs::write(&fixture_path, serialize_braille_buffer(&actual))
+                .unwrap_or_else(|e| panic!("failed to write {fixture_path}: {e}"));
+            std::fs::write(&preview_path, buffer_to_art(&actual))
+                .unwrap_or_else(|e| panic!("failed to write {preview_path}: {e}"));
+            return;
+        }
+
+        let serialized = serialize_braille_buffer(&actual);
+        assert!(
+            serialized.lines().count() > 1,
+            "Sideline render must produce at least one lit braille cell \
+             (got an empty/all-blank render)"
+        );
+
+        let fixture = load_battle_viewer_fixture("sideline_golden");
+        let diff = diff_dots(&fixture, &actual);
+        assert!(
+            diff.is_match(),
+            "Sideline's current render diverges from the committed golden \
+             fixture ({} dot mismatch(es) of {} compared)",
+            diff.mismatches.len(),
+            diff.dots_compared
+        );
+    }
+
+    /// Over-Shoulder, demo `pieces()` layout, `elapsed = 0.0`, rendered 80x40.
+    /// Same role as `sideline_golden_matches_baseline` — captured render
+    /// evidence + forward regression lock, not a pre-refactor oracle.
+    #[test]
+    fn over_shoulder_golden_matches_baseline() {
+        let generate = std::env::var("UPDATE_BATTLE_VIEWER_FIXTURES").is_ok();
+
+        let scene = BattleViewer {
+            camera_mode: BattleCamera::over_shoulder_preset(),
+            ..BattleViewer::default()
+        };
+        let actual = render_to_buffer(&scene, 80, 40);
+
+        if generate {
+            let fixture_path = format!(
+                "{}/tests/fixtures/battle_viewer/over_shoulder_golden.fixture",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            let preview_path = format!(
+                "{}/tests/fixtures/battle_viewer/over_shoulder_golden.preview.txt",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            std::fs::write(&fixture_path, serialize_braille_buffer(&actual))
+                .unwrap_or_else(|e| panic!("failed to write {fixture_path}: {e}"));
+            std::fs::write(&preview_path, buffer_to_art(&actual))
+                .unwrap_or_else(|e| panic!("failed to write {preview_path}: {e}"));
+            return;
+        }
+
+        let serialized = serialize_braille_buffer(&actual);
+        assert!(
+            serialized.lines().count() > 1,
+            "Over-Shoulder render must produce at least one lit braille cell \
+             (got an empty/all-blank render)"
+        );
+
+        let fixture = load_battle_viewer_fixture("over_shoulder_golden");
+        let diff = diff_dots(&fixture, &actual);
+        assert!(
+            diff.is_match(),
+            "Over-Shoulder's current render diverges from the committed \
+             golden fixture ({} dot mismatch(es) of {} compared)",
+            diff.mismatches.len(),
+            diff.dots_compared
+        );
+    }
+
+    /// b7-t1: free-roam actually renders content, and driving movement keys
+    /// through the real `handle_input` changes the rendered dots. Renders
+    /// `free_roam_preset()`'s pinned starting transform, feeds
+    /// `['W','W','W','E','R']` (forward x3, yaw +5deg, pitch +5deg) through
+    /// `handle_input`, renders again. This is a genuine, potentially-failing
+    /// check: no existing test renders free-roam to a buffer, so a blank
+    /// frame (everything off-screen / degenerate scale) or a no-op render
+    /// would fail here and is a real defect, not a test bug.
+    #[test]
+    fn free_roam_movement_changes_rendered_output() {
+        let before_scene = BattleViewer {
+            camera_mode: BattleCamera::free_roam_preset(),
+            ..BattleViewer::default()
+        };
+        let before = render_to_buffer(&before_scene, 80, 40);
+
+        let serialized_before = serialize_braille_buffer(&before);
+        assert!(
+            serialized_before.lines().count() > 1,
+            "free-roam's starting transform must render at least one lit \
+             braille cell (got an empty/all-blank render)"
+        );
+
+        let mut after_scene = BattleViewer {
+            camera_mode: BattleCamera::free_roam_preset(),
+            ..BattleViewer::default()
+        };
+        for c in ['W', 'W', 'W', 'E', 'R'] {
+            after_scene.handle_input(key_event(crossterm::event::KeyCode::Char(c)));
+        }
+        let after = render_to_buffer(&after_scene, 80, 40);
+
+        assert!(
+            !diff_dots(&before, &after).is_match(),
+            "free-roam movement keys must change the rendered output; got \
+             identical dots before and after driving \
+             ['W','W','W','E','R'] through handle_input"
         );
     }
 }
