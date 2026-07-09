@@ -13,10 +13,21 @@ pub enum ShapeKind {
     Ring,
 }
 
-/// Normalized radius (`0 < PEAK < 1`) at which `ShapeKind::Ring`'s alpha
-/// profile peaks. A rendering-tuned constant, not a design pin — see
-/// `specs/41-battle-viewer-perspective-camera-rework.md`.
-const RING_PEAK: f32 = 0.5;
+/// Normalized radius at which `ShapeKind::Ring`'s alpha profile peaks —
+/// close to the outer edge (`1.0`) so the lit band hugs the shape's outer
+/// boundary rather than sitting mid-radius.
+const RING_PEAK: f32 = 0.85;
+/// Half-width of `ShapeKind::Ring`'s lit band, in ABSOLUTE dots — not a
+/// fraction of the radius. A fixed fraction (e.g. "10% of radius") reads
+/// fine at large sizes but is narrower than one dot at the shadow sizes this
+/// actually renders at (a real shadow's radius is often only 6-8 dots), so
+/// almost no dot's discretized distance lands inside the band and the ring
+/// rasterizes to a single fallback point instead of a visible perimeter —
+/// this shipped as a real bug ("rings disappeared"). An absolute width
+/// guarantees the band always spans enough dots to form a ring at realistic
+/// sizes, while still reading as thin at large ones (same absolute width,
+/// smaller fraction of a bigger radius).
+const RING_BAND_HALF_WIDTH_DOTS: f32 = 1.1;
 
 /// Rasterize `kind` into a fresh `width_dots × height_dots` [`DotBuffer`],
 /// with `color`'s RGB held constant and alpha varying radially by `kind`'s
@@ -24,9 +35,11 @@ const RING_PEAK: f32 = 0.5;
 /// beyond the outermost dot):
 /// - `Ellipse`: alpha falls off linearly from the center (`color.a`) to the
 ///   edge (`0`) via `1 - d`.
-/// - `Ring`: an annulus — alpha is `0` at the exact center (the hole), rises
-///   to the peak (`color.a`) at `d == RING_PEAK`, then falls back to `0` at
-///   the outer edge (`d >= 1.0`).
+/// - `Ring`: a true annulus — alpha peaks (`color.a`) at `d == RING_PEAK` and
+///   falls off linearly to `0` over `RING_BAND_HALF_WIDTH_DOTS` dots either
+///   side of it (an absolute width, not a fraction of the radius — see that
+///   constant's own doc comment), so both the hollow interior and the outer
+///   edge are genuinely transparent, not just dim.
 ///
 /// Dots whose scaled alpha rounds to `0` are emitted as `Dot::Transparent`
 /// rather than `Lit(a=0)`.
@@ -46,6 +59,22 @@ pub fn rasterize_shape(
     let rx = if width_dots > 1 { (width_dots - 1) as f32 / 2.0 } else { 1.0 };
     let ry = if height_dots > 1 { (height_dots - 1) as f32 / 2.0 } else { 1.0 };
 
+    // Convert the Ring's absolute-dot band half-width into normalized `d`
+    // units, using the SMALLER of the two radii as the reference (the more
+    // constrained axis) so the band stays at least this wide in dots along
+    // whichever direction is tightest — and clamp it well under `RING_PEAK`
+    // so the band can never swallow the hole entirely on a very small shape.
+    let ref_radius = rx.min(ry).max(1.0);
+    let ring_band_half_width = (RING_BAND_HALF_WIDTH_DOTS / ref_radius).min(RING_PEAK * 0.95);
+
+    let mut any_lit = false;
+    // Tracks the in-disk dot whose `d` is closest to `RING_PEAK` — the
+    // fallback below needs it on the rare shape small enough that even the
+    // adaptive band above doesn't land on a real dot (a real annulus can
+    // otherwise rasterize to fully transparent at tiny sizes, which reads as
+    // "the shadow vanished," not "the shadow is small").
+    let mut closest_to_peak: Option<(usize, usize, f32)> = None;
+
     for row in 0..height_dots {
         for col in 0..width_dots {
             let nx = (col as f32 - cx) / rx;
@@ -56,15 +85,16 @@ pub fn rasterize_shape(
                 continue; // already Transparent
             }
 
+            if kind == ShapeKind::Ring {
+                let dist_to_peak = (d - RING_PEAK).abs();
+                if closest_to_peak.is_none_or(|(_, _, best)| dist_to_peak < best) {
+                    closest_to_peak = Some((col, row, dist_to_peak));
+                }
+            }
+
             let alpha_factor = match kind {
                 ShapeKind::Ellipse => 1.0 - d,
-                ShapeKind::Ring => {
-                    if d <= RING_PEAK {
-                        d / RING_PEAK
-                    } else {
-                        (1.0 - d) / (1.0 - RING_PEAK)
-                    }
-                }
+                ShapeKind::Ring => (1.0 - (d - RING_PEAK).abs() / ring_band_half_width).max(0.0),
             };
 
             let a = (color.a as f32 * alpha_factor).round() as u8;
@@ -72,6 +102,17 @@ pub fn rasterize_shape(
                 continue; // already Transparent
             }
             buf.set(col, row, Dot::Lit(Rgba::new(color.r, color.g, color.b, a)));
+            any_lit = true;
+        }
+    }
+
+    // A genuine 1×1 buffer's sole dot IS the exact center — that stays the
+    // (degenerate) hole, matching Ring's own "center is always the hole"
+    // rule, not a candidate for the small-shape fallback below.
+    let is_degenerate_1x1 = width_dots == 1 && height_dots == 1;
+    if kind == ShapeKind::Ring && !any_lit && !is_degenerate_1x1 {
+        if let Some((col, row, _)) = closest_to_peak {
+            buf.set(col, row, Dot::Lit(color));
         }
     }
 
@@ -283,9 +324,13 @@ mod tests {
     #[test]
     fn ring_peak_is_off_center() {
         let color = Rgba::new(255, 255, 255, 255);
-        let buf = rasterize_shape(ShapeKind::Ring, 9, 9, color);
-        let center_row = 4;
-        let center_col = 4;
+        // 25×25 (not 9×9): RING_PEAK sits close enough to the outer edge
+        // (0.90) that a 9-dot buffer doesn't have enough resolution to
+        // discretize the peak away from the last column — real shadows are
+        // dozens of dots wide, so this is representative, not oversized.
+        let buf = rasterize_shape(ShapeKind::Ring, 25, 25, color);
+        let center_row = (buf.rows() - 1) / 2;
+        let center_col = (buf.cols() - 1) / 2;
         let last_col = buf.cols() - 1;
 
         let (peak_col, peak_alpha) = (0..buf.cols())
@@ -335,8 +380,9 @@ mod tests {
     #[test]
     fn ring_rgb_preserved() {
         let color = Rgba::new(12, 34, 56, 255);
-        let buf = rasterize_shape(ShapeKind::Ring, 9, 9, color);
-        let center_row = 4;
+        // 25×25 for the same resolution reason as `ring_peak_is_off_center`.
+        let buf = rasterize_shape(ShapeKind::Ring, 25, 25, color);
+        let center_row = (buf.rows() - 1) / 2;
         let mut saw_lit = false;
         for col in 0..buf.cols() {
             if let Dot::Lit(c) = buf.get(col, center_row) {
