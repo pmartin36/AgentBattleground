@@ -149,6 +149,24 @@ pub(crate) fn lit_dot_color(buf: &Buffer, dot_col: i32, dot_row: i32) -> Option<
         .then_some(color)
 }
 
+/// The cell-rect a `DotRect` actually paints into when routed through the
+/// scene's shared `blit_dots`-style pipeline: pad by `cell_remainder()`, then
+/// size the grid via `div_ceil` (mirrors `dots_to_grid`'s `cell_cols =
+/// shape.cols().div_ceil(2)` / `cell_rows = ...div_ceil(4)`). Unlike
+/// `DotRect::to_cell_rect()` — which FLOORS width/height — this can be one
+/// cell larger on the trailing (right/bottom) edge whenever the rect's own
+/// extent isn't a whole number of cells (post_battle's b4-t5 glow ring shares
+/// a braille cell with its frame at exactly this boundary). Use this, not
+/// `to_cell_rect()`, when scanning for a specific painted cell near a rect's
+/// trailing edge.
+pub(crate) fn blit_footprint_cell_rect(target: engine_render::DotRect) -> Rect {
+    let (dx, dy) = target.cell_remainder();
+    let cell_rect = target.to_cell_rect();
+    let cols = ((target.w.max(0) as u32 + dx as u32).div_ceil(2)) as u16;
+    let rows = ((target.h.max(0) as u32 + dy as u32).div_ceil(4)) as u16;
+    Rect { x: cell_rect.x, y: cell_rect.y, width: cols, height: rows }
+}
+
 // ── b7-t1: golden-fixture serialize/deserialize helpers ─────────────────────
 
 /// Serialize every LIT braille cell of `buf`, through `decode_braille_cell`,
