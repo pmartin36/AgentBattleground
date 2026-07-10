@@ -45,7 +45,10 @@ const WIDTH_FILL_RATIO: f32 = 0.92;
 /// one distance term, not two stacked ones.
 fn sprite_base_dot_rows_width_fill(camera: &BattleCamera, pos: WorldPos, aspect: f32) -> u32 {
     let target_width_dots = camera.local_dots_per_world_unit(pos) * WIDTH_FILL_RATIO;
-    (target_width_dots / aspect.max(0.01)).round().max(1.0) as u32
+    // `.min(MAX_SPRITE_DOT_DIMENSION)` — `local_dots_per_world_unit` is
+    // unbounded near the camera (see that constant's doc comment); this
+    // value becomes an actual sprite-image resize target.
+    ((target_width_dots / aspect.max(0.01)).round().max(1.0) as u32).min(MAX_SPRITE_DOT_DIMENSION)
 }
 
 /// Per-piece depth-scale multiplier (spec 41 Decision 4): always `1.0` now.
@@ -398,6 +401,36 @@ mod depth_scale_tests {
         for v in [near, mid, far] {
             assert!(v > 0, "width-fill base_dot_rows must stay positive: got {v}");
         }
+    }
+
+    /// Regression: a camera positioned essentially AT `pos` drives
+    /// `forward_distance` down to its `NEAR_EPS` floor, spiking
+    /// `local_dots_per_world_unit` into the thousands. Before the
+    /// `MAX_SPRITE_DOT_DIMENSION` cap, this became a target sprite-resize
+    /// dimension in the thousands (part of a real shipped hang — see
+    /// `shadow.rs`'s sibling regression test for the fuller picture).
+    #[test]
+    fn width_fill_stays_capped_when_camera_is_at_pos() {
+        let pos = WorldPos::new(3.5, 3.5);
+        let mode = BattleCamera {
+            camera: AnyCamera::Perspective(PerspectiveCamera {
+                x: pos.x,
+                y: pos.y,
+                height: 0.0,
+                yaw_deg: 0.0,
+                pitch_deg: 0.0,
+                fov_deg: 55.0,
+                scale_dots: 40.0,
+            }),
+            fit: FitMode::Manual,
+        };
+
+        let rows = sprite_base_dot_rows_width_fill(&mode, pos, 1.0);
+
+        assert!(
+            rows <= MAX_SPRITE_DOT_DIMENSION,
+            "base_dot_rows {rows} exceeds MAX_SPRITE_DOT_DIMENSION ({MAX_SPRITE_DOT_DIMENSION}) — the near-camera cap regressed"
+        );
     }
 
     /// A farther piece's rasterized sprite must be smaller than a nearer

@@ -29,6 +29,21 @@ pub const BOARD_ROWS: u16 = 7;
 /// column, derived from `BOARD_COLS` (never a bare literal `3.5`).
 const BOARD_CENTER_COL: f32 = BOARD_COLS as f32 / 2.0;
 
+/// Hard ceiling on any per-piece sprite/shadow dot dimension derived from
+/// `Camera::local_dots_per_world_unit` (`shadow.rs`'s `shadow_buffers`,
+/// `sizing.rs`'s `sprite_base_dot_rows_width_fill`). That rate is floored
+/// against divide-by-zero at the projection layer (`NEAR_EPS`) but not
+/// capped against blowing up — a free-roam camera passing very close to a
+/// piece drives `forward_distance` down to that floor, spiking the rate
+/// into the thousands, which turns a single frame's buffer allocation +
+/// rasterization/resize into a multi-second stall (shipped as a real hang:
+/// the game freezes whenever the camera passes near the board's midpoint,
+/// where the demo pieces stand). A shadow/sprite this size would already be
+/// many times the visible board's own width, so clamping loses nothing a
+/// player could ever actually see. Odd, so `| 1` (oddness-forcing) never
+/// pushes a capped value past the ceiling.
+pub(crate) const MAX_SPRITE_DOT_DIMENSION: u32 = 401;
+
 #[derive(Inspectable)]
 pub struct BattleViewer {
     elapsed: f32,

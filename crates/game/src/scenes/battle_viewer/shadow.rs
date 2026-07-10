@@ -59,8 +59,13 @@ impl BattleViewer {
                 // `| 1` forces width (and, from it, height) odd so
                 // `rasterize_shape`'s center (`(size-1)/2`) always lands on a
                 // real dot — for `Ring` that center dot is the alpha-0 hole.
-                let w = ((rate * SHADOW_WIDTH_RATIO).round().max(1.0) as usize) | 1;
-                let h = ((((w as f32) * k).round().max(1.0)) as usize) | 1;
+                // `.min(MAX_SPRITE_DOT_DIMENSION)` — see that constant's doc
+                // comment: `rate` is unbounded near the camera, and this
+                // allocates+rasterizes a `w*h`-dot buffer.
+                let w = ((rate * SHADOW_WIDTH_RATIO).round().max(1.0) as usize)
+                    .min(MAX_SPRITE_DOT_DIMENSION as usize) | 1;
+                let h = ((((w as f32) * k).round().max(1.0)) as usize)
+                    .min(MAX_SPRITE_DOT_DIMENSION as usize) | 1;
                 let alpha = self.shadow_alpha(p.index);
                 let col = Rgba::new(p.color.r, p.color.g, p.color.b, (255.0 * alpha).round() as u8);
                 rasterize_shape(ShapeKind::Ring, w, h, col)
@@ -223,6 +228,51 @@ mod contact_shadow_tests {
                 "the second entry of each pair must be the piece's own Animated draw"
             );
             assert_eq!(piece.tint, None, "the piece's own SpriteDraw.tint must be None");
+        }
+    }
+
+    /// Regression: a free-roam-style camera positioned essentially AT a
+    /// piece's own world position drives `forward_distance` down to its
+    /// `NEAR_EPS` floor, spiking `local_dots_per_world_unit` into the
+    /// thousands. Before the `MAX_SPRITE_DOT_DIMENSION` cap, this allocated
+    /// and rasterized a tens-of-millions-of-dots shadow buffer every frame —
+    /// a real shipped hang (the game freezes whenever the camera passes near
+    /// the board's midpoint, where the demo pieces stand). Both dimensions
+    /// must stay within the documented ceiling regardless.
+    #[test]
+    fn shadow_buffers_stay_capped_when_camera_is_at_piece_position() {
+        let scene = BattleViewer::default();
+        let area = Rect::new(0, 0, 100, 50);
+        let piece_pos = scene.pieces[0].transform.translate;
+        let camera = BattleCamera {
+            camera: AnyCamera::Perspective(PerspectiveCamera {
+                x: piece_pos.x,
+                y: piece_pos.y,
+                height: 0.0,
+                yaw_deg: 0.0,
+                pitch_deg: 0.0,
+                fov_deg: 55.0,
+                scale_dots: 40.0,
+            }),
+            fit: FitMode::Manual,
+        };
+        let geom = board_geometry(area, camera, BattleViewerTuning::default());
+
+        let bufs = scene.shadow_buffers(&geom);
+        assert!(!bufs.is_empty(), "expected at least one shadow buffer for a drawable piece");
+        for buf in &bufs {
+            assert!(
+                buf.cols() as u32 <= MAX_SPRITE_DOT_DIMENSION,
+                "shadow buffer width {} exceeds MAX_SPRITE_DOT_DIMENSION ({}) — the near-camera cap regressed",
+                buf.cols(),
+                MAX_SPRITE_DOT_DIMENSION
+            );
+            assert!(
+                buf.rows() as u32 <= MAX_SPRITE_DOT_DIMENSION,
+                "shadow buffer height {} exceeds MAX_SPRITE_DOT_DIMENSION ({}) — the near-camera cap regressed",
+                buf.rows(),
+                MAX_SPRITE_DOT_DIMENSION
+            );
         }
     }
 
