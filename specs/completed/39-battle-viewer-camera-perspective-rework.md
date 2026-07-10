@@ -1,5 +1,5 @@
-> # ⚠️ MAJOR ISSUES — flagged 2026-07-08
-> Implementation shipped and its own gate is green, but the project owner has identified major issues with the result, to be discussed and addressed in a follow-up session. Do not treat this spec as complete or as a safe foundation to build on until that discussion resolves it.
+> # ⚠️ SUPERSEDED — resolved 2026-07-09
+> Flagged 2026-07-08: implementation shipped with a green gate but badly broken rendered output (wrong convergence, wrong camera axis, invisible dim grid lines, a displaced bench piece). That follow-up discussion concluded with `41-battle-viewer-perspective-camera-rework`, which replaced this spec's `ObliqueCamera` entirely with a real pinhole-camera model and has since shipped, been manually verified, and moved to `completed/`. This spec is retired, not implemented-as-written — kept here for the historical record of what went wrong and why, per `41`'s own Purpose section.
 
 # Battle Viewer — Camera, Perspective & Piece Rendering Rework
 

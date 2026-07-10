@@ -1,3 +1,6 @@
+> # ✅ DONE! — Completed 2026-07-09
+> Status: implemented via the `tdd-pipeline`, all tasks GREEN, full workspace gate clean. Manually verified beyond the automated gate: read the dedicated panic-hook integration test (isolated in its own test binary since `panic::set_hook` is global process state) and confirmed it genuinely triggers a panic via `catch_unwind` and asserts the log file captures the message at ERROR while the terminal actually leaves raw mode — real behavioral proof, not a compile check.
+
 # Engine App Logging & Panic Handling
 
 ## Purpose

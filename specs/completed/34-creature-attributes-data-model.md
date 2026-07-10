@@ -1,3 +1,6 @@
+> # ✅ DONE! — Completed 2026-07-09
+> Status: implemented. Confirmed against the actual codebase: `stats.rs` (`StatKind`/`Stats`), `ability.rs` (`Modifier`/`StatRequirement`), `exhaustion.rs` (percent + injured-state transition), and `squad_role.rs` (slot-count constants + positional role lookup) each exist, match this spec's scope, and carry their own unit tests (22 `#[test]` fns across the four files). Filed here retroactively — the implementation predates this filing.
+
 # Creature Attributes & Progression Data Model
 
 ## Purpose

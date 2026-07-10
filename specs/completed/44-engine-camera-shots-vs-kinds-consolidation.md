@@ -1,3 +1,6 @@
+> # ✅ DONE! — Completed 2026-07-09
+> Status: implemented via the `tdd-pipeline` (in an isolated git worktree, run in parallel with `43`'s pipeline), all tasks GREEN, full workspace gate clean after merge to `main`. Mid-implementation the pipeline correctly proved this spec's original premise false (the old `PerspectiveCamera` and `FreeRoamCamera` differ by a screen-x reflection, not a rotation — a determinant mismatch, verified numerically) and escalated rather than silently picking a resolution; the project owner elected the physically-correct rotation model as canonical (see the Purpose amendment below), accepting that Sideline/Over-the-shoulder mirror left-right versus their prior baseline. That mirror was independently verified after the fact: golden fixtures diffed byte-for-byte pre/post (confirmed a clean flip, not corruption), and both shots rendered to PNG and visually inspected (coherent board/sprites, nothing garbled). Top-down confirmed byte-identical (zero fixture diff).
+
 # Engine Camera: Shots vs. Kinds Consolidation
 
 ## Purpose

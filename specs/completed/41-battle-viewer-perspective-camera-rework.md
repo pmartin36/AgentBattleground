@@ -1,3 +1,6 @@
+> # ✅ DONE! — Completed 2026-07-09
+> Status: implemented via the `tdd-pipeline`, all tasks GREEN, full workspace gate clean. Manually verified beyond the automated gate: rendered every preset and caught two real bugs the pipeline missed (a vertical near/far inversion, and Over-the-shoulder facing the wrong team), both fixed and re-verified against live rendered output. Supersedes `39-battle-viewer-camera-perspective-rework` (moved to `completed/` alongside this spec, flagged as superseded rather than shipped-correct).
+
 # Battle Viewer — Real Perspective Camera Rework
 
 ## Purpose

@@ -1,3 +1,6 @@
+> # ✅ DONE! — Completed 2026-07-09
+> Status: implemented via the `tdd-pipeline`, all tasks GREEN, full workspace gate clean. Manually verified beyond the automated gate: exercised Sideline/Over-the-shoulder/Top-down (pixel-identical to pre-refactor) and free-roam (movement/rotation/pitch/zoom, idempotent re-selection, fresh reset on re-entry), which caught one design gap (free-roam's starting view rendered in a screen corner due to a zero `screen_offset`), fixed and re-verified. Later generalized further by `44-engine-camera-shots-vs-kinds-consolidation`.
+
 # Engine Camera-Kind API & Free-Roam Camera
 
 ## Purpose
