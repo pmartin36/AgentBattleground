@@ -297,6 +297,28 @@ mod tests {
         );
     }
 
+    /// `ButtonColors::default()` must reproduce today's look exactly: each
+    /// state's `background`/`icon` equal `ButtonState::_.tint_color()`, and
+    /// `label` is the constant `FrameButton::LABEL_COLOR` (0xf0f0f0) across
+    /// all three states (spec's Decisions, lines 55-61; b2-t1 research.md).
+    #[test]
+    fn button_colors_default_matches_current_look() {
+        let colors = ButtonColors::default();
+        const LABEL: Rgba = Rgba::rgb(0xf0, 0xf0, 0xf0);
+
+        assert_eq!(colors.idle.background, ButtonState::Idle.tint_color());
+        assert_eq!(colors.idle.icon, ButtonState::Idle.tint_color());
+        assert_eq!(colors.idle.label, LABEL);
+
+        assert_eq!(colors.hover.background, ButtonState::Hover.tint_color());
+        assert_eq!(colors.hover.icon, ButtonState::Hover.tint_color());
+        assert_eq!(colors.hover.label, LABEL);
+
+        assert_eq!(colors.pressed.background, ButtonState::Pressed.tint_color());
+        assert_eq!(colors.pressed.icon, ButtonState::Pressed.tint_color());
+        assert_eq!(colors.pressed.label, LABEL);
+    }
+
     /// `set_rect` updates the hit-test area used by subsequent events.
     #[test]
     fn set_rect_updates_hit_test_area() {

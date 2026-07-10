@@ -31,6 +31,48 @@ impl ButtonState {
     }
 }
 
+/// Per-state colors for a [`Button`]: `background`/`icon` are multiply tints
+/// fed to `dots::tint` (same semantics as [`ButtonState::tint_color`]);
+/// `label` is the absolute foreground color of the text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StateColors {
+    pub background: Rgba,
+    pub icon: Rgba,
+    pub label: Rgba,
+}
+
+/// Per-state color scheme for a [`Button`]. `Default` must reproduce today's
+/// look exactly (spec's lossless-migration guarantee) — see b2-t1 research.md.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ButtonColors {
+    pub idle: StateColors,
+    pub hover: StateColors,
+    pub pressed: StateColors,
+}
+
+impl Default for ButtonColors {
+    fn default() -> Self {
+        const LABEL: Rgba = Rgba::rgb(0xf0, 0xf0, 0xf0); // = FrameButton::LABEL_COLOR
+        Self {
+            idle: StateColors {
+                background: ButtonState::Idle.tint_color(),
+                icon: ButtonState::Idle.tint_color(),
+                label: LABEL,
+            },
+            hover: StateColors {
+                background: ButtonState::Hover.tint_color(),
+                icon: ButtonState::Hover.tint_color(),
+                label: LABEL,
+            },
+            pressed: StateColors {
+                background: ButtonState::Pressed.tint_color(),
+                icon: ButtonState::Pressed.tint_color(),
+                label: LABEL,
+            },
+        }
+    }
+}
+
 /// Shared mouse-driven interaction core: owns the hit-test rect and current
 /// [`ButtonState`], independent of how a button paints itself. Reused by
 /// [`Button`] (panel+icon render) and `FrameButton` (bordered frame + text
