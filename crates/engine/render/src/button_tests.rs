@@ -95,9 +95,9 @@ fn inset_blob_png(w: u32, h: u32, inset: u32) -> Vec<u8> {
 }
 
 /// Leak `bytes` to `'static`, giving each call a fresh, distinct pointer —
-/// `Button::new`/`FrameButton::new` now take `&'static [u8]` (asset_cache is
-/// keyed on `bytes.as_ptr()`), so every in-file test fixture call must yield
-/// its own stable address, preserving per-test cache isolation.
+/// `Button::new` takes `&'static [u8]` (asset_cache is keyed on
+/// `bytes.as_ptr()`), so every in-file test fixture call must yield its
+/// own stable address, preserving per-test cache isolation.
 #[cfg(test)]
 fn leak_png(bytes: Vec<u8>) -> &'static [u8] {
     Box::leak(bytes.into_boxed_slice())
@@ -299,7 +299,7 @@ mod tests {
 
     /// `ButtonColors::default()` must reproduce today's look exactly: each
     /// state's `background`/`icon` equal `ButtonState::_.tint_color()`, and
-    /// `label` is the constant `FrameButton::LABEL_COLOR` (0xf0f0f0) across
+    /// `label` is the constant 0xf0f0f0 (today's default label color) across
     /// all three states (spec's Decisions, lines 55-61; b2-t1 research.md).
     #[test]
     fn button_colors_default_matches_current_look() {
@@ -498,8 +498,9 @@ mod icon_contrast_tests {
     }
 }
 
-/// b3-t1: `FrameButton` tests. Separate module from `mod tests` above, which
-/// must stay byte-for-byte unmodified per b1-t1's refactor constraint.
+/// Label `Button` tests (`Button::new(rect, frame).label(text)`). Separate
+/// module from `mod tests` above, which must stay byte-for-byte unmodified
+/// per b1-t1's refactor constraint.
 #[cfg(test)]
 mod frame_button_tests {
     use super::*;
@@ -524,12 +525,12 @@ mod frame_button_tests {
         Rect::new(2, 1, 8, 4)
     }
 
-    /// Renders a fresh `FrameButton` in `state` and returns the painted fg
+    /// Renders a fresh label `Button` in `state` and returns the painted fg
     /// color of a top-center BORDER cell (not the transparent interior, not
     /// the label's center row).
     fn render_top_border_fg(state: ButtonState) -> Color {
         let rect = frame_rect();
-        let mut b = FrameButton::new(rect, frame_bytes(), "Go");
+        let mut b = Button::new(rect, frame_bytes()).label("Go");
         let inside = (rect.x + 1, rect.y + 1);
         match state {
             ButtonState::Idle => {}
@@ -582,7 +583,7 @@ mod frame_button_tests {
     #[test]
     fn frame_button_render_draws_centered_label() {
         let rect = frame_rect();
-        let b = FrameButton::new(rect, frame_bytes(), "Go");
+        let b = Button::new(rect, frame_bytes()).label("Go");
         let mut buf = make_buf(16, 8);
         b.render(&mut buf);
 
@@ -612,7 +613,7 @@ mod frame_button_tests {
     fn frame_button_handle_mouse_completes_click() {
         let rect = frame_rect();
         let inside = (rect.x + 1, rect.y + 1);
-        let mut b = FrameButton::new(rect, frame_bytes(), "Go");
+        let mut b = Button::new(rect, frame_bytes()).label("Go");
 
         b.handle_mouse(&ev(MouseEventKind::Moved, inside.0, inside.1));
         b.handle_mouse(&ev(MouseEventKind::Down(MouseButton::Left), inside.0, inside.1));
@@ -623,14 +624,13 @@ mod frame_button_tests {
     }
 }
 
-/// b2-t1: `render_tinted`'s glyph-mask-invariance regression tests. The bug
-/// this guards: today `render_tinted` feeds the post-`ButtonState`-tint
-/// buffer into `dots_to_grid`, so the adaptive-luma mask can flip per-dot
-/// between states purely from `tint`'s per-channel integer rounding — the
-/// painted glyph (e.g. `⣻`/`⢻`/`⣿`) shifts across Idle/Hover/Pressed even
-/// though the underlying shape never changed. Separate module from `mod
-/// tests` above, which stays byte-for-byte unmodified per b1-t1's refactor
-/// constraint.
+/// `render`'s glyph-mask-invariance regression tests. The bug this guards: a
+/// prior version fed the post-`ButtonState`-tint buffer into `dots_to_grid`,
+/// so the adaptive-luma mask could flip per-dot between states purely from
+/// `tint`'s per-channel integer rounding — the painted glyph (e.g.
+/// `⣻`/`⢻`/`⣿`) shifted across Idle/Hover/Pressed even though the underlying
+/// shape never changed. Separate module from `mod tests` above, which stays
+/// byte-for-byte unmodified per b1-t1's refactor constraint.
 #[cfg(test)]
 mod glyph_mask_invariance_tests {
     use super::*;
@@ -650,9 +650,9 @@ mod glyph_mask_invariance_tests {
         }
     }
 
-    /// Drives any `ButtonCore`-backed widget (`Button`/`FrameButton`, both
-    /// reachable here via `Deref`/`DerefMut`) to `state` via the same mouse
-    /// sequence the other test modules use.
+    /// Drives any `ButtonCore`-backed widget (reachable here via
+    /// `Deref`/`DerefMut`) to `state` via the same mouse sequence the other
+    /// test modules use.
     fn set_state<B: DerefMut<Target = ButtonCore>>(b: &mut B, state: ButtonState) {
         let rect = b.rect();
         let inside = (rect.x + 1, rect.y + 1);
@@ -766,9 +766,9 @@ mod glyph_mask_invariance_tests {
     }
 
     /// Border-ring cells of `rect` (top row, bottom row, left/right columns),
-    /// excluding the label's centered row — mirrors `FrameButton::render`'s
-    /// own painted regions (hollow frame ring; interior/label are separate
-    /// concerns from the dot-pipeline mask under test here).
+    /// excluding the label's centered row — mirrors the hollow-frame label
+    /// `Button`'s own painted regions (hollow frame ring; interior/label are
+    /// separate concerns from the dot-pipeline mask under test here).
     fn border_cells(rect: Rect) -> Vec<(u16, u16)> {
         let label_row = rect.y + rect.height / 2;
         let mut cells: Vec<(u16, u16)> = (rect.x..rect.x + rect.width)
@@ -782,7 +782,7 @@ mod glyph_mask_invariance_tests {
         cells
     }
 
-    /// `FrameButton::render`: same glyph-mask-invariance assertion as
+    /// Label `Button` render: same glyph-mask-invariance assertion as
     /// `render_glyph_mask_invariant_across_states`, over the border ring
     /// cells (the frame's only opaque, `ButtonState`-tinted region).
     #[test]
@@ -790,15 +790,15 @@ mod glyph_mask_invariance_tests {
         let rect = frame_rect();
         let cells = border_cells(rect);
 
-        let mut idle = FrameButton::new(rect, frame_bytes(), "Go");
+        let mut idle = Button::new(rect, frame_bytes()).label("Go");
         set_state(&mut idle, ButtonState::Idle);
         let idle_cells = render_and_sample(|buf| idle.render(buf), rect, &cells);
 
-        let mut hover = FrameButton::new(rect, frame_bytes(), "Go");
+        let mut hover = Button::new(rect, frame_bytes()).label("Go");
         set_state(&mut hover, ButtonState::Hover);
         let hover_cells = render_and_sample(|buf| hover.render(buf), rect, &cells);
 
-        let mut pressed = FrameButton::new(rect, frame_bytes(), "Go");
+        let mut pressed = Button::new(rect, frame_bytes()).label("Go");
         set_state(&mut pressed, ButtonState::Pressed);
         let pressed_cells = render_and_sample(|buf| pressed.render(buf), rect, &cells);
 

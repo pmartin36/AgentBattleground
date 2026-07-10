@@ -9,7 +9,7 @@ use engine_core::SceneKey;
 use serde_json::Value as JsonValue;
 
 use engine_render::{
-    flex, Align, Basis, ButtonState, Direction, FlexChild, FlexStyle, FrameButton, Justify,
+    flex, Align, Basis, Button, ButtonState, Direction, FlexChild, FlexStyle, Justify,
 };
 
 use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
@@ -22,7 +22,7 @@ pub struct MainHub {
     /// mutate each button's rect/state through an immutable receiver —
     /// mirrors `RosterManager`'s button fields.
     #[inspect(hidden)]
-    buttons: [RefCell<FrameButton>; 3],
+    buttons: [RefCell<Button>; 3],
 
     /// Index (0..=2) of the menu item the selection cursor points at.
     /// Rendering the cursor arrow itself is b5-t4's deliverable.
@@ -39,9 +39,9 @@ impl Default for MainHub {
     fn default() -> Self {
         Self {
             buttons: [
-                RefCell::new(FrameButton::new(Rect::default(), crate::assets::FRAME_PANEL, "Roster")),
-                RefCell::new(FrameButton::new(Rect::default(), crate::assets::FRAME_PANEL, "Battle")),
-                RefCell::new(FrameButton::new(Rect::default(), crate::assets::FRAME_PANEL, "Exit")),
+                RefCell::new(Button::new(Rect::default(), crate::assets::FRAME_PANEL).label("Roster")),
+                RefCell::new(Button::new(Rect::default(), crate::assets::FRAME_PANEL).label("Battle")),
+                RefCell::new(Button::new(Rect::default(), crate::assets::FRAME_PANEL).label("Exit")),
             ],
             cursor_index: 0,
             quit_requested: false,
@@ -199,7 +199,7 @@ impl MainHub {
     }
 
     /// Paint `crate::assets::FRAME_PANEL` stretched to fill `rect` exactly (same
-    /// stretch-fit routine `FrameButton::render` uses for its panel), static
+    /// stretch-fit routine a `Button`'s background render uses), static
     /// (no `ButtonState` tint). Early-returns on a zero-dim rect.
     fn draw_title_frame(&self, buf: &mut Buffer, rect: Rect) {
         let dot_cols = rect.width as usize * 2;
@@ -549,7 +549,7 @@ mod mouse_input_tests {
     const W: u16 = 120;
     const H: u16 = 50;
 
-    /// Renders `scene` once (populating each `FrameButton`'s rect via
+    /// Renders `scene` once (populating each `Button`'s rect via
     /// `set_rect`, per b5-t6 research's "render before dispatch" note) and
     /// returns the fixed `area` used by `button_rects`.
     fn render_once(scene: &MainHub) -> Rect {

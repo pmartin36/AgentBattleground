@@ -3,13 +3,13 @@ use std::cell::RefCell;
 use crossterm::event::MouseEvent;
 use engine_core::color::Rgba;
 use engine_render::dots::Dot;
-use engine_render::{draw_dots, ui_primitives, DotRect, FrameButton};
+use engine_render::{draw_dots, ui_primitives, Button, ButtonColors, DotRect, StateColors};
 use ratatui::layout::Rect;
 use ratatui::Frame;
 
 pub struct BattleMenu {
     showing: bool,
-    finish_button: RefCell<FrameButton>,
+    finish_button: RefCell<Button>,
 }
 
 impl BattleMenu {
@@ -30,11 +30,11 @@ impl BattleMenu {
     pub(super) fn new() -> Self {
         Self {
             showing: false,
-            finish_button: RefCell::new(FrameButton::new(
-                Rect::default(),
-                crate::assets::FRAME_PANEL,
-                "Finish Battle",
-            )),
+            finish_button: RefCell::new(
+                Button::new(Rect::default(), crate::assets::FRAME_PANEL)
+                    .label("Finish Battle")
+                    .colors(Self::FINISH_SCHEME),
+            ),
         }
     }
 
@@ -43,6 +43,28 @@ impl BattleMenu {
     const CORNER_RADIUS: usize = 2; // dots chamfered off each corner
     const BUTTON_W: u16 = 20; // cells, capped to the panel width
     const BUTTON_H: u16 = 3; // cells, capped to the panel height
+
+    /// Coordinated per-state scheme: the whole "Finish Battle" button — ring
+    /// (background tint) AND label — brightens together on hover, the label
+    /// lighting to the menu's amber `BORDER_COLOR`. Idle-vs-Hover label color
+    /// differs by construction (spec 45:100).
+    const FINISH_SCHEME: ButtonColors = ButtonColors {
+        idle: StateColors {
+            background: Rgba::rgb(0xc8, 0xc8, 0xc8),
+            icon: Rgba::rgb(0xc8, 0xc8, 0xc8),
+            label: Rgba::rgb(0xc8, 0x96, 0x28),
+        },
+        hover: StateColors {
+            background: Rgba::rgb(0xff, 0xff, 0xff),
+            icon: Rgba::rgb(0xff, 0xff, 0xff),
+            label: Rgba::rgb(0xff, 0xbf, 0x00),
+        },
+        pressed: StateColors {
+            background: Rgba::rgb(0x8c, 0x8c, 0x8c),
+            icon: Rgba::rgb(0x8c, 0x8c, 0x8c),
+            label: Rgba::rgb(0x9a, 0x72, 0x18),
+        },
+    };
 
     pub(super) fn render(&self, frame: &mut Frame, area: Rect) {
         if !self.showing {
@@ -207,6 +229,49 @@ mod tests {
         assert!(
             !menu.handle_mouse(&mouse(MouseEventKind::Up(MouseButton::Left), 40, 12)),
             "a closed menu must not report clicks"
+        );
+    }
+
+    /// Find the first cell in `buf` on row `y` within `[x0, x0+w)` painted
+    /// with an ASCII-letter glyph — i.e. the "Finish Battle" label text
+    /// (plain terminal chars, not braille dots — CLAUDE.md rule 4).
+    fn find_label_cell(buf: &ratatui::buffer::Buffer, x0: u16, w: u16, y: u16) -> (u16, u16) {
+        for x in x0..(x0 + w) {
+            let s = buf.cell((x, y)).unwrap().symbol().to_string();
+            if s.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+                return (x, y);
+            }
+        }
+        panic!("no label glyph found in row {y}, cols [{x0}, {})", x0 + w);
+    }
+
+    /// The whole "Finish Battle" button — ring AND label — must recolor
+    /// together on hover: the label's rendered foreground color at Hover
+    /// must differ from its Idle color (spec 45's coordinated per-state
+    /// scheme; the reason this widget-unification exists).
+    #[test]
+    fn finish_label_recolors_on_hover() {
+        let mut menu = BattleMenu::new();
+        menu.toggle();
+        let _ = render(&menu, 80, 24); // sets the button's rect
+
+        let panel = BattleMenu::get_dot_rect(Rect::new(0, 0, 80, 24));
+        let button = BattleMenu::button_rect(panel);
+        let label_row = button.y + button.height / 2;
+
+        let buf_idle = render(&menu, 80, 24);
+        let (lx, ly) = find_label_cell(&buf_idle, button.x, button.width, label_row);
+        let idle_fg = buf_idle.cell((lx, ly)).unwrap().fg;
+
+        let cx = button.x + button.width / 2;
+        let cy = button.y + button.height / 2;
+        menu.handle_mouse(&mouse(MouseEventKind::Moved, cx, cy));
+        let buf_hover = render(&menu, 80, 24);
+        let hover_fg = buf_hover.cell((lx, ly)).unwrap().fg;
+
+        assert_ne!(
+            idle_fg, hover_fg,
+            "the \"Finish Battle\" label must recolor between Idle and Hover"
         );
     }
 }

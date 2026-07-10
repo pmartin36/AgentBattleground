@@ -1,9 +1,8 @@
 //! Durable, API-agnostic scenario module for the button-widget-unification
 //! lossless-migration gate (b1-t1 captures against it; b5-t1 verifies
 //! against it). References ONLY stable public `engine_render` API
-//! (`ButtonCore`, `ButtonState`, `decode_braille_cell`) — never
-//! `Button`/`FrameButton` — so it keeps compiling across every later task,
-//! including after `FrameButton` is deleted (b4-t3).
+//! (`ButtonCore`, `ButtonState`, `decode_braille_cell`) — never `Button`
+//! directly — so it keeps compiling across every later task.
 //!
 //! `#[path]`-included as a module (not compiled as its own test binary —
 //! only files directly under `tests/`, not in a subdirectory, become
@@ -164,9 +163,8 @@ fn ev(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
     }
 }
 
-/// Drive any `ButtonCore`-backed widget (old `Button`/`FrameButton` or new
-/// `Button`, all reach `ButtonCore` via `DerefMut`) to `state` via the
-/// standard mouse sequence. Copy of `button_tests.rs`'s `set_state`.
+/// Drive any `ButtonCore`-backed widget (reached via `DerefMut`) to `state`
+/// via the standard mouse sequence. Copy of `button_tests.rs`'s `set_state`.
 pub fn set_state<B: DerefMut<Target = ButtonCore>>(b: &mut B, state: ButtonState) {
     let rect = b.rect();
     let inside = (rect.x + 1, rect.y + 1);
