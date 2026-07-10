@@ -5,10 +5,10 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use engine_render::camera::{AnyCamera, Camera, OrthographicCamera, PerspectiveCamera, WorldPos};
 use engine_render::composite::{composite_scene, SpriteContent, SpriteDraw};
-use engine_render::dots::{dots_to_grid, Dot, DotBuffer};
+use engine_render::dots::{Dot, DotBuffer};
 use engine_render::transform::{Transform, Vec2, VerticalAnchor};
 use engine_render::tween::Tween;
-use engine_render::{draw_grid, rasterize_shape, AnimatedSprite, ShapeKind};
+use engine_render::{draw_dots, draw_grid, rasterize_shape, AnimatedSprite, ShapeKind};
 use engine_core::color::Rgba;
 use engine_core::Inspectable;
 use engine_core::SceneKey;
@@ -17,7 +17,9 @@ use serde_json::Value as JsonValue;
 use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use crate::creatures::{AnimationKind, Creature};
 use crate::scene_id::SceneId;
+use crate::scenes::battle_viewer::battle_menu::BattleMenu;
 
+mod battle_menu;
 
 /// Single source of truth for the board's column count. Every downstream
 /// consumer must reference this constant, never a bare literal `8`.
@@ -95,6 +97,13 @@ pub struct BattleViewer {
     /// state, not part of the inspectable surface.
     #[inspect(hidden)]
     show_controls_help: bool,
+
+    /// Toggled by `Esc` in `handle_input`. When true, `render()` draws the
+    /// centered Battle Menu overlay (rounded panel + "Finish Battle" button)
+    /// on top of the world, and Enter/Space triggers its action. Transient UI
+    /// state, not part of the inspectable surface.
+    #[inspect(hidden)]
+    battle_menu: BattleMenu
 }
 
 impl Default for BattleViewer {
@@ -111,6 +120,7 @@ impl Default for BattleViewer {
             camera_mode: Self::default_camera_mode(),
             tuning: BattleViewerTuning::default(),
             show_controls_help: false,
+            battle_menu: BattleMenu::new(),
         }
     }
 }
@@ -239,14 +249,25 @@ impl Scene for BattleViewer {
         draw_grid(frame.buffer_mut(), geom.board_rect, &grid);
 
         self.draw_controls_help(frame.buffer_mut(), area);
+
+        // Screen-space overlay: drawn last so its Occlude interior covers the
+        // world render beneath it. No-op unless the menu is open.
+        self.battle_menu.render(frame, area);
     }
 
     fn handle_input(&mut self, ev: InputEvent) -> Option<Transition> {
         use crossterm::event::KeyCode;
-        if let InputEvent::Key(key) = ev {
+        match ev {
+            // While the menu is open, a completed click on "Finish Battle"
+            // leaves the viewer for the post-battle scene.
+            InputEvent::Mouse(me) => {
+                if self.battle_menu.handle_mouse(&me) {
+                    return Some(Transition { target: SceneId::PostBattle.into(), params: None });
+                }
+            }
             // Direct selection: each digit always picks the same view,
             // never a next/prev cycle (spec 37). 1=Sideline 2=OverShoulder 3=TopDown.
-            match key.code {
+            InputEvent::Key(key) => match key.code {
                 KeyCode::Char('1') => self.camera_mode = BattleCamera::sideline_preset(),
                 KeyCode::Char('2') => self.camera_mode = BattleCamera::over_shoulder_preset(),
                 KeyCode::Char('3') => self.camera_mode = BattleCamera::top_down_preset(),
@@ -262,6 +283,18 @@ impl Scene for BattleViewer {
                 // upstream of this scene entirely).
                 KeyCode::Char('t') | KeyCode::Char('T') => {
                     self.show_controls_help = !self.show_controls_help;
+                }
+                // Esc toggles the centered Battle Menu overlay on/off.
+                KeyCode::Esc => {
+                    self.battle_menu.toggle();
+                }
+                // While the menu is open, Enter/Space is its "Finish Battle"
+                // action: leave the viewer for the post-battle scene. When the
+                // menu is closed these keys do nothing here.
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    if self.battle_menu.is_open() {
+                        return Some(Transition { target: SceneId::PostBattle.into(), params: None });
+                    }
                 }
                 code => {
                     if matches!(self.camera_mode.fit, FitMode::Manual) {

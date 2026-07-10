@@ -61,8 +61,7 @@ pub fn draw_board_lines(buf: &mut Buffer, geom: &BoardGeometry) {
         );
     }
 
-    let grid = dots_to_grid(&dots);
-    draw_grid(buf, geom.board_rect, &grid);
+    draw_dots(buf, geom.board_rect, &dots);
 }
 
 /// Samples the world-space segment `[start, end]` at `samples` evenly-spaced

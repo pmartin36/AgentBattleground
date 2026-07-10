@@ -9,8 +9,8 @@
 //! plumbing per-dot color).
 
 use engine_core::color::Rgba;
-use engine_render::dots::{dots_to_grid, Dot, DotBuffer};
-use engine_render::draw_grid;
+use engine_render::dots::{Dot, DotBuffer};
+use engine_render::draw_dots;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
@@ -149,8 +149,7 @@ pub fn draw_name(buf: &mut Buffer, area: Rect, name: &str, color: Rgba) {
         cursor_x += m.first().map(|r| r.len()).unwrap_or(0) + NAME_LETTER_GAP;
     }
 
-    let grid = dots_to_grid(&dots);
-    draw_grid(buf, area, &grid);
+    draw_dots(buf, area, &dots);
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@ use engine_core::{Inspectable, SceneCatalog, SceneKey};
 
 use crate::scene_id::SceneId;
 
-use crate::scenes::{BattleViewer, Leaderboard, MainHub, RosterManager};
+use crate::scenes::{BattleViewer, Leaderboard, MainHub, RosterManager, PostBattle};
 use engine_core::scene::Scene;
 
 /// Build a fresh boxed instance of the scene for `id` (spec 14: fresh-construct
@@ -15,6 +15,7 @@ pub fn construct(id: SceneId) -> Box<dyn Scene> {
         SceneId::BattleViewer => Box::new(BattleViewer::default()),
         SceneId::RosterManager => Box::new(RosterManager::new()),
         SceneId::Leaderboard => Box::new(Leaderboard),
+        SceneId::PostBattle => Box::new(PostBattle),
         other => unimplemented!("scene {:?} is not implemented in M1", other),
     }
 }
@@ -30,6 +31,7 @@ pub fn schema_for(id: SceneId) -> FieldSchema {
         SceneId::BattleViewer => <BattleViewer as Inspectable>::schema(),
         SceneId::RosterManager => <RosterManager as Inspectable>::schema(),
         SceneId::Leaderboard => <Leaderboard as Inspectable>::schema(),
+        SceneId::PostBattle => <PostBattle as Inspectable>::schema(),
         other => unimplemented!("scene {:?} is not implemented in M1", other),
     }
 }
@@ -41,6 +43,7 @@ const IMPLEMENTED_SCENES: &[SceneId] = &[
     SceneId::BattleViewer,
     SceneId::RosterManager,
     SceneId::Leaderboard,
+    SceneId::PostBattle,
 ];
 
 /// Whether `construct(id)` will succeed (vs. panic) for `id`. Derived from
@@ -126,13 +129,13 @@ mod tests {
             SceneId::BattleViewer,
             SceneId::RosterManager,
             SceneId::Leaderboard,
+            SceneId::PostBattle,
         ]
         .into_iter()
         .collect();
         let expected_false: HashSet<SceneId> = [
             SceneId::Onboarding,
             SceneId::Matchmaking,
-            SceneId::PostBattle,
             SceneId::ReplayBrowser,
             SceneId::Settings,
         ]
@@ -181,6 +184,11 @@ mod tests {
             schema_for(SceneId::Leaderboard),
             <Leaderboard as Inspectable>::schema(),
             "schema_for(Leaderboard) must equal <Leaderboard as Inspectable>::schema()"
+        );
+        assert_eq!(
+            schema_for(SceneId::PostBattle),
+            <PostBattle as Inspectable>::schema(),
+            "schema_for(PostBattle) must equal <PostBattle as Inspectable>::schema()"
         );
     }
 
@@ -247,6 +255,7 @@ mod tests {
             SceneId::BattleViewer,
             SceneId::RosterManager,
             SceneId::Leaderboard,
+            SceneId::PostBattle,
         ] {
             let key: SceneKey = id.into();
             let scene = catalog.construct(&key);
@@ -272,6 +281,10 @@ mod tests {
         assert_eq!(
             catalog.schema_for(&SceneKey::from(SceneId::Leaderboard)),
             <Leaderboard as Inspectable>::schema()
+        );
+        assert_eq!(
+            catalog.schema_for(&SceneKey::from(SceneId::PostBattle)),
+            <PostBattle as Inspectable>::schema()
         );
     }
 
@@ -308,6 +321,7 @@ mod tests {
             SceneId::BattleViewer.into(),
             SceneId::RosterManager.into(),
             SceneId::Leaderboard.into(),
+            SceneId::PostBattle.into(),
         ];
         assert_eq!(catalog.catalog_keys(), expected);
     }
@@ -326,6 +340,7 @@ mod tests {
                 SceneId::BattleViewer,
                 SceneId::RosterManager,
                 SceneId::Leaderboard,
+                SceneId::PostBattle,
             ]
         );
     }

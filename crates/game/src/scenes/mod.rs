@@ -10,6 +10,8 @@ pub mod battle_viewer;
 pub mod leaderboard;
 pub mod main_hub;
 pub mod roster_manager;
+pub mod post_battle;
+
 #[cfg(test)]
 mod test_util;
 
@@ -17,6 +19,7 @@ pub use battle_viewer::BattleViewer;
 pub use leaderboard::Leaderboard;
 pub use main_hub::MainHub;
 pub use roster_manager::RosterManager;
+pub use post_battle::PostBattle;
 
 /// Shared render helper: fills `area` with `color` then draws `name` centered.
 /// Called by every example scene's `render` implementation.

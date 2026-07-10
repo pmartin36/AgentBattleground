@@ -213,8 +213,7 @@ impl MainHub {
             dot_cols as u32,
             dot_rows as u32,
         );
-        let grid = engine_render::dots::dots_to_grid(&dots);
-        engine_render::draw_grid(buf, rect, &grid);
+        engine_render::draw_dots(buf, rect, &dots);
     }
 
     /// `title` inset by 1 cell per side — the interior the logo paints into,
