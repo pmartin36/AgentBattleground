@@ -60,7 +60,10 @@ pub fn composite_dots(
                         }
                         let blended = match out.get(ux, uy) {
                             Dot::Lit(dest) => src.over(dest),
-                            Dot::Transparent => src,
+                            // No ink underneath (Transparent) or an occluder
+                            // with no colour (Occlude): a translucent source
+                            // has nothing to blend against, so it lands as-is.
+                            Dot::Transparent | Dot::Occlude => src,
                         };
                         out.set(ux, uy, Dot::Lit(blended));
                     }
@@ -412,6 +415,7 @@ mod tests {
         match cell {
             Cell::Glyph { color, .. } => color,
             Cell::Transparent => panic!("expected Cell::Glyph, got Cell::Transparent"),
+            Cell::Blank => panic!("expected Cell::Glyph, got Cell::Blank"),
         }
     }
 

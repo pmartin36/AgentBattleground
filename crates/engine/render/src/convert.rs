@@ -110,6 +110,11 @@ mod tests {
                             "cell ({col},{row}) is Transparent, expected Glyph for solid opaque image"
                         );
                     }
+                    Cell::Blank => {
+                        panic!(
+                            "cell ({col},{row}) is Blank, expected Glyph for solid opaque image"
+                        );
+                    }
                 }
             }
         }

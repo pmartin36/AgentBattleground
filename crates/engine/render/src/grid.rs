@@ -3,12 +3,23 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use engine_core::color::Rgba;
 
-/// One braille cell: transparent (background shows through) or a lit glyph.
+/// One braille cell.
+///
+/// - `Transparent`: background shows through — `draw_grid` writes nothing, so
+///   whatever occupied the destination buffer cell is left intact.
+/// - `Glyph`: a lit braille glyph with a foreground colour.
+/// - `Blank`: an "empty but covering" cell — no ink, but `draw_grid` still
+///   writes it, overwriting the destination with a blank braille cell so world
+///   content beneath is erased rather than revealed. This is what an
+///   [`crate::dots::Dot::Occlude`] region converts to; use it for a
+///   screen-space overlay that must occlude the world without painting an
+///   opaque colour over it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Cell {
     #[default]
     Transparent,
     Glyph { ch: char, color: Rgba },
+    Blank,
 }
 
 /// A cols×rows grid of braille cells, row-major.
@@ -60,9 +71,19 @@ impl Grid {
     }
 }
 
+/// The braille "blank" glyph (U+2800, all eight dots off). A [`Cell::Blank`]
+/// writes this to occlude the destination without any ink — it stays inside
+/// the braille codepoint block rather than using an ASCII space, honouring the
+/// "braille is universal except text" invariant.
+const BRAILLE_BLANK: char = '\u{2800}';
+
 /// Blit `grid` into `buf`, centered within `area`.
 ///
 /// - Transparent cells leave the buffer cell's prior content unchanged.
+/// - Blank cells overwrite the destination with an empty braille cell
+///   (`U+2800`, fg reset): no ink, but the prior symbol underneath is erased,
+///   so world content is *covered* rather than revealed. This is the occluding
+///   counterpart to Transparent.
 /// - Glyph cells write their `ch` as symbol. Fully opaque (`color.a == 0xFF`)
 ///   glyphs overwrite fg with `Color::Rgb(r,g,b)` byte-identically; translucent
 ///   glyphs (`color.a < 0xFF`) alpha-composite `color` over the destination
@@ -76,22 +97,36 @@ pub fn draw_grid(buf: &mut Buffer, area: Rect, grid: &Grid) {
 
     for row in 0..grid.rows() {
         for col in 0..grid.cols() {
-            if let Cell::Glyph { ch, color } = grid.get(col, row) {
-                let x = base_x.saturating_add(col as u16);
-                let y = base_y.saturating_add(row as u16);
-                if clip.left() <= x && x < clip.right() && clip.top() <= y && y < clip.bottom() {
-                    if let Some(cell) = buf.cell_mut((x, y)) {
-                        cell.set_char(ch);
-                        if color.a == 0xFF {
-                            cell.set_fg(Color::Rgb(color.r, color.g, color.b));
-                        } else {
-                            let dest = match cell.fg {
-                                Color::Rgb(r, g, b) => Rgba::new(r, g, b, 0xFF),
-                                _ => Rgba::new(0, 0, 0, 0xFF),
-                            };
-                            let blended = color.over(dest);
-                            cell.set_fg(Color::Rgb(blended.r, blended.g, blended.b));
-                        }
+            let source = grid.get(col, row);
+            if matches!(source, Cell::Transparent) {
+                continue;
+            }
+            let x = base_x.saturating_add(col as u16);
+            let y = base_y.saturating_add(row as u16);
+            if !(clip.left() <= x && x < clip.right() && clip.top() <= y && y < clip.bottom()) {
+                continue;
+            }
+            let Some(cell) = buf.cell_mut((x, y)) else {
+                continue;
+            };
+            match source {
+                // Handled above; kept exhaustive so a future variant is caught.
+                Cell::Transparent => {}
+                Cell::Blank => {
+                    cell.set_char(BRAILLE_BLANK);
+                    cell.set_fg(Color::Reset);
+                }
+                Cell::Glyph { ch, color } => {
+                    cell.set_char(ch);
+                    if color.a == 0xFF {
+                        cell.set_fg(Color::Rgb(color.r, color.g, color.b));
+                    } else {
+                        let dest = match cell.fg {
+                            Color::Rgb(r, g, b) => Rgba::new(r, g, b, 0xFF),
+                            _ => Rgba::new(0, 0, 0, 0xFF),
+                        };
+                        let blended = color.over(dest);
+                        cell.set_fg(Color::Rgb(blended.r, blended.g, blended.b));
                     }
                 }
             }
@@ -327,5 +362,68 @@ mod tests {
     fn grid_set_out_of_bounds_panics_dots_to_grid_never_needs_a_silent_clip() {
         let mut g = Grid::new(2, 2);
         g.set(5, 0, Cell::Glyph { ch: '⣿', color: Rgba::rgb(1, 2, 3) });
+    }
+
+    // ── draw_grid occlusion (Cell::Blank) ─────────────────────────────────────
+
+    /// A `Cell::Blank` must occlude: `draw_grid` overwrites the destination
+    /// symbol with the braille blank (U+2800), erasing whatever glyph the world
+    /// layer had drawn there, and resets fg. This is the behavior that lets a
+    /// hollow overlay cover world content without painting an opaque color.
+    #[test]
+    fn draw_grid_blank_erases_underlying_glyph_and_resets_fg() {
+        let mut grid = Grid::new(1, 1);
+        grid.set(0, 0, Cell::Blank);
+
+        let mut buf = make_buf(1, 1);
+        // Seed the destination as if the world had drawn a lit braille glyph.
+        if let Some(c) = buf.cell_mut((0u16, 0u16)) {
+            c.set_char('⣿');
+            c.set_fg(Color::Rgb(0x11, 0x22, 0x33));
+        }
+
+        draw_grid(&mut buf, Rect::new(0, 0, 1, 1), &grid);
+
+        let cell = buf.cell((0u16, 0u16)).expect("cell (0,0) must exist");
+        assert_eq!(
+            cell.symbol(),
+            "\u{2800}",
+            "Blank must overwrite the prior glyph with the braille blank, covering it"
+        );
+        assert_eq!(cell.fg, Color::Reset, "Blank must reset the destination fg");
+    }
+
+    /// Blank vs Transparent at the blit layer, same seeded destination, opposite
+    /// outcome: Transparent leaves the world glyph intact (reveals), Blank
+    /// replaces it (occludes). Proves the two ink-free cells are not the same.
+    #[test]
+    fn draw_grid_transparent_reveals_but_blank_occludes() {
+        let mut buf_t = make_buf(1, 1);
+        if let Some(c) = buf_t.cell_mut((0u16, 0u16)) {
+            c.set_char('⣿');
+        }
+        let mut buf_b = make_buf(1, 1);
+        if let Some(c) = buf_b.cell_mut((0u16, 0u16)) {
+            c.set_char('⣿');
+        }
+
+        let mut grid_t = Grid::new(1, 1);
+        grid_t.set(0, 0, Cell::Transparent);
+        let mut grid_b = Grid::new(1, 1);
+        grid_b.set(0, 0, Cell::Blank);
+
+        draw_grid(&mut buf_t, Rect::new(0, 0, 1, 1), &grid_t);
+        draw_grid(&mut buf_b, Rect::new(0, 0, 1, 1), &grid_b);
+
+        assert_eq!(
+            buf_t.cell((0u16, 0u16)).unwrap().symbol(),
+            "⣿",
+            "Transparent must leave the prior world glyph untouched"
+        );
+        assert_eq!(
+            buf_b.cell((0u16, 0u16)).unwrap().symbol(),
+            "\u{2800}",
+            "Blank must cover the prior world glyph"
+        );
     }
 }

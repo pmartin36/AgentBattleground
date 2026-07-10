@@ -148,6 +148,7 @@ mod tests {
         match buf.get(cx, cy) {
             Dot::Lit(c) => assert_eq!(c.a, color.a, "center dot alpha must equal color.a exactly"),
             Dot::Transparent => panic!("center dot must be Lit"),
+            Dot::Occlude => panic!("center dot must be Lit, got Occlude"),
         }
 
         for row in 0..buf.rows() {
@@ -212,6 +213,7 @@ mod tests {
         let alpha_at = |col: usize| match buf.get(col, center_row) {
             Dot::Lit(c) => c.a,
             Dot::Transparent => 0,
+            Dot::Occlude => unreachable!("shape rasterization never emits Occlude"),
         };
 
         let mut prev = alpha_at(center_col);
@@ -250,6 +252,7 @@ mod tests {
         match buf.get(0, 0) {
             Dot::Lit(c) => assert_eq!(c.a, color.a, "1x1 buffer's sole dot must be Lit at full color.a"),
             Dot::Transparent => panic!("1x1 buffer's sole dot must be Lit"),
+            Dot::Occlude => panic!("1x1 buffer's sole dot must be Lit, got Occlude"),
         }
     }
 
@@ -272,6 +275,7 @@ mod tests {
         match buf.get(col, row) {
             Dot::Lit(c) => c.a,
             Dot::Transparent => 0,
+            Dot::Occlude => unreachable!("shape rasterization never emits Occlude"),
         }
     }
 

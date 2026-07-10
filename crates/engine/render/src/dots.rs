@@ -9,12 +9,27 @@ use engine_core::color::Rgba;
 
 use crate::grid::Grid;
 
-/// One sub-cell dot: transparent (reveals what is behind) or a lit color.
+/// One sub-cell dot.
+///
+/// - `Transparent`: reveals what is behind (no ink, no occlusion). This is the
+///   default and the "leak" state — a `draw_grid` blit writes nothing for a
+///   cell made only of `Transparent` dots, so world content underneath shows
+///   through.
+/// - `Lit(color)`: a visible colored dot (ink). Occludes as a side effect,
+///   because painting a braille glyph replaces the whole terminal cell.
+/// - `Occlude`: no ink, but claims the space — an "empty but covering" dot.
+///   A 2×4 block that has at least one `Occlude` dot and no `Lit` dots becomes
+///   a [`crate::grid::Cell::Blank`], which `draw_grid` writes as a blank
+///   braille cell that *erases* whatever was underneath. This is the
+///   painter's-algorithm stand-in for a depth/stencil write: it lets a
+///   screen-space overlay (e.g. a menu panel with a hollow centre) cover the
+///   world render without painting an opaque colour over it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Dot {
     #[default]
     Transparent,
     Lit(Rgba),
+    Occlude,
 }
 
 /// A cols×rows buffer of dots in dot units, row-major.
@@ -113,15 +128,24 @@ pub(crate) fn luma(r: u8, g: u8, b: u8) -> u8 {
 fn cell_from_dots_tinted(shape: &[Dot; 8], color: &[Dot; 8]) -> crate::grid::Cell {
     use crate::grid::Cell;
 
-    // Per-dot luma from shape: None for Transparent, Some(luma) for Lit.
+    // Per-dot luma from shape: Some(luma) for Lit (ink), None for anything
+    // else (Transparent and Occlude contribute no ink and no luma).
     let lumas: [Option<u8>; 8] =
         std::array::from_fn(|k| match shape[k] {
             Dot::Lit(c) => Some(luma(c.r, c.g, c.b)),
-            Dot::Transparent => None,
+            Dot::Transparent | Dot::Occlude => None,
         });
 
     let visible_lumas: Vec<u8> = lumas.iter().filter_map(|l| *l).collect();
     if visible_lumas.is_empty() {
+        // No ink in this block. If any dot claims occlusion, cover the cell
+        // with a blank (erasing what's beneath); otherwise leave it fully
+        // transparent so world content shows through. Occlude only matters
+        // here — a block that also has Lit dots renders a glyph, which
+        // already replaces the whole cell.
+        if shape.iter().any(|d| matches!(d, Dot::Occlude)) {
+            return Cell::Blank;
+        }
         return Cell::Transparent;
     }
 
@@ -216,7 +240,10 @@ pub fn tint(buf: &DotBuffer, color: Rgba) -> DotBuffer {
                     mul(src.g, color.g),
                     mul(src.b, color.b),
                 )),
+                // Transparent and Occlude carry no colour to multiply — a tint
+                // only recolours ink, so both pass through untouched.
                 Dot::Transparent => Dot::Transparent,
+                Dot::Occlude => Dot::Occlude,
             };
             out.set(col, row, dot);
         }
@@ -352,6 +379,9 @@ mod tests {
                     Dot::Transparent => panic!(
                         "dot ({col},{row}) must be Lit for a fully opaque source; got Transparent"
                     ),
+                    Dot::Occlude => panic!(
+                        "dot ({col},{row}) must be Lit for a fully opaque source; got Occlude"
+                    ),
                 }
             }
         }
@@ -398,6 +428,9 @@ mod tests {
                 Dot::Lit(_) => {}
                 Dot::Transparent => panic!(
                     "dot (0,{row}) must be Lit (left half is opaque)"
+                ),
+                Dot::Occlude => panic!(
+                    "dot (0,{row}) must be Lit (left half is opaque); got Occlude"
                 ),
             }
         }
@@ -774,6 +807,7 @@ mod tests {
                 "mask must be decided from shape alone (case-a glyph), regardless of color's luma pattern"
             ),
             Cell::Transparent => panic!("expected a Glyph cell, got Transparent"),
+            Cell::Blank => panic!("expected a Glyph cell, got Blank"),
         }
     }
 
@@ -802,6 +836,7 @@ mod tests {
                 );
             }
             Cell::Transparent => panic!("expected a Glyph cell, got Transparent"),
+            Cell::Blank => panic!("expected a Glyph cell, got Blank"),
         }
     }
 
@@ -815,6 +850,94 @@ mod tests {
             dots_to_grid(&buf),
             dots_to_grid_tinted(&buf, &buf),
             "dots_to_grid(buf) must equal dots_to_grid_tinted(buf, buf) bit-for-bit"
+        );
+    }
+
+    // ── occlusion (Dot::Occlude → Cell::Blank) ────────────────────────────────
+
+    /// A 2×4 block whose dots are all `Occlude` (no `Lit`) must convert to
+    /// `Cell::Blank` — an occluding, ink-free cell — NOT `Cell::Transparent`.
+    /// This is the whole point of the variant: cover without painting ink.
+    #[test]
+    fn dots_to_grid_all_occlude_yields_blank_cell() {
+        let mut buf = DotBuffer::new(2, 4);
+        for y in 0..4 {
+            for x in 0..2 {
+                buf.set(x, y, Dot::Occlude);
+            }
+        }
+        let grid = dots_to_grid(&buf);
+        assert_eq!(grid.cols(), 1);
+        assert_eq!(grid.rows(), 1);
+        assert_eq!(
+            grid.get(0, 0),
+            Cell::Blank,
+            "an all-Occlude block must cover the cell (Blank), not reveal it (Transparent)"
+        );
+    }
+
+    /// A single `Occlude` dot in an otherwise-`Transparent` block is enough to
+    /// claim the whole cell: the block still carries no ink, so it becomes
+    /// `Blank`, not `Transparent`.
+    #[test]
+    fn dots_to_grid_single_occlude_dot_yields_blank_cell() {
+        let mut buf = DotBuffer::new(2, 4);
+        buf.set(1, 2, Dot::Occlude); // one dot; the rest stay default Transparent
+        assert_eq!(
+            dots_to_grid(&buf).get(0, 0),
+            Cell::Blank,
+            "any Occlude dot with no Lit dots must produce Blank"
+        );
+    }
+
+    /// `Occlude` only matters when a block has no ink. A block mixing `Lit`
+    /// and `Occlude` dots renders the glyph (which already covers the whole
+    /// cell), so replacing those `Occlude` dots with `Transparent` must yield
+    /// a bit-identical result — proving `Occlude` is ignored in an inked cell.
+    #[test]
+    fn dots_to_grid_lit_plus_occlude_matches_lit_plus_transparent() {
+        let mut with_occlude = DotBuffer::new(2, 4);
+        let mut with_transparent = DotBuffer::new(2, 4);
+        for y in 0..4 {
+            // Left column: identical Lit ink in both buffers.
+            with_occlude.set(0, y, Dot::Lit(Rgba::rgb(0, 0, 200)));
+            with_transparent.set(0, y, Dot::Lit(Rgba::rgb(0, 0, 200)));
+            // Right column: Occlude in one, Transparent (default) in the other.
+            with_occlude.set(1, y, Dot::Occlude);
+        }
+        assert_eq!(
+            dots_to_grid(&with_occlude),
+            dots_to_grid(&with_transparent),
+            "Occlude dots must be ignored when the block also has Lit ink"
+        );
+    }
+
+    /// Occlusion must be opt-in: a block with neither `Lit` nor `Occlude`
+    /// dots (all `Transparent`) stays `Cell::Transparent`, never accidentally
+    /// `Blank`.
+    #[test]
+    fn dots_to_grid_all_transparent_stays_transparent() {
+        let buf = DotBuffer::new(2, 4);
+        assert_eq!(dots_to_grid(&buf).get(0, 0), Cell::Transparent);
+    }
+
+    /// `tint` recolours only ink, so an `Occlude` dot must pass through
+    /// unchanged (alongside a `Lit` dot that does get tinted).
+    #[test]
+    fn tint_preserves_occlude_dots() {
+        let mut buf = DotBuffer::new(2, 1);
+        buf.set(0, 0, Dot::Occlude);
+        buf.set(1, 0, Dot::Lit(Rgba::rgb(255, 255, 255)));
+        let out = tint(&buf, Rgba::rgb(200, 100, 40));
+        assert_eq!(
+            out.get(0, 0),
+            Dot::Occlude,
+            "Occlude must survive a tint untouched"
+        );
+        assert_eq!(
+            out.get(1, 0),
+            Dot::Lit(Rgba::rgb(200, 100, 40)),
+            "Lit white must tint to the target color"
         );
     }
 }
