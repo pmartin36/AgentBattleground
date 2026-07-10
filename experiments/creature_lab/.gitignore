@@ -3,3 +3,7 @@ stable-diffusion.cpp/
 models/
 out/
 .venv/
+.venv_tools/
+.venv_comfyui/
+llama.cpp/
+ComfyUI/

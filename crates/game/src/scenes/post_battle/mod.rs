@@ -124,11 +124,10 @@ impl PostBattle {
             elapsed: Duration::ZERO,
             selected_index: 0,
             spoils,
-            home_button: RefCell::new(engine_render::Button::new(
-                Rect::default(),
-                crate::assets::BUTTON_PANEL,
-                crate::assets::ICON_HOME,
-            )),
+            home_button: RefCell::new(
+                engine_render::Button::new(Rect::default(), crate::assets::BUTTON_PANEL)
+                    .icon(crate::assets::ICON_HOME),
+            ),
         }
     }
 

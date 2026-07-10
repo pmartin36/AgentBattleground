@@ -25,7 +25,7 @@ pub mod transform;
 pub mod tween;
 pub mod ui_primitives;
 pub use anim::AnimatedSprite;
-pub use button::{Button, ButtonCore, ButtonState, FrameButton};
+pub use button::{Button, ButtonColors, ButtonCore, ButtonState, StateColors};
 pub use convert::convert;
 pub use debug_grid::{draw_debug_grid, GRID_SPACING_COLS, GRID_SPACING_ROWS};
 pub use dot_diff::{decode_braille_cell, diff_dots, DotDiff, DotMismatch};

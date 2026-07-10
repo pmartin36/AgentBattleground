@@ -150,21 +150,18 @@ impl RosterManager {
             current_index: 0,
             creatures: crate::creatures::demo_roster(),
             elapsed: Duration::ZERO,
-            left_button: RefCell::new(engine_render::Button::new(
-                Rect::default(),
-                crate::assets::BUTTON_PANEL,
-                crate::assets::ICON_ARROW_LEFT,
-            )),
-            right_button: RefCell::new(engine_render::Button::new(
-                Rect::default(),
-                crate::assets::BUTTON_PANEL,
-                crate::assets::ICON_ARROW_RIGHT,
-            )),
-            home_button: RefCell::new(engine_render::Button::new(
-                Rect::default(),
-                crate::assets::BUTTON_PANEL,
-                crate::assets::ICON_HOME,
-            )),
+            left_button: RefCell::new(
+                engine_render::Button::new(Rect::default(), crate::assets::BUTTON_PANEL)
+                    .icon(crate::assets::ICON_ARROW_LEFT),
+            ),
+            right_button: RefCell::new(
+                engine_render::Button::new(Rect::default(), crate::assets::BUTTON_PANEL)
+                    .icon(crate::assets::ICON_ARROW_RIGHT),
+            ),
+            home_button: RefCell::new(
+                engine_render::Button::new(Rect::default(), crate::assets::BUTTON_PANEL)
+                    .icon(crate::assets::ICON_HOME),
+            ),
             slide: None,
             selected_index: None,
             current_dot: RefCell::new(engine_render::ButtonCore::new(Rect::default())),

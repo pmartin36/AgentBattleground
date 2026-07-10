@@ -1,5 +1,5 @@
-//! RED test for b4-t1: `Button`/`FrameButton`'s `render_tinted` must route its
-//! panel/icon rasterization through the shared b1-t2 rasterize cache
+//! RED test for b4-t1: `Button`'s rasterization must route through the
+//! shared b1-t2 rasterize cache
 //! (`asset_cache::sprite_to_dots`), so two SEPARATE button instances built
 //! from the SAME `'static` source bytes share one rasterization instead of
 //! each recomputing independently.
@@ -10,7 +10,7 @@
 //! independent binary with its own copy of the lib's process-global statics,
 //! mirroring `anim_shared_cache.rs` (the b2-t1 precedent).
 
-use engine_render::{asset_cache, Button, ButtonState, FrameButton};
+use engine_render::{asset_cache, Button, ButtonState};
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
@@ -85,8 +85,8 @@ fn moved(column: u16, row: u16) -> MouseEvent {
     }
 }
 
-/// Two `FrameButton`s built from the SAME `'static` frame bytes at the same
-/// rect must perform exactly ONE real rasterization TOTAL across both
+/// Two label `Button`s built from the SAME `'static` frame bytes at the
+/// same rect must perform exactly ONE real rasterization TOTAL across both
 /// instances' renders (shared-cache hit on the second), not one each via
 /// independent per-instance decoding.
 #[test]
@@ -95,8 +95,8 @@ fn two_frame_buttons_same_bytes_share_one_rasterization() {
     let frame = leaked_rounded_rect(64, 32, 8);
     let rect = Rect::new(2, 1, 8, 4);
 
-    let b1 = FrameButton::new(rect, frame, "Go");
-    let b2 = FrameButton::new(rect, frame, "Go");
+    let b1 = Button::new(rect, frame).label("Go");
+    let b2 = Button::new(rect, frame).label("Go");
 
     let before = asset_cache::rasterize_recompute_count();
     let mut buf1 = make_buf(16, 8);
@@ -107,7 +107,7 @@ fn two_frame_buttons_same_bytes_share_one_rasterization() {
 
     assert_eq!(
         delta, 1,
-        "two FrameButtons built from the SAME 'static bytes at the same rect \
+        "two label Buttons built from the SAME 'static bytes at the same rect \
          must share ONE rasterization total via the shared cache, not one \
          recompute per instance"
     );
@@ -125,11 +125,11 @@ fn second_button_instance_same_bytes_is_a_pure_cache_hit() {
     let icon = leaked_inset_blob(48, 48, 12);
     let rect = Rect::new(2, 1, 8, 4);
 
-    let first = Button::new(rect, panel, icon);
+    let first = Button::new(rect, panel).icon(icon);
     let mut warm_buf = make_buf(16, 8);
     first.render(&mut warm_buf); // warms the shared cache for (panel, rect) and (icon, fitted dims)
 
-    let second = Button::new(rect, panel, icon);
+    let second = Button::new(rect, panel).icon(icon);
     let before = asset_cache::rasterize_recompute_count();
     let mut buf = make_buf(16, 8);
     second.render(&mut buf);
@@ -154,8 +154,8 @@ fn distinct_bytes_or_dims_force_independent_rasterizations() {
     let rect = Rect::new(2, 1, 8, 4);
 
     let before = asset_cache::rasterize_recompute_count();
-    let ba = FrameButton::new(rect, frame_a, "Go");
-    let bb = FrameButton::new(rect, frame_b, "Go");
+    let ba = Button::new(rect, frame_a).label("Go");
+    let bb = Button::new(rect, frame_b).label("Go");
     let mut buf_a = make_buf(16, 8);
     ba.render(&mut buf_a);
     let mut buf_b = make_buf(16, 8);
@@ -172,8 +172,8 @@ fn distinct_bytes_or_dims_force_independent_rasterizations() {
     let rect_large = Rect::new(2, 1, 10, 5);
 
     let before2 = asset_cache::rasterize_recompute_count();
-    let small = FrameButton::new(rect_small, frame_c, "Go");
-    let large = FrameButton::new(rect_large, frame_c, "Go");
+    let small = Button::new(rect_small, frame_c).label("Go");
+    let large = Button::new(rect_large, frame_c).label("Go");
     let mut buf_small = make_buf(16, 8);
     small.render(&mut buf_small);
     let mut buf_large = make_buf(16, 8);
@@ -197,7 +197,7 @@ fn state_change_between_renders_does_not_force_extra_rasterization() {
     let _guard = test_lock();
     let frame = leaked_rounded_rect(64, 32, 8);
     let rect = Rect::new(2, 1, 8, 4);
-    let mut b = FrameButton::new(rect, frame, "Go");
+    let mut b = Button::new(rect, frame).label("Go");
 
     let before = asset_cache::rasterize_recompute_count();
     let mut buf_idle = make_buf(16, 8);

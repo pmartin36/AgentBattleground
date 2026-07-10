@@ -108,7 +108,7 @@ impl RosterManager {
                 // Dot-precise sub-cell placement: offset the raw dots into a
                 // buffer sized to include the sub-cell remainder, then
                 // convert the whole thing — the same technique
-                // `Button::set_dot_offset_down`/`render_tinted` already use.
+                // `Button::set_dot_offset_down`'s render already uses.
                 // `dots_to_grid`'s ceiling-division fix means the buffer no
                 // longer needs to be a clean cell multiple beforehand.
                 let content = sprite.dots_at(self.elapsed, dot_w as u32, dot_h as u32);

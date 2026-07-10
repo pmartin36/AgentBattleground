@@ -1,6 +1,7 @@
-# Unified Button Widget — `engine-render`
+> # ✅ DONE! — Completed 2026-07-10
+> Status: implemented via the tdd-pipeline (7 tasks GREEN, 0 escalations). `Button`/`FrameButton` collapsed into one builder-style `Button` — `new(rect, background)` plus `.icon()`/`.label()`/`.colors()`/`.dot_offset_down()` — with a per-state `ButtonColors`/`StateColors` scheme that recolors background, icon, and label together; `FrameButton` deleted. Every call site migrated (roster icon buttons, main-hub + Battle Menu text buttons); the Battle Menu "Finish Battle" button is the first per-state-colors consumer, carrying a real `FINISH_SCHEME`. `ButtonColors::default()` reproduces the prior appearance, enforced byte-for-byte by a `diff_dots` lossless gate against pre-migration fixtures rendered from a shared scenario module. Full workspace gate green on an independent re-run: 893 tests pass, `cargo clippy --workspace --all-targets -- -D warnings` clean.
 
-> **Status: draft (not started).** Motivated by the battle-viewer Battle Menu (spec `05`/`20`): its "Finish Battle" button's frame recolors on hover/press (`ButtonState::tint_color()`) but its label is a fixed `LABEL_COLOR`, so the two halves visibly disconnect. Fixing that surfaced that `engine-render`'s two button widgets — `Button` (panel+icon) and `FrameButton` (frame+label) — are asset-arbitrary siblings that never earned being separate.
+# Unified Button Widget — `engine-render`
 
 ## Purpose
 
