@@ -89,7 +89,7 @@ impl BattleMenu {
         let x = screen.x + (screen.w - w) / 2;
         let y = screen.y + (screen.h - h) / 2;
 
-        return DotRect { x,y,w,h };
+        DotRect { x, y, w, h }
     }
 
     /// The "Finish Battle" button rect: a fixed `BUTTON_W × BUTTON_H` (capped
