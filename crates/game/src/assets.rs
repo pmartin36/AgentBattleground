@@ -63,6 +63,10 @@ pub const DOT_FILLED: &[u8] = include_bytes!("assets/dot_filled.png");
 /// (Apache 2.0) — same source raster as `DOT_FILLED`, recolored.
 pub const DOT_UNFILLED: &[u8] = include_bytes!("assets/dot_unfilled.png");
 
+/// Spoils candy icon, 64×64 RGBA8. Alpha-transparent background — the
+/// PostBattle spoils band's per-item icon (spec `46-post-battle-results-screen.md`).
+pub const ICON_SPOIL_CANDY: &[u8] = include_bytes!("assets/icon_spoil_candy.png");
+
 /// Game logo / title sprite, 1212×481 RGBA8. Project-owner-supplied art,
 /// background-removed (alpha-transparent margins, opaque glyph body) —
 /// rendered through `engine_render::convert` as the MainHub title box's only title
@@ -161,6 +165,53 @@ mod frame_panel_tests {
         assert!(
             alpha < 128,
             "interior center pixel must be alpha-transparent, got alpha={alpha}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod spoil_candy_tests {
+    use super::*;
+
+    fn decode() -> image::RgbaImage {
+        image::load_from_memory(ICON_SPOIL_CANDY)
+            .expect("ICON_SPOIL_CANDY must decode as a valid image")
+            .to_rgba8()
+    }
+
+    /// The bundled bytes decode without error and are the pinned 64×64
+    /// dimensions the b4-t6 spoils band is fitted to.
+    #[test]
+    fn spoil_candy_decodes() {
+        let img = decode();
+        assert_eq!(img.dimensions(), (64, 64), "icon_spoil_candy must be 64x64");
+    }
+
+    /// Corners must be alpha-transparent — the icon sits on an alpha ground,
+    /// not a solid rect.
+    #[test]
+    fn spoil_candy_corners_transparent() {
+        let img = decode();
+        let (w, h) = img.dimensions();
+        for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
+            let alpha = img.get_pixel(x, y)[3];
+            assert!(
+                alpha < 128,
+                "corner ({x},{y}) must be alpha-transparent, got alpha={alpha}"
+            );
+        }
+    }
+
+    /// Center pixel must be a fully opaque body — proves real content
+    /// exists, not an all-transparent raster.
+    #[test]
+    fn spoil_candy_center_opaque() {
+        let img = decode();
+        let (w, h) = img.dimensions();
+        let alpha = img.get_pixel(w / 2, h / 2)[3];
+        assert!(
+            alpha >= 250,
+            "center pixel must be opaque, got alpha={alpha}"
         );
     }
 }
