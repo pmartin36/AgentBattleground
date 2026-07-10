@@ -365,7 +365,7 @@ mod board_geometry_tests {
     /// expectation — perspective presets are now fit-to-viewport sized, so
     /// the exact scale is no longer the flat `cell_height_rows*4` value;
     /// only positivity is asserted, per the no-pinned-constant guardrail.
-    /// b2-t1: `camera_depth`/`facing_sign` re-expressed as `y`/`yaw_deg`.)
+    /// Depth/facing are expressed as `y`/`yaw_deg`.)
     #[test]
     fn over_shoulder_mode_rebuilds_scale_and_preserves_camera_depth() {
         let area = Rect::new(0, 0, 128, 64);

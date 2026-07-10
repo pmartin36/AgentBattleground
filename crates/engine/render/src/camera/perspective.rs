@@ -1,19 +1,10 @@
 use super::*;
 
 /// Unified pinhole camera (position + yaw + pitch + FOV) projecting a 2D
-/// ground-plane `WorldPos` (spec 42 Decision 1). Folds the former
-/// `DepthAxis`-branching `PerspectiveCamera` and the free-roam-only
-/// `FreeRoamCamera` into one shape/formula — no per-instance axis/facing
-/// discriminator. `yaw_deg` alone determines facing via `cam_space`.
-///
-/// DEVIATION from a literal verbatim fold (documented, forced by the goldens
-/// — see feature research b2-t1): `cam_space` negates its `right` component.
-/// The old `DepthAxis`-based Sideline/Over-shoulder presets differed from a
-/// plain rotation by a screen-x REFLECTION, not a rotation; negating `right`
-/// is the one change that reproduces that reflection handedness so both
-/// fixed shots render byte-identical to before. Free-roam (dev-tool-only, no
-/// golden oracle) is the sole cost: it now renders horizontally mirrored vs
-/// a literal-verbatim fold.
+/// ground-plane `WorldPos` (spec 42 Decision 1). One shape/formula — no
+/// per-instance axis/facing discriminator. `yaw_deg` alone determines facing
+/// via `cam_space`, a plain rotation of world offset by `-yaw_deg` into
+/// camera space.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct PerspectiveCamera {
     pub x: f32,
@@ -28,13 +19,12 @@ pub struct PerspectiveCamera {
 impl PerspectiveCamera {
     /// Rotates `pos` into camera space by `-yaw_deg`: `right` is the
     /// screen-x-aligned axis, `forward` is the depth axis. Single source of
-    /// truth for facing — no `facing_sign` field needed (spec 42 Decision 4).
-    /// `right` is NEGATED relative to a plain rotation — see this struct's
-    /// doc comment for why (Option A, forced by the golden fixtures).
+    /// truth for facing — `yaw_deg` alone, no per-instance sign/facing field
+    /// (spec 42 Decision 4). A plain rotation by `-yaw`.
     fn cam_space(&self, pos: WorldPos) -> (f32, f32) {
         let (dx, dy) = (pos.x - self.x, pos.y - self.y);
         let yaw = self.yaw_deg.to_radians();
-        (-(dx * yaw.cos() - dy * yaw.sin()), dx * yaw.sin() + dy * yaw.cos())
+        (dx * yaw.cos() - dy * yaw.sin(), dx * yaw.sin() + dy * yaw.cos())
     }
 
     /// Signed distance from the camera along its forward axis, UNCLAMPED:
@@ -78,8 +68,7 @@ impl PerspectiveCamera {
     /// Moves `(x, y)` through the CURRENT (pre-delta) `yaw_deg`, then applies
     /// yaw/pitch/height deltas. `pitch_deg` clamps to `[-89.0, 89.0]`. Its
     /// `right` param is resolved via `yaw.sin`/`yaw.cos` directly — NOT
-    /// through `cam_space` — so the struct-level `right` negation does not
-    /// touch nudge.
+    /// through `cam_space`.
     pub fn nudge(&mut self, forward: f32, right: f32, yaw_delta: f32, pitch_delta: f32, height_delta: f32) {
         let yaw = self.yaw_deg.to_radians(); // CURRENT yaw, pre-delta
         self.x += forward * yaw.sin() + right * yaw.cos();
@@ -123,9 +112,7 @@ impl Camera for PerspectiveCamera {
 /// x=3.5 (aim-line/spread-center equivalent), y=-5.0 (strictly outside the
 /// 0..7 occupied board range, on the low side), yaw 0° (facing toward
 /// increasing y), pitched down 20°. Not a pinned "preset" value — arbitrary
-/// well-formed config used only to exercise the formula shape (numerically
-/// equivalent to the pre-consolidation `depth_axis=Row, facing_sign=1.0`
-/// representative fixture).
+/// well-formed config used only to exercise the formula shape.
 pub(super) fn representative_cam() -> PerspectiveCamera {
     PerspectiveCamera {
         x: 3.5,
@@ -149,9 +136,6 @@ mod tests {
     /// cam_space/pitch math, not by calling the private methods) and assert
     /// `project` matches exactly — a hybrid formula (e.g. a taper term on
     /// only one axis) would diverge from this for at least one point.
-    /// Re-expressed onto x/y/yaw (b2-t1): includes the same `right` negation
-    /// `cam_space` applies (Option A) so this stays an honest independent
-    /// check, not a tautology.
     #[test]
     fn perspective_project_screen_x_y_share_forward_distance_denom() {
         let cam = representative_cam();
@@ -163,7 +147,7 @@ mod tests {
         ] {
             let (dx, dy) = (pos.x - cam.x, pos.y - cam.y);
             let yaw = cam.yaw_deg.to_radians();
-            let right = -(dx * yaw.cos() - dy * yaw.sin());
+            let right = dx * yaw.cos() - dy * yaw.sin();
             let forward = dx * yaw.sin() + dy * yaw.cos();
             let pitch = cam.pitch_deg.to_radians();
             let cam_vertical = cam.height * pitch.cos() - forward * pitch.sin();
@@ -253,9 +237,7 @@ mod tests {
     }
 
     /// A point directly ahead in the aim-line plane (`dx == 0`, i.e. `pos.x
-    /// == cam.x`) must project to `screen_x == 0` — re-expressed from the
-    /// deleted `spread_center` field (b2-t1); mirror-invariant, so this holds
-    /// independent of the negated-right deviation (Option A).
+    /// == cam.x`) must project to `screen_x == 0`.
     #[test]
     fn perspective_aim_line_projects_screen_x_zero() {
         let cam = representative_cam();
@@ -317,8 +299,7 @@ mod tests {
     /// A point directly ahead of the camera (along its yaw-derived forward
     /// direction) must project to `screen_x == 0` for arbitrary `yaw_deg` —
     /// proves `cam_space` is correctly signed by construction, no
-    /// `facing_sign` field needed. Mirror-invariant: holds regardless of the
-    /// negated-right deviation (Option A).
+    /// per-instance sign/facing field needed.
     #[test]
     fn perspective_forward_axis_projects_screen_x_zero_for_arbitrary_yaw() {
         let base = representative_cam();
