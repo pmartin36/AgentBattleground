@@ -3,6 +3,8 @@
 ## Purpose
 The moment after a battle ends — results, reflection, and the reward loop. Winning unlocks an upgrade opportunity for one of your pieces.
 
+> **Slice carved out:** the win-side **results screen UI** (outcome banner, per-creature level/XP/stamina columns, spoils row) plus the `Creature` XP field and the `Exhaustion → Stamina` rename now live in `46-post-battle-results-screen.md`. What remains below is the upgrade flow, the loss debrief, draw handling, and replay finalization.
+
 ## Scope
 - Results screen (win/loss/draw)
 - Win: piece upgrade flow
