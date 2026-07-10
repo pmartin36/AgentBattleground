@@ -6,7 +6,7 @@
   ⣠⣤⣤⣄ ⣠⣤⣤⣄ ⣠⣤⣤⣄ ⣠⣤⣤⣄   ⡠⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⢄  
   ⡇⣿⡇⢸ ⡇⣿⡇⢸ ⡇⡇ ⢸ ⡇⣿ ⢸   ⡇            ⢸  
   ⠙⠛⠛⠋ ⠙⠛⠛⠋ ⠙⠛⠛⠋ ⠙⠛⠛⠋   ⡇            ⢸  
-  STR  DEX  INT  VIT    ⡇Exhaustion: ⢸  
+  STR  DEX  INT  VIT    ⡇Stamina: 100⢸  
        ⢀⡀⢀⡀             ⡇            ⢸  
        ⠘⡉⣙⠣⡀            ⡇Placeholder ⢸  
        ⠹⡱⠞⠛⠏⡠⠤⠄⡀        ⡇ Modifier A ⢸  

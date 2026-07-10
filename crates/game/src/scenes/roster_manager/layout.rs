@@ -33,7 +33,7 @@ impl RosterManager {
     /// under `name` with no gap between them; the blank row lives above the
     /// block, not between `level` and the body.
     const HEADER_GAP_H: u16 = 1;
-    /// Height (in rows) of the `exhaustion` sub-region at the top of the
+    /// Height (in rows) of the `stamina` sub-region at the top of the
     /// details panel.
     const PANEL_H: u16 = 5;
     /// Cells `left_col`'s container top (and `stat_bar`/its labels with it)
@@ -168,11 +168,11 @@ impl RosterManager {
         [left_col[0], left_col[1]]
     }
 
-    /// Dot-precise geometry for the RIGHT column (exhaustion directly above
+    /// Dot-precise geometry for the RIGHT column (stamina directly above
     /// ability_list, the details panel) — factored out of `layout()` into
     /// its own function so `details_panel_rects` can draw the panel's
     /// border at genuine dot precision, instead of re-deriving dots from
-    /// `RosterLayout`'s already-cell-floored `exhaustion`/`ability_list`
+    /// `RosterLayout`'s already-cell-floored `stamina`/`ability_list`
     /// fields (which have permanently lost any sub-cell remainder the
     /// instant `layout()` calls `.to_cell_rect()` on them — re-expanding a
     /// floored cell value back into dots via `cell_rect_to_dots` cannot
@@ -257,7 +257,7 @@ impl RosterManager {
     /// gap), a blank `HEADER_GAP_H` row, then the body, then `dot_row`. The
     /// body is a 2:1 LEFT/RIGHT column split: LEFT holds `stat_bar` directly
     /// above `sprite` (identical column range, width `area.width * 2 / 3`);
-    /// RIGHT holds `exhaustion` directly above `ability_list` (the details
+    /// RIGHT holds `stamina` directly above `ability_list` (the details
     /// panel), inset from `area`'s right edge by `EDGE_MARGIN`. Computed on
     /// dot-precision `flex()`/`DotRect` (b8-t1); `left_w`/`details_w`/
     /// `details_top` stay integer-cell math (a `flex`-grow split of the 2:1
@@ -281,10 +281,10 @@ impl RosterManager {
         // `left_col_dots`. `stat_bar` (`left_col_dots[0]`) is NOT stored here
         // — nothing in production reads a cell-floored copy (`render()` hands
         // it to `render_stat_bars` unfloored); tests call `stat_bar_rect`.
-        // Mirrors the `exhaustion`/`ability_list` case.
+        // Mirrors the `stamina`/`ability_list` case.
         let sprite = Self::left_col_dots(area)[1].to_cell_rect();
 
-        // RIGHT column (exhaustion/ability_list, the details panel): NOT
+        // RIGHT column (stamina/ability_list, the details panel): NOT
         // computed here — `RosterLayout` no longer carries cell-floored
         // copies of them (nothing in production code read them; the real
         // consumer, `details_panel_rects`, calls `Self::right_col_dots`
@@ -435,17 +435,17 @@ impl RosterManager {
     /// only — production code that needs dot precision calls `left_col_dots`
     /// directly instead (`render()` hands it to `render_stat_bars` unfloored;
     /// see `left_col_dots`'s doc comment). `RosterLayout` no longer carries a
-    /// cell-floored copy, mirroring the `exhaustion`/`ability_list` case.
+    /// cell-floored copy, mirroring the `stamina`/`ability_list` case.
     #[cfg(test)]
     pub(super) fn stat_bar_rect(area: Rect) -> Rect {
         Self::left_col_dots(area)[0].to_cell_rect()
     }
 
-    /// Cell-space view of `right_col_dots(area)[0]` (`exhaustion`), for
+    /// Cell-space view of `right_col_dots(area)[0]` (`stamina`), for
     /// tests only — production code that needs dot precision calls
     /// `right_col_dots` directly instead (see its doc comment).
     #[cfg(test)]
-    pub(super) fn exhaustion_rect(area: Rect) -> Rect {
+    pub(super) fn stamina_rect(area: Rect) -> Rect {
         Self::right_col_dots(area)[0].to_cell_rect()
     }
 
@@ -462,11 +462,11 @@ impl RosterManager {
     /// 1-cell-perimeter rect around the union of `right_col_dots(area)`'s
     /// two elements (they share x/width and are stacked contiguously in y,
     /// so the union is exact without needing `Rect::union`) — calls
-    /// `right_col_dots` directly, NOT `layout(area).exhaustion`/
+    /// `right_col_dots` directly, NOT `layout(area).stamina`/
     /// `.ability_list`, which are already cell-floored and cannot recover
     /// the sub-cell precision `draw_dot_border` needs (see
     /// `right_col_dots`'s doc comment). The text rects are inset 1 cell off
-    /// every bordered edge — there is NO border between exhaustion and
+    /// every bordered edge — there is NO border between stamina and
     /// ability_list (they share an interior boundary), so `ability_text`
     /// keeps its top edge un-inset. Sole source of this geometry; `render()`
     /// and tests both call this rather than re-deriving it.
@@ -482,7 +482,7 @@ impl RosterManager {
             h: ex_dots.h + ab_dots.h,
             ..ex_dots
         };
-        // 1 cell L/R, 1 cell off the TOP border only — exhaustion/ability
+        // 1 cell L/R, 1 cell off the TOP border only — stamina/ability
         // share an un-bordered interior boundary, so no bottom inset.
         let ex_text = ex_dots.inset(2, 2, 4, 0).to_cell_rect();
         // 1 cell L/R, 1 cell off the BOTTOM border only — no top inset
@@ -497,7 +497,7 @@ impl RosterManager {
 /// rendering function renders into. Header spacing: `level` sits tight under
 /// `name` (no gap), then `HEADER_GAP_H` blank row, then the body. Body is a
 /// 2:1 LEFT/RIGHT column split: LEFT holds `stat_bar` above `sprite`
-/// (identical column range); RIGHT holds `exhaustion` above `ability_list`
+/// (identical column range); RIGHT holds `stamina` above `ability_list`
 /// (the details panel), inset from `area`'s right edge by `EDGE_MARGIN`.
 #[cfg(test)]
 mod layout_tests {
@@ -505,7 +505,7 @@ mod layout_tests {
 
     /// `layout(area)` must order its bands top-to-bottom: name < level <
     /// stat_bar/sprite/dot_row, with `level` tight under `name` (no blank
-    /// row) and `exhaustion` above `ability_list`. `HEADER_GAP_H` is fully
+    /// row) and `stamina` above `ability_list`. `HEADER_GAP_H` is fully
     /// consumed as a top margin ABOVE `name` (spec 38 item 6), so `level`'s
     /// bottom edge sits FLUSH against `body_y` (no gap there) — any visible
     /// space before `stat_bar.y` is incidental spillover from `stat_bar`
@@ -531,9 +531,9 @@ mod layout_tests {
              stat_bar's independent details_top anchoring, not from HEADER_GAP_H (which is now a top margin above name)",
             l.level.y, l.level.height, stat_bar.y
         );
-        let exhaustion = RosterManager::exhaustion_rect(area);
+        let stamina = RosterManager::stamina_rect(area);
         let ability_list = RosterManager::ability_list_rect(area);
-        assert!(exhaustion.y < ability_list.y, "exhaustion.y ({}) must be above ability_list.y ({})", exhaustion.y, ability_list.y);
+        assert!(stamina.y < ability_list.y, "stamina.y ({}) must be above ability_list.y ({})", stamina.y, ability_list.y);
         assert!(stat_bar.y < l.sprite.y, "stat_bar.y ({}) must be above sprite.y ({})", stat_bar.y, l.sprite.y);
         assert!(l.sprite.y < l.dot_row.y, "sprite.y ({}) must be above dot_row.y ({})", l.sprite.y, l.dot_row.y);
     }
@@ -566,20 +566,20 @@ mod layout_tests {
             // be dot-identical, only close enough to round to the same
             // cell; see `stat_bar_top_and_details_panel_top_share_a_cell`).
             assert_eq!(
-                stat_bar.y, RosterManager::exhaustion_rect(area).y,
+                stat_bar.y, RosterManager::stamina_rect(area).y,
                 "w={w},h={h}: body position unchanged by the header shift"
             );
         }
     }
 
-    /// The details panel (`exhaustion`/`ability_list`) width must equal
+    /// The details panel (`stamina`/`ability_list`) width must equal
     /// `area.width - area.width * 2 / 3` (the RIGHT column of the 2:1 split).
     #[test]
     fn details_panel_width_is_one_third() {
         for width in [60u16, 90u16] {
             let area = Rect::new(0, 0, width, 30);
             let expected = width - (width * 2 / 3);
-            assert_eq!(RosterManager::exhaustion_rect(area).width, expected, "width={width}: exhaustion.width");
+            assert_eq!(RosterManager::stamina_rect(area).width, expected, "width={width}: stamina.width");
             assert_eq!(RosterManager::ability_list_rect(area).width, expected, "width={width}: ability_list.width");
         }
     }
@@ -616,11 +616,11 @@ mod layout_tests {
         for (w, h) in [(80u16, 30u16), (40u16, 20u16), (60u16, 24u16)] {
             let area = Rect::new(0, 0, w, h);
             let stat_bar = RosterManager::stat_bar_rect(area);
-            let exhaustion = RosterManager::exhaustion_rect(area);
+            let stamina = RosterManager::stamina_rect(area);
             assert_eq!(
-                stat_bar.y, exhaustion.y,
-                "w={w},h={h}: stat_bar.y ({}) and the details panel top exhaustion.y ({}) must share a cell row",
-                stat_bar.y, exhaustion.y
+                stat_bar.y, stamina.y,
+                "w={w},h={h}: stat_bar.y ({}) and the details panel top stamina.y ({}) must share a cell row",
+                stat_bar.y, stamina.y
             );
         }
     }
@@ -642,12 +642,12 @@ mod layout_tests {
 
         let scene = RosterManager::new();
         let area = Rect::new(0, 0, 80, 30);
-        let exhaustion = RosterManager::exhaustion_rect(area);
+        let stamina = RosterManager::stamina_rect(area);
         let buf = render_to_buffer(&scene, 80, 30);
 
         let stat_bar = RosterManager::stat_bar_rect(area);
         let stat_bar_top = topmost_lit_dot_row(&buf, stat_bar.x + 2, stat_bar.y);
-        let details_top = topmost_lit_dot_row(&buf, exhaustion.x + 2, exhaustion.y);
+        let details_top = topmost_lit_dot_row(&buf, stamina.x + 2, stamina.y);
         assert_eq!(
             stat_bar_top, details_top,
             "stat_bar's border (topmost lit dot row {stat_bar_top}) and the details panel's border \
@@ -706,17 +706,17 @@ mod layout_tests {
     fn details_panel_pulled_left_off_right_edge() {
         for width in [60u16, 90u16] {
             let area = Rect::new(0, 0, width, 30);
-            let exhaustion = RosterManager::exhaustion_rect(area);
+            let stamina = RosterManager::stamina_rect(area);
             let ability_list = RosterManager::ability_list_rect(area);
             let expected_x = area.right()
-                - (RosterManager::EDGE_MARGIN + RosterManager::DETAILS_LEFT_SHIFT + exhaustion.width);
+                - (RosterManager::EDGE_MARGIN + RosterManager::DETAILS_LEFT_SHIFT + stamina.width);
             assert_eq!(
-                exhaustion.x, expected_x,
+                stamina.x, expected_x,
                 "width={width}: details panel x must be inset EDGE_MARGIN+DETAILS_LEFT_SHIFT from area.right()"
             );
             assert_eq!(ability_list.x, expected_x, "width={width}: ability_list shares the panel x");
             assert_eq!(
-                area.right() - exhaustion.right(),
+                area.right() - stamina.right(),
                 RosterManager::EDGE_MARGIN + RosterManager::DETAILS_LEFT_SHIFT,
                 "width={width}: panel right edge must sit EDGE_MARGIN+DETAILS_LEFT_SHIFT in from area.right()"
             );

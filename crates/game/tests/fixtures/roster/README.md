@@ -32,7 +32,7 @@ All 4 `*.preview.txt` files were visually reviewed before these fixtures were
 committed, against the shipped roster layout (post `fix(roster): correct
 roster screen layout`, commit `fd6b823`): sprite centered above its stat
 cluster, 4 stat bars (STR/DEX/INT/VIT) with the dot-cluster role indicator
-below, ability/exhaustion detail panel border on the right, HOME button
+below, ability/stamina detail panel border on the right, HOME button
 top-right, and Active/Bench/Reserve role-label dot slots along the bottom row.
 `midslide_80x30` additionally shows the outgoing sprite/dot-cluster sliding
 off the right edge and the incoming creature's partially entering from the

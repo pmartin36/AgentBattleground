@@ -273,11 +273,11 @@ mod draw_dot_border_tests {
     }
 }
 
-/// b1-t5: procedural bordered details panel (union of `exhaustion` +
+/// b1-t5: procedural bordered details panel (union of `stamina` +
 /// `ability_list`), drawn via `draw_dot_border` (b1-t4) — the fix for the
 /// "huge fat blob" regression the spec's Purpose section calls out. The
 /// expected border rect is computed independently here (mirroring
-/// research.md's `details_panel_rects` geometry: the union of `exhaustion`
+/// research.md's `details_panel_rects` geometry: the union of `stamina`
 /// and `ability_list`, which are stacked with identical x/width) rather than
 /// depending on that private helper directly, so these tests assert the
 /// OBSERVABLE render, not an internal implementation fn.
@@ -287,7 +287,7 @@ mod details_panel_border_tests {
     use crate::scenes::test_util::render_to_buffer;
 
     /// The details-panel border's OBSERVABLE cell footprint — the union of
-    /// `exhaustion` and `ability_list`, computed at dot precision (matching
+    /// `stamina` and `ability_list`, computed at dot precision (matching
     /// `RosterManager::details_panel_rects`) and THEN converted to the cell
     /// span `draw_dot_border` actually paints. Using `.to_cell_rect()` alone
     /// (which floors the origin and size independently) understates the
@@ -393,7 +393,7 @@ mod details_panel_border_tests {
 
     /// Deliverable (b): text never lands on the border's own dot-glyph
     /// cells — every perimeter cell of the details-panel border is a
-    /// non-alphanumeric (braille dot) glyph, never ASCII exhaustion/ability
+    /// non-alphanumeric (braille dot) glyph, never ASCII stamina/ability
     /// text. Uses an ability description long enough to fill the full
     /// details-panel width (so `label` left-aligns and truncates it flush
     /// against both the left and right edges of `ability_list`, which today

@@ -288,7 +288,7 @@ mod stat_bar_tests {
     /// REGRESSION (spec 38 item 3a): the rightmost stat bar must keep a real
     /// horizontal gap from the details panel's left border — the bars must
     /// never touch or overlap the panel. Asserted against the panel border's
-    /// own left column (`exhaustion.x`, which is where `draw_dot_border`
+    /// own left column (`stamina.x`, which is where `draw_dot_border`
     /// paints the panel's left edge) at multiple widths.
     #[test]
     fn rightmost_stat_bar_clears_details_panel() {
@@ -300,7 +300,7 @@ mod stat_bar_tests {
             let stat_bar = RosterManager::stat_bar_rect(area);
             let slices = RosterManager::stat_slice_parts(stat_bar);
             let (last_outline, _fill, _label) = *slices.last().unwrap();
-            let panel_left = RosterManager::exhaustion_rect(area).x; // details panel border's left column
+            let panel_left = RosterManager::stamina_rect(area).x; // details panel border's left column
 
             assert!(
                 last_outline.right() <= panel_left,
@@ -671,7 +671,7 @@ mod stat_bar_tests {
         // top (see `stat_bar_top_and_details_panel_top_share_a_cell`).
         assert_eq!(
             outline.top(),
-            RosterManager::exhaustion_rect(area()).y,
+            RosterManager::stamina_rect(area()).y,
             "the stat-bar box top must share a cell row with the details-panel border top"
         );
 

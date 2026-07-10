@@ -64,7 +64,7 @@ struct Slide {
 /// The 7 named panel rects `layout()` splits `area` into (b1-t1,
 /// research.md): `name` and `level` stacked tight at the top, a blank
 /// `HEADER_GAP_H` row, then the body — a 2:1 LEFT/RIGHT column split with
-/// `stat_bar` above `sprite` on the LEFT and `exhaustion` above
+/// `stat_bar` above `sprite` on the LEFT and `stamina` above
 /// `ability_list` (the details panel) on the RIGHT — then `dot_row` at the
 /// bottom. Only `sprite` is offset during a slide; every other rect is drawn
 /// statically at the resting column regardless of `col_offset`.
@@ -132,7 +132,7 @@ impl RosterManager {
     /// flanking arrow buttons (which also occupy the `dot_row` band).
     const CLUSTER_GAP: u16 = 5;
     /// Role-label text colour (b2-t6) — white, matching
-    /// `LEVEL_COLOR`/`EXHAUSTION_COLOR`/`ABILITY_COLOR` chrome.
+    /// `LEVEL_COLOR`/`STAMINA_COLOR`/`ABILITY_COLOR` chrome.
     const DOT_LABEL_COLOR: engine_core::color::Rgba = engine_core::color::Rgba::rgb(0xff, 0xff, 0xff);
     /// The 3 role clusters the dot row is grouped into, in roster-index
     /// order: `(slot count, label)`. Slot counts are derived FROM
@@ -296,9 +296,9 @@ impl Scene for RosterManager {
         self.render_level(frame.buffer_mut(), l.level, self.current_index);
         self.render_stat_bars(frame.buffer_mut(), Self::left_col_dots(area)[0]);
         if self.active_slide().is_none() {
-            let (border, ex_text, ability_text) = Self::details_panel_rects(area);
+            let (border, sta_text, ability_text) = Self::details_panel_rects(area);
             Self::draw_dot_border(frame.buffer_mut(), border, Self::BORDER_COLOR);
-            self.render_exhaustion(frame.buffer_mut(), ex_text, self.current_index);
+            self.render_stamina(frame.buffer_mut(), sta_text, self.current_index);
             self.render_ability_list(frame.buffer_mut(), ability_text, self.current_index);
         }
         self.render_dot_row(frame.buffer_mut(), Self::top_bands_dots(area)[4]);
@@ -398,7 +398,7 @@ mod tests {
 
     /// `RosterManager::new()` must source its roster from
     /// `crate::creatures::demo_roster()`, not `crate::creatures::all()` — the
-    /// per-creature RPG fields (stats/level/abilities/exhaustion) must match
+    /// per-creature RPG fields (stats/level/abilities/stamina) must match
     /// `demo_roster()` element-for-element, not `Creature::new`'s defaults
     /// (level 1, `Stats::default()`, empty abilities).
     #[test]
@@ -423,9 +423,9 @@ mod tests {
                 "creature {i} abilities must match demo_roster()"
             );
             assert_eq!(
-                rm.creatures[i].exhaustion(),
-                demo[i].exhaustion(),
-                "creature {i} exhaustion must match demo_roster()"
+                rm.creatures[i].stamina(),
+                demo[i].stamina(),
+                "creature {i} stamina must match demo_roster()"
             );
         }
 

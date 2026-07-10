@@ -5,8 +5,8 @@
 //! only things that ever differed between them).
 
 use crate::ability::{Ability, Modifier};
-use crate::exhaustion::Exhaustion;
 use crate::squad_role::{squad_role, SquadRole, ACTIVE_SLOTS, BENCH_SLOTS};
+use crate::stamina::Stamina;
 use crate::stats::Stats;
 use engine_render::AnimatedSprite;
 use std::collections::HashMap;
@@ -26,8 +26,13 @@ pub enum AnimationKind {
 /// `len() <= 4` convention as `Ability::modifiers`, applied one level up).
 pub const MAX_ABILITIES: usize = 4;
 
+/// Shared placeholder XP cap — the fill-fraction denominator for the post-
+/// battle XP bar (spec `46-post-battle-results-screen.md`). Never incremented
+/// this pass.
+pub const XP_TO_NEXT_LEVEL: u32 = 100;
+
 /// A named creature: its animation catalog plus this game's RPG data —
-/// stats, level, abilities, and an exhaustion meter. There is no separate
+/// stats, level, abilities, and a stamina meter. There is no separate
 /// "roster entry" wrapper type around this: every `Creature` in this game is
 /// always a full battle participant, so the RPG fields live directly here
 /// rather than behind an extra layer of indirection. (`Creature` itself
@@ -38,22 +43,24 @@ pub struct Creature {
     animations: HashMap<AnimationKind, AnimatedSprite>,
     stats: Stats,
     level: u32,
+    xp: u32,
     abilities: Vec<Ability>,
-    exhaustion: Exhaustion,
+    stamina: Stamina,
 }
 
 impl Creature {
     /// New creature with the given name, an empty animation catalog, and
     /// placeholder RPG defaults (`Stats::default()`, level 1, no abilities,
-    /// rested `Exhaustion`) — override via the `with_*` builders below.
+    /// full `Stamina`) — override via the `with_*` builders below.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             animations: HashMap::new(),
             stats: Stats::default(),
             level: 1,
+            xp: 0,
             abilities: Vec::new(),
-            exhaustion: Exhaustion::default(),
+            stamina: Stamina::default(),
         }
     }
 
@@ -75,6 +82,12 @@ impl Creature {
         self
     }
 
+    /// Set this creature's xp and return self (builder style).
+    pub fn with_xp(mut self, xp: u32) -> Self {
+        self.xp = xp;
+        self
+    }
+
     /// Set this creature's abilities and return self (builder style).
     /// Debug-asserts `abilities.len() <= MAX_ABILITIES`.
     pub fn with_abilities(mut self, abilities: Vec<Ability>) -> Self {
@@ -87,9 +100,9 @@ impl Creature {
         self
     }
 
-    /// Set this creature's `Exhaustion` and return self (builder style).
-    pub fn with_exhaustion(mut self, exhaustion: Exhaustion) -> Self {
-        self.exhaustion = exhaustion;
+    /// Set this creature's `Stamina` and return self (builder style).
+    pub fn with_stamina(mut self, stamina: Stamina) -> Self {
+        self.stamina = stamina;
         self
     }
 
@@ -111,12 +124,16 @@ impl Creature {
         self.level
     }
 
+    pub fn xp(&self) -> u32 {
+        self.xp
+    }
+
     pub fn abilities(&self) -> &[Ability] {
         &self.abilities
     }
 
-    pub fn exhaustion(&self) -> &Exhaustion {
-        &self.exhaustion
+    pub fn stamina(&self) -> &Stamina {
+        &self.stamina
     }
 }
 
@@ -175,7 +192,7 @@ pub fn reassign_injured_to_reserve(roster: &mut [Creature], injured_index: usize
     if injured_index >= roster.len() {
         return;
     }
-    if !roster[injured_index].exhaustion().is_injured() {
+    if !roster[injured_index].stamina().is_injured() {
         return;
     }
     if squad_role(injured_index) == SquadRole::Reserve {
@@ -189,7 +206,7 @@ pub fn reassign_injured_to_reserve(roster: &mut [Creature], injured_index: usize
 }
 
 /// Wraps each of the 6 bundled creatures with illustrative, distinguishing
-/// placeholder `Stats`/`level`/`abilities` (default, rested `Exhaustion`), in
+/// placeholder `Stats`/`level`/`abilities` (default, full `Stamina`), in
 /// `all()`'s order. Values are non-canonical placeholders (spec
 /// `34-creature-attributes-data-model.md` `Decisions (v1)`) — TODO(code-writer): implement.
 pub fn demo_roster() -> Vec<Creature> {
@@ -206,7 +223,9 @@ pub fn demo_roster() -> Vec<Creature> {
                 "Placeholder ability 1",
                 vec![Modifier { name: "Modifier A".to_string(), requires: None }],
             )],
-        ),
+        )
+        .with_xp(65)
+        .with_stamina(Stamina::default().drain_from_damage(20)),
         entry(
             frost_lizard(),
             Stats { strength: 14, dexterity: 18, intelligence: 26, vitality: 22 },
@@ -215,7 +234,9 @@ pub fn demo_roster() -> Vec<Creature> {
                 "Placeholder ability 1",
                 vec![Modifier { name: "Modifier A".to_string(), requires: None }],
             )],
-        ),
+        )
+        .with_xp(30)
+        .with_stamina(Stamina::default().drain_from_damage(55)),
         entry(
             stone_golem(),
             Stats { strength: 22, dexterity: 8, intelligence: 10, vitality: 34 },
@@ -224,7 +245,9 @@ pub fn demo_roster() -> Vec<Creature> {
                 "Placeholder ability 1",
                 vec![Modifier { name: "Modifier A".to_string(), requires: None }],
             )],
-        ),
+        )
+        .with_xp(90)
+        .with_stamina(Stamina::default().drain_from_damage(40)),
         entry(
             storm_hawk(),
             Stats { strength: 12, dexterity: 32, intelligence: 24, vitality: 12 },
@@ -233,7 +256,9 @@ pub fn demo_roster() -> Vec<Creature> {
                 "Placeholder ability 1",
                 vec![Modifier { name: "Modifier A".to_string(), requires: None }],
             )],
-        ),
+        )
+        .with_xp(15)
+        .with_stamina(Stamina::default().drain_from_damage(90)),
         entry(
             verdant_treant(),
             Stats { strength: 20, dexterity: 10, intelligence: 22, vitality: 30 },
@@ -375,26 +400,26 @@ mod tests {
     }
 
     /// Building with `MAX_ABILITIES` abilities succeeds, and every field
-    /// (including a non-default level/stats/exhaustion so a hardcoded-default
+    /// (including a non-default level/stats/stamina so a hardcoded-default
     /// getter can't silently pass) round-trips through its accessor.
     #[test]
     fn builders_round_trip_all_fields() {
         let stats = Stats { strength: 5, dexterity: 6, intelligence: 7, vitality: 8 };
         let level = 3u32;
         let abilities = dummy_abilities(MAX_ABILITIES);
-        let exhaustion = Exhaustion::default().apply_damage_exhaustion(15);
+        let stamina = Stamina::default().drain_from_damage(15);
 
         let creature = Creature::new("Test")
             .with_stats(stats)
             .with_level(level)
             .with_abilities(abilities.clone())
-            .with_exhaustion(exhaustion);
+            .with_stamina(stamina);
 
         assert_eq!(creature.name(), "Test");
         assert_eq!(*creature.stats(), stats);
         assert_eq!(creature.level(), level);
         assert_eq!(creature.abilities(), abilities.as_slice());
-        assert_eq!(creature.exhaustion(), &exhaustion);
+        assert_eq!(creature.stamina(), &stamina);
     }
 
     /// Constructing with more than `MAX_ABILITIES` abilities panics under
@@ -408,17 +433,17 @@ mod tests {
     }
 
     /// A full `ROSTER_SIZE` roster of distinctly-named creatures, all rested
-    /// except `injured_index` (if `Some`), which is pushed to `Exhaustion`'s
-    /// injured state via 100 damage-exhaustion.
+    /// except `injured_index` (if `Some`), which is pushed to `Stamina`'s
+    /// injured state via a full 100 drain.
     fn build_roster(injured_index: Option<usize>) -> Vec<Creature> {
         (0..crate::squad_role::ROSTER_SIZE)
             .map(|i| {
-                let exhaustion = if Some(i) == injured_index {
-                    Exhaustion::default().apply_damage_exhaustion(100)
+                let stamina = if Some(i) == injured_index {
+                    Stamina::default().drain_from_damage(100)
                 } else {
-                    Exhaustion::default()
+                    Stamina::default()
                 };
-                Creature::new(format!("Entry {i}")).with_exhaustion(exhaustion)
+                Creature::new(format!("Entry {i}")).with_stamina(stamina)
             })
             .collect()
     }
@@ -534,10 +559,87 @@ mod tests {
         let roster = demo_roster();
         for creature in &roster {
             assert!(
-                !creature.exhaustion().is_injured(),
+                !creature.stamina().is_injured(),
                 "{} must start rested, not injured",
                 creature.name()
             );
         }
+    }
+
+    /// A freshly constructed `Creature` starts at 0 xp.
+    #[test]
+    fn new_creature_xp_is_zero() {
+        let c = Creature::new("Test");
+        assert_eq!(c.xp(), 0);
+    }
+
+    /// `with_xp` round-trips through `xp()` — a non-zero value so a
+    /// hardcoded-0 getter can't silently pass.
+    #[test]
+    fn with_xp_round_trips() {
+        let c = Creature::new("Test").with_xp(42);
+        assert_eq!(c.xp(), 42);
+    }
+
+    /// The shared XP-to-next-level cap is pinned at 100 (spec
+    /// `46-post-battle-results-screen.md`).
+    #[test]
+    fn xp_to_next_level_is_100() {
+        assert_eq!(XP_TO_NEXT_LEVEL, 100);
+    }
+
+    /// The first four `demo_roster()` entries carry four distinct stamina
+    /// percents spanning all three b4-t4 bands (`>50` green, `15..=50`
+    /// yellow, `<15` red) — the data source the post-battle stamina bar
+    /// render tests rely on.
+    #[test]
+    fn demo_roster_first_four_span_all_three_stamina_bands() {
+        let roster = demo_roster();
+        let percents: Vec<u8> = roster.iter().take(4).map(|c| c.stamina().percent()).collect();
+        assert_eq!(percents.len(), 4);
+
+        let distinct: HashSet<u8> = percents.iter().copied().collect();
+        assert_eq!(distinct.len(), 4, "the first four stamina percents must be distinct, got {percents:?}");
+
+        assert!(percents.iter().any(|&p| p > 50), "no percent >50 (green band) in {percents:?}");
+        assert!(
+            percents.iter().any(|&p| (15..=50).contains(&p)),
+            "no percent in 15..=50 (yellow band) in {percents:?}"
+        );
+        assert!(percents.iter().any(|&p| p < 15), "no percent <15 (red band) in {percents:?}");
+    }
+
+    /// The first four `demo_roster()` entries carry four distinct seeded xp
+    /// values — the data source the post-battle XP bar animation reads as
+    /// its `start`.
+    #[test]
+    fn demo_roster_first_four_have_distinct_seeded_xp() {
+        let roster = demo_roster();
+        let xps: Vec<u32> = roster.iter().take(4).map(|c| c.xp()).collect();
+        assert_eq!(xps.len(), 4);
+
+        let distinct: HashSet<u32> = xps.iter().copied().collect();
+        assert_eq!(distinct.len(), 4, "the first four seeded xp values must be distinct, got {xps:?}");
+        assert!(xps.iter().any(|&x| x != 0), "all four seeded xp values were 0, expected real seeds");
+    }
+
+    /// Guards the b3-t1 feed-forward seam: pairing the seeded xp with the
+    /// planned `xp_gained` deltas `[50, 30, 40, 25]` must cross
+    /// `XP_TO_NEXT_LEVEL` for exactly two of the first four columns.
+    #[test]
+    fn demo_roster_seeded_xp_supports_two_rollovers() {
+        let roster = demo_roster();
+        let xps: Vec<u32> = roster.iter().take(4).map(|c| c.xp()).collect();
+        let gained: [u32; 4] = [50, 30, 40, 25];
+
+        let crossings = xps
+            .iter()
+            .zip(gained.iter())
+            .filter(|(&start, &g)| start + g > XP_TO_NEXT_LEVEL)
+            .count();
+        assert_eq!(
+            crossings, 2,
+            "expected exactly two of the first four columns to cross XP_TO_NEXT_LEVEL, got {crossings} (xps={xps:?})"
+        );
     }
 }
