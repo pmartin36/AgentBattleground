@@ -125,11 +125,11 @@ fn second_button_instance_same_bytes_is_a_pure_cache_hit() {
     let icon = leaked_inset_blob(48, 48, 12);
     let rect = Rect::new(2, 1, 8, 4);
 
-    let first = Button::new(rect, panel, icon);
+    let first = Button::new(rect, panel).icon(icon);
     let mut warm_buf = make_buf(16, 8);
     first.render(&mut warm_buf); // warms the shared cache for (panel, rect) and (icon, fitted dims)
 
-    let second = Button::new(rect, panel, icon);
+    let second = Button::new(rect, panel).icon(icon);
     let before = asset_cache::rasterize_recompute_count();
     let mut buf = make_buf(16, 8);
     second.render(&mut buf);
