@@ -8,6 +8,12 @@ pub struct OrthographicCamera {
     pub scale_dots: f32,
 }
 
+impl OrthographicCamera {
+    pub fn new(scale_dots: f32) -> Self {
+        OrthographicCamera { scale_dots }
+    }
+}
+
 impl Camera for OrthographicCamera {
     fn project(&self, pos: WorldPos) -> (i32, i32) {
         (

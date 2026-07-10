@@ -43,3 +43,14 @@ found before commit.
 visually reviewed before commit (b7-t1): both show a perspective board grid
 with converging gridlines and creature sprite clusters visible mid-frame, no
 blank/empty render. Confirmed correct; no divergence found before commit.
+
+`sideline_golden.preview.txt` and `over_shoulder_golden.preview.txt` were
+regenerated at b2-t1 (`engine-camera-shots-vs-kinds-consolidation`) for the
+canonical-rotation (Option B) correction: `PerspectiveCamera::cam_space` was
+reverted to the plain, unnegated rotation, which horizontally mirrors these
+two shots relative to their prior baseline. Both regenerated previews still
+show a perspective board grid with converging gridlines and creature sprite
+clusters visible mid-frame, no blank/empty render — the same content,
+left-right flipped. `top_down_golden` is unaffected (unchanged fixture,
+verified via `git diff`). Independent human visual sign-off on the
+regenerated previews is b2-t2's deliverable, not this one.

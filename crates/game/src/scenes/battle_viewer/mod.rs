@@ -3,9 +3,7 @@ use std::time::Duration;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use engine_render::camera::{
-    AnyCamera, Camera, DepthAxis, FreeRoamCamera, OrthographicCamera, PerspectiveCamera, WorldPos,
-};
+use engine_render::camera::{AnyCamera, Camera, OrthographicCamera, PerspectiveCamera, WorldPos};
 use engine_render::composite::{composite_scene, SpriteContent, SpriteDraw};
 use engine_render::dots::{dots_to_grid, Dot, DotBuffer};
 use engine_render::transform::{Transform, Vec2, VerticalAnchor};
@@ -143,7 +141,7 @@ impl BattleViewer {
     /// `q` — confirmed with the project owner that `q`/`Q` must never be
     /// bound to anything here. Arrow keys have no case and no such
     /// conflict.
-    fn nudge_free_roam(cam: &mut FreeRoamCamera, code: crossterm::event::KeyCode) {
+    fn nudge_camera(cam: &mut PerspectiveCamera, code: crossterm::event::KeyCode) {
         use crossterm::event::KeyCode;
         match code {
             KeyCode::Char('w') | KeyCode::Char('W') => cam.nudge(0.5, 0.0, 0.0, 0.0, 0.0),
@@ -180,7 +178,7 @@ impl BattleViewer {
         let mut lines: Vec<&str> = vec!["press t to toggle controls"];
         if self.show_controls_help {
             lines.push("1 Sideline  2 Over-the-shoulder  3 Top-down  4 Free-roam");
-            if matches!(self.camera_mode.camera, AnyCamera::FreeRoam(_)) {
+            if matches!(self.camera_mode.fit, FitMode::Manual) {
                 lines.push("move wasd  height z/x  look arrow keys  zoom [ ]");
             }
         }
@@ -238,9 +236,10 @@ impl Scene for BattleViewer {
                 KeyCode::Char('2') => self.camera_mode = BattleCamera::over_shoulder_preset(),
                 KeyCode::Char('3') => self.camera_mode = BattleCamera::top_down_preset(),
                 // Free-roam entry (spec 42 Decision 5): re-pressing '4' while
-                // already in FreeRoam must NOT clobber a flown-to
-                // position/orientation back to the starting preset.
-                KeyCode::Char('4') if !matches!(self.camera_mode.camera, AnyCamera::FreeRoam(_)) => {
+                // already in FreeRoam (`fit: FitMode::Manual`) must NOT
+                // clobber a flown-to position/orientation back to the
+                // starting preset.
+                KeyCode::Char('4') if !matches!(self.camera_mode.fit, FitMode::Manual) => {
                     self.camera_mode = BattleCamera::free_roam_preset();
                 }
                 // Case-insensitive toggle for the controls-help HUD hint
@@ -250,8 +249,10 @@ impl Scene for BattleViewer {
                     self.show_controls_help = !self.show_controls_help;
                 }
                 code => {
-                    if let AnyCamera::FreeRoam(fr) = &mut self.camera_mode.camera {
-                        Self::nudge_free_roam(fr, code);
+                    if matches!(self.camera_mode.fit, FitMode::Manual) {
+                        if let AnyCamera::Perspective(p) = &mut self.camera_mode.camera {
+                            Self::nudge_camera(p, code);
+                        }
                     }
                 }
             }

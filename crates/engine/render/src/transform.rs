@@ -349,7 +349,7 @@ mod tests {
 
     // ── place (b1-t3) ────────────────────────────────────────────────────────
 
-    use crate::camera::SideView;
+    use crate::camera::OrthographicCamera;
 
     /// Even-sized buffer: dot_x/dot_y = camera.project(translate) minus the
     /// exact half-extent; depth = camera.depth_key(translate).
@@ -357,7 +357,7 @@ mod tests {
     fn place_centers_even_sized_buffer() {
         let dots = DotBuffer::new(8, 4);
         let translate = WorldPos::new(2.0, 3.0);
-        let camera = SideView::new(4.0); // project -> (8, 12)
+        let camera = OrthographicCamera::new(4.0); // project -> (8, 12)
 
         let placement = place(&dots, translate, &camera, VerticalAnchor::Center);
 
@@ -372,7 +372,7 @@ mod tests {
     fn place_centers_odd_sized_buffer_rounds_down() {
         let dots = DotBuffer::new(5, 3);
         let translate = WorldPos::new(0.0, 0.0);
-        let camera = SideView::new(1.0); // project -> (0, 0)
+        let camera = OrthographicCamera::new(1.0); // project -> (0, 0)
 
         let placement = place(&dots, translate, &camera, VerticalAnchor::Center);
 
@@ -385,7 +385,7 @@ mod tests {
     fn place_depth_matches_camera_depth_key() {
         let dots = DotBuffer::new(6, 6);
         let translate = WorldPos::new(-3.5, 7.25);
-        let camera = SideView::new(2.0);
+        let camera = OrthographicCamera::new(2.0);
 
         let placement = place(&dots, translate, &camera, VerticalAnchor::Center);
 
@@ -397,7 +397,7 @@ mod tests {
     fn place_dots_field_points_at_input_buffer() {
         let dots = DotBuffer::new(4, 4);
         let translate = WorldPos::new(1.0, 1.0);
-        let camera = SideView::new(1.0);
+        let camera = OrthographicCamera::new(1.0);
 
         let placement = place(&dots, translate, &camera, VerticalAnchor::Center);
 
@@ -411,7 +411,7 @@ mod tests {
     fn place_bottom_anchors_feet_at_projected_point() {
         let dots = DotBuffer::new(8, 4);
         let translate = WorldPos::new(2.0, 3.0);
-        let camera = SideView::new(4.0); // project -> (8, 12)
+        let camera = OrthographicCamera::new(4.0); // project -> (8, 12)
 
         let center = place(&dots, translate, &camera, VerticalAnchor::Center);
         let bottom = place(&dots, translate, &camera, VerticalAnchor::Bottom);

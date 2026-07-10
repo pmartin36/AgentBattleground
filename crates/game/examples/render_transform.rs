@@ -27,7 +27,7 @@ use serde_json::Value as JsonValue;
 
 use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use game::scene_id::SceneId;
-use engine_render::camera::{SideView, WorldPos};
+use engine_render::camera::{OrthographicCamera, WorldPos};
 use engine_render::transform::{Transform, Vec2};
 use engine_render::tween;
 
@@ -88,7 +88,7 @@ fn transform_at(elapsed: Duration) -> Transform {
 
 struct RenderTransformScene {
     img: image::DynamicImage,
-    camera: SideView,
+    camera: OrthographicCamera,
     elapsed: Duration,
     no_inspect: engine_core::scene::NoInspect,
 }
@@ -98,7 +98,7 @@ impl RenderTransformScene {
         RenderTransformScene {
             img: image::load_from_memory(include_bytes!("assets/wizard_still.png"))
                 .expect("decode wizard_still.png"),
-            camera: SideView::new(SCALE_DOTS),
+            camera: OrthographicCamera::new(SCALE_DOTS),
             elapsed: Duration::ZERO,
             no_inspect: engine_core::scene::NoInspect,
         }
@@ -127,7 +127,7 @@ impl Scene for RenderTransformScene {
     /// Single-sprite transform pipeline:
     ///   1. Derive the current `Transform` from `elapsed`.
     ///   2. `rasterize` the frozen source frame with that transform.
-    ///   3. `place` it (pivot-centered) via the `SideView` camera.
+    ///   3. `place` it (pivot-centered) via the `OrthographicCamera` camera.
     ///   4. `composite_dots` + `dots_to_grid` → braille → blit.
     fn render(&self, frame: &mut Frame, area: Rect) {
         let cols = area.width as usize;

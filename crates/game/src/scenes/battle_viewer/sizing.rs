@@ -675,10 +675,10 @@ mod feet_anchored_placement_tests {
     /// from landing on a board grid-line dot instead of the target piece's
     /// team-colored shadow: `draw_board_lines` draws a line through every
     /// integer world column/row, and a piece's world position (`col + 0.5`)
-    /// is always within half a unit of one — under `DepthAxis::Col`
-    /// (Sideline) that line lands at nearly the piece's own screen depth;
-    /// under `DepthAxis::Row` (OverShoulder) it runs the full screen column.
-    /// Either way it can land in the exact scanned cell, and only a
+    /// is always within half a unit of one — under Sideline (depth axis:
+    /// world-x) that line lands at nearly the piece's own screen depth;
+    /// under OverShoulder (depth axis: world-y) it runs the full screen
+    /// column. Either way it can land in the exact scanned cell, and only a
     /// color-based filter (not a tighter cell window) reliably excludes it.
     pub(super) fn is_chromatic(color: Rgba) -> bool {
         let (max, min) = (

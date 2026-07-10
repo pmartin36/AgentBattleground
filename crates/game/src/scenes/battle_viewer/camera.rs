@@ -1,11 +1,29 @@
 use super::*;
 
+/// Which fit strategy `board_geometry` uses for this camera (spec 42
+/// Decision 2/4 consolidation, b2-t1). Replaces keying dispatch on the old
+/// 3-variant `AnyCamera` (which had a distinct `FreeRoam` variant) now that
+/// `AnyCamera` has only 2 variants and `Sideline`/`OverShoulder`/`FreeRoam`
+/// all wrap the same `Perspective` variant — `fit` is the thing that
+/// actually distinguishes their geometry/dispatch behavior.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum FitMode {
+    /// TopDown: exact integer cell-sizing fit (today's `Orthographic` arm).
+    ExactFit,
+    /// Sideline / Over-the-shoulder: fit-to-viewport bbox solve.
+    ViewportFit,
+    /// Free-roam: no auto-fit — the user controls framing directly.
+    Manual,
+}
+
 /// Wraps the engine's `AnyCamera` kind-dispatch (spec 42 Decision 2) for the
-/// battle viewer. Exact passthrough: every `Camera` method delegates to
-/// `self.camera` — no recompute at this layer.
+/// battle viewer, plus which fit strategy applies (spec 42 Decision 4
+/// consolidation, b2-t1). Exact passthrough on every `Camera` method: each
+/// delegates to `self.camera` — no recompute at this layer.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct BattleCamera {
     pub camera: AnyCamera,
+    pub fit: FitMode,
 }
 
 impl Camera for BattleCamera {
@@ -52,72 +70,73 @@ impl BattleCamera {
     }
 
     /// Rebuild the active variant at `scale_dots`, preserving every other
-    /// variant-specific world param. Scale is always area-derived (see
-    /// `board_geometry`), so the incoming variant's own scale is
+    /// variant-specific world param AND `fit`. Scale is always area-derived
+    /// (see `board_geometry`), so the incoming variant's own scale is
     /// intentionally replaced, not read.
     pub(super) fn with_scale_dots(self, scale_dots: f32) -> Self {
-        BattleCamera { camera: self.camera.with_scale_dots(scale_dots) }
+        BattleCamera { camera: self.camera.with_scale_dots(scale_dots), fit: self.fit }
     }
 
-    /// Sideline preset: looks down the column (world-x) axis, mild elevation,
-    /// anchored on the board's horizontal center column. `camera_depth` sits
-    /// strictly outside the occupied `[0, BOARD_COLS]` range (negative side)
-    /// so every board cell projects with a comfortably positive
-    /// `forward_distance` — no near-plane clamping.
+    /// Sideline preset: looks down the world-x axis (yaw 90°), mild
+    /// elevation, anchored on the board's horizontal center column.
+    /// `SIDELINE_CAMERA_DEPTH` sits strictly outside the occupied
+    /// `[0, BOARD_COLS]` range (negative side) so every board cell projects
+    /// with a comfortably positive `forward_distance` — no near-plane
+    /// clamping.
     pub fn sideline_preset() -> Self {
         BattleCamera {
             camera: AnyCamera::Perspective(PerspectiveCamera {
-                scale_dots: 0.0,
-                depth_axis: DepthAxis::Col,
-                elevation_deg: 10.0,
-                camera_depth: SIDELINE_CAMERA_DEPTH,
-                camera_height: 2.5,
-                spread_center: BOARD_CENTER_COL,
+                x: SIDELINE_CAMERA_DEPTH,
+                y: BOARD_CENTER_COL,
+                height: 2.5,
+                yaw_deg: 90.0,
+                pitch_deg: 10.0,
                 fov_deg: 55.0,
-                // Camera sits on the LOW side (negative), looking toward
-                // increasing column.
-                facing_sign: 1.0,
+                scale_dots: 0.0,
             }),
+            fit: FitMode::ViewportFit,
         }
     }
 
-    /// Over-the-shoulder preset: looks down the row (world-y, team-separation)
-    /// axis from behind Team B's bench row. `camera_depth` sits strictly
-    /// outside the occupied `[0, BOARD_ROWS]` range on the POSITIVE side
-    /// (past `TEAM_B_BENCH_ROW`, not before row 0) so the shot is genuinely
-    /// from behind Team B, and `camera_height` is tall enough to keep
-    /// `forward_distance` positive all the way to the far edge (row 0) —
-    /// see both constants' doc comments.
+    /// Over-the-shoulder preset: looks down the world-y (team-separation)
+    /// axis (yaw 180°) from behind Team B's bench row. `OVER_SHOULDER_CAMERA_DEPTH`
+    /// sits strictly outside the occupied `[0, BOARD_ROWS]` range on the
+    /// POSITIVE side (past `TEAM_B_BENCH_ROW`, not before row 0) so the shot
+    /// is genuinely from behind Team B, and `OVER_SHOULDER_CAMERA_HEIGHT` is
+    /// tall enough to keep `forward_distance` positive all the way to the
+    /// far edge (row 0) — see both constants' doc comments.
     pub fn over_shoulder_preset() -> Self {
         BattleCamera {
             camera: AnyCamera::Perspective(PerspectiveCamera {
-                scale_dots: 0.0,
-                depth_axis: DepthAxis::Row,
-                elevation_deg: 30.0,
-                camera_depth: OVER_SHOULDER_CAMERA_DEPTH,
-                camera_height: OVER_SHOULDER_CAMERA_HEIGHT,
-                spread_center: BOARD_CENTER_COL,
+                x: BOARD_CENTER_COL,
+                y: OVER_SHOULDER_CAMERA_DEPTH,
+                height: OVER_SHOULDER_CAMERA_HEIGHT,
+                yaw_deg: 180.0,
+                pitch_deg: 30.0,
                 fov_deg: 55.0,
-                // Camera sits on the HIGH side (past the board's far edge),
-                // looking toward decreasing row (toward Team A) — the
-                // opposite of Sideline's facing, since it sits on the
-                // opposite side.
-                facing_sign: -1.0,
+                scale_dots: 0.0,
             }),
+            fit: FitMode::ViewportFit,
         }
     }
 
     /// Top-down preset: straight-down plan view, true orthographic projection
     /// (spec 42 Decision 0) — no tilt, no taper, no depth-anchor.
     pub fn top_down_preset() -> Self {
-        BattleCamera { camera: AnyCamera::Orthographic(OrthographicCamera { scale_dots: 0.0 }) }
+        BattleCamera {
+            camera: AnyCamera::Orthographic(OrthographicCamera::new(0.0)),
+            fit: FitMode::ExactFit,
+        }
     }
 
     /// Free-roam preset (spec 42 Decision 5, dev-only 4th mode, key `4`):
-    /// pinned starting transform for `AnyCamera::FreeRoam`.
+    /// pinned starting transform, same `PerspectiveCamera` shape as the
+    /// fixed presets (spec 42 Decision 4 consolidation, b2-t1) — `fit:
+    /// FitMode::Manual` is what makes it behave differently (no auto-fit,
+    /// movement keys enabled), not a distinct camera kind.
     pub fn free_roam_preset() -> Self {
         BattleCamera {
-            camera: AnyCamera::FreeRoam(FreeRoamCamera {
+            camera: AnyCamera::Perspective(PerspectiveCamera {
                 x: SIDELINE_CAMERA_DEPTH,
                 y: BOARD_CENTER_COL,
                 height: 2.5,
@@ -126,6 +145,7 @@ impl BattleCamera {
                 fov_deg: 55.0,
                 scale_dots: 40.0,
             }),
+            fit: FitMode::Manual,
         }
     }
 }
@@ -134,15 +154,14 @@ impl BattleCamera {
 /// occupied `[0, BOARD_ROWS]` range on the POSITIVE side (past the board's
 /// own far edge, beyond Team B's own active/bench rows), so the shot is
 /// genuinely from behind Team B looking at Team A — not the mirror image.
-/// `PerspectiveCamera::facing_sign`
-/// (`-1.0` for this preset) tells `forward_distance` which way the camera
-/// looks, so `forward_distance` stays positive for ANY `camera_height` here
-/// — no tall-camera workaround needed (an earlier version of this constant
-/// paired a much taller `camera_height` with this depth specifically to
-/// route around a since-fixed bug where the formula assumed a fixed facing
-/// direction; that workaround produced a narrow, over-steep-looking shot
-/// and is gone now that `facing_sign` exists). A comfortable margin past
-/// `BOARD_ROWS` (not just barely past it) matters for a different reason:
+/// Camera yaw 180° tells `forward_distance` which way the camera looks, so
+/// `forward_distance` stays positive for ANY `height` here — no tall-camera
+/// workaround needed (an earlier version of this constant paired a much
+/// taller camera height with this depth specifically to route around a
+/// since-fixed bug where the formula assumed a fixed facing direction; that
+/// workaround produced a narrow, over-steep-looking shot and is gone now
+/// that yaw carries the facing). A comfortable margin past `BOARD_ROWS` (not
+/// just barely past it) matters for a different reason:
 /// `sprite_base_dot_rows_width_fill` (depth-scale/sprite-size baseline)
 /// probes forward_distance AT the board boundary itself — too thin a margin
 /// puts that boundary almost on top of the camera, blowing up the near/far
@@ -151,7 +170,7 @@ impl BattleCamera {
 const OVER_SHOULDER_CAMERA_DEPTH: f32 = 10.0;
 /// World-units-above-ground the over-shoulder camera sits at — a modest,
 /// human/creature shoulder-height scale (matching Sideline's `2.5`), not
-/// constrained by keeping `forward_distance` positive (`facing_sign`
+/// constrained by keeping `forward_distance` positive (the yaw-180 facing
 /// already guarantees that regardless of height).
 const OVER_SHOULDER_CAMERA_HEIGHT: f32 = 3.0;
 
@@ -164,31 +183,29 @@ const SIDELINE_CAMERA_DEPTH: f32 = -4.0;
 mod battle_camera_tests {
     use super::*;
 
-    /// Builds a standalone `PerspectiveCamera` (backs `Sideline`/`OverShoulder`
-    /// after b3-t1) with arbitrary params — mirrors `oblique`'s role for the
-    /// two migrated variants.
-    fn perspective(depth_axis: DepthAxis, elevation_deg: f32, camera_depth: f32, scale: f32) -> PerspectiveCamera {
+    /// Builds a standalone `PerspectiveCamera` (backs `Sideline`/`OverShoulder`/
+    /// `FreeRoam` after b2-t1's consolidation) with arbitrary params — mirrors
+    /// `oblique`'s role for the migrated variants. `x`/`y` stand in for the
+    /// old `camera_depth`/`spread_center` pair; `yaw_deg` is fixed at 90.0
+    /// (arbitrary — these tests only check exact passthrough dispatch, not
+    /// any particular facing).
+    fn perspective(x: f32, y: f32, pitch_deg: f32, scale: f32) -> PerspectiveCamera {
         PerspectiveCamera {
-            depth_axis,
-            elevation_deg,
-            camera_depth,
-            camera_height: 2.5,
-            spread_center: 3.5,
+            x,
+            y,
+            height: 2.5,
+            yaw_deg: 90.0,
+            pitch_deg,
             fov_deg: 55.0,
             scale_dots: scale,
-            // Every call site here passes a negative camera_depth (low
-            // side) — facing_sign is irrelevant to what these tests check
-            // (enum-variant passthrough dispatch), so a fixed 1.0 matches
-            // that convention without needing a fifth parameter.
-            facing_sign: 1.0,
         }
     }
 
     /// Sideline variant must be an exact passthrough to the wrapped `PerspectiveCamera`.
     #[test]
     fn sideline_project_and_depth_key_match_wrapped_perspective() {
-        let inner = perspective(DepthAxis::Col, 10.0, -4.0, 4.0);
-        let cam = BattleCamera { camera: AnyCamera::Perspective(inner) };
+        let inner = perspective(-4.0, 3.5, 10.0, 4.0);
+        let cam = BattleCamera { camera: AnyCamera::Perspective(inner), fit: FitMode::ViewportFit };
         let pos = WorldPos::new(1.5, 2.5);
         assert_eq!(cam.project(pos), inner.project(pos));
         assert_eq!(cam.depth_key(pos), inner.depth_key(pos));
@@ -198,38 +215,47 @@ mod battle_camera_tests {
     #[test]
     fn topdown_project_and_depth_key_match_wrapped_orthographic() {
         let inner = OrthographicCamera { scale_dots: 4.0 };
-        let cam = BattleCamera { camera: AnyCamera::Orthographic(inner) };
+        let cam = BattleCamera { camera: AnyCamera::Orthographic(inner), fit: FitMode::ExactFit };
         let pos = WorldPos::new(1.5, 2.5);
         assert_eq!(cam.project(pos), inner.project(pos));
         assert_eq!(cam.depth_key(pos), inner.depth_key(pos));
     }
 
     /// OverShoulder variant must be an exact passthrough to the wrapped
-    /// `PerspectiveCamera`, including its construction params (`camera_depth`) —
+    /// `PerspectiveCamera`, including its construction params (`x`) —
     /// checked at a position off the camera's depth so the perspective-divide
     /// terms are actually exercised (proves forwarding, not a fresh recompute).
     #[test]
     fn overshoulder_project_and_depth_key_match_wrapped_perspective() {
-        let inner = perspective(DepthAxis::Row, 30.0, -2.0, 4.0);
-        let cam = BattleCamera { camera: AnyCamera::Perspective(inner) };
-        let pos = WorldPos::new(1.5, 5.0); // off camera_depth (-2.0)
+        let inner = perspective(3.5, -2.0, 30.0, 4.0);
+        let cam = BattleCamera { camera: AnyCamera::Perspective(inner), fit: FitMode::ViewportFit };
+        let pos = WorldPos::new(1.5, 5.0); // off camera depth (-2.0)
         assert_eq!(cam.project(pos), inner.project(pos));
         assert_eq!(cam.depth_key(pos), inner.depth_key(pos));
     }
 
     /// `BattleCamera::elevation_deg()` returns the wrapped camera's own
-    /// `elevation_deg` for `Sideline`/`OverShoulder`, and the permanent
-    /// literal `90.0` for `TopDown` (`OrthographicCamera` carries no
-    /// `elevation_deg` field of its own) — `depth_scale_factor`/
-    /// `shadow_buffers` read through this every frame.
+    /// `pitch_deg` for `Sideline`/`OverShoulder`, and the permanent literal
+    /// `90.0` for `TopDown` (`OrthographicCamera` carries no elevation field
+    /// of its own) — `depth_scale_factor`/`shadow_buffers` read through this
+    /// every frame.
     #[test]
     fn elevation_deg_returns_wrapped_camera_elevation_for_each_variant() {
-        let side = perspective(DepthAxis::Col, 11.0, -4.0, 4.0);
+        let side = perspective(-4.0, 3.5, 11.0, 4.0);
         let top = OrthographicCamera { scale_dots: 4.0 };
-        let over = perspective(DepthAxis::Row, 33.0, -3.0, 4.0);
-        assert_eq!(BattleCamera { camera: AnyCamera::Perspective(side) }.elevation_deg(), 11.0);
-        assert_eq!(BattleCamera { camera: AnyCamera::Orthographic(top) }.elevation_deg(), 90.0);
-        assert_eq!(BattleCamera { camera: AnyCamera::Perspective(over) }.elevation_deg(), 33.0);
+        let over = perspective(3.5, -3.0, 33.0, 4.0);
+        assert_eq!(
+            BattleCamera { camera: AnyCamera::Perspective(side), fit: FitMode::ViewportFit }.elevation_deg(),
+            11.0
+        );
+        assert_eq!(
+            BattleCamera { camera: AnyCamera::Orthographic(top), fit: FitMode::ExactFit }.elevation_deg(),
+            90.0
+        );
+        assert_eq!(
+            BattleCamera { camera: AnyCamera::Perspective(over), fit: FitMode::ViewportFit }.elevation_deg(),
+            33.0
+        );
     }
 }
 
@@ -251,12 +277,7 @@ mod camera_migration_tests {
     const FORWARD_DISTANCE_MARGIN: f32 = 1.0;
 
     /// PUBLIC_SURFACE #2: `forward_distance` must be comfortably positive
-    /// for every occupied board cell under `sideline_preset()`. Guaranteed
-    /// once `camera_depth` sits strictly outside the occupied board range on
-    /// the correct side — currently FAILS: `sideline_preset()`'s
-    /// `camera_depth` is still the interim placeholder (see its doc note),
-    /// clamping `forward_distance` to near the `NEAR_EPS` floor for cells
-    /// near the (still mid-board) camera.
+    /// for every occupied board cell under `sideline_preset()`.
     #[test]
     fn sideline_forward_distance_positive_all_cells() {
         let AnyCamera::Perspective(cam) = BattleCamera::sideline_preset().camera else {
@@ -275,9 +296,7 @@ mod camera_migration_tests {
         }
     }
 
-    /// PUBLIC_SURFACE #2, `over_shoulder_preset()` — see
-    /// `sideline_forward_distance_positive_all_cells`'s doc note (same
-    /// interim-placeholder reasoning applies).
+    /// PUBLIC_SURFACE #2, `over_shoulder_preset()` counterpart.
     #[test]
     fn over_shoulder_forward_distance_positive_all_cells() {
         let AnyCamera::Perspective(cam) = BattleCamera::over_shoulder_preset().camera else {
@@ -296,23 +315,20 @@ mod camera_migration_tests {
         }
     }
 
-    /// PUBLIC_SURFACE #3: each non-Top-Down preset's `camera_depth` sits
-    /// strictly outside its occupied board range on the correct (negative)
-    /// side. Currently FAILS: both presets still carry the interim
-    /// placeholder `camera_depth` (mid-board / edge-of-board — see
-    /// `sideline_preset`/`over_shoulder_preset`'s doc notes), which is
-    /// exactly the "camera in the middle of the pitch" bug this task's real
-    /// tuning fixes.
+    /// PUBLIC_SURFACE #3: each non-Top-Down preset sits strictly outside its
+    /// occupied board range on the correct side, expressed on x/y (b2-t1;
+    /// the deleted `camera_depth` field's replacement) — Sideline depth is
+    /// `x`, Over-shoulder depth is `y`.
     #[test]
     fn non_top_down_camera_depth_outside_board_range() {
         let AnyCamera::Perspective(side) = BattleCamera::sideline_preset().camera else {
             unreachable!()
         };
         assert!(
-            side.camera_depth < 0.0 || side.camera_depth > BOARD_COLS as f32,
-            "sideline_preset's camera_depth ({}) must sit strictly outside [0, {}] (the occupied \
-             board range along its depth axis, Col)",
-            side.camera_depth,
+            side.x < 0.0 || side.x > BOARD_COLS as f32,
+            "sideline_preset's x ({}) must sit strictly outside [0, {}] (the occupied \
+             board range along its depth axis)",
+            side.x,
             BOARD_COLS
         );
 
@@ -320,10 +336,10 @@ mod camera_migration_tests {
             unreachable!()
         };
         assert!(
-            over.camera_depth < 0.0 || over.camera_depth > BOARD_ROWS as f32,
-            "over_shoulder_preset's camera_depth ({}) must sit strictly outside [0, {}] (the \
-             occupied board range along its depth axis, Row)",
-            over.camera_depth,
+            over.y < 0.0 || over.y > BOARD_ROWS as f32,
+            "over_shoulder_preset's y ({}) must sit strictly outside [0, {}] (the \
+             occupied board range along its depth axis)",
+            over.y,
             BOARD_ROWS
         );
     }
@@ -331,20 +347,22 @@ mod camera_migration_tests {
     /// The two candidate depth-axis coordinates at the board's extremes
     /// (the first/last row-or-column's cell center), returned as `(nearer,
     /// farther)` ordered by their OWN `forward_distance` at the camera's
-    /// `spread_center` (not by raw distance from `camera_depth`) — a raw-
-    /// distance heuristic is fooled by the `NEAR_EPS` clamp: a candidate
-    /// technically "closer" to `camera_depth` by subtraction can actually be
-    /// BEHIND the camera plane (negative raw forward, clamped near zero),
+    /// spread coordinate (not by raw distance from the camera's depth
+    /// coordinate) — a raw-distance heuristic is fooled by the `NEAR_EPS`
+    /// clamp: a candidate technically "closer" by subtraction can actually
+    /// be BEHIND the camera plane (negative raw forward, clamped near zero),
     /// which blows its projected spread up numerically without that being
     /// genuine convergence. Ordering by the real (clamped) `forward_distance`
-    /// avoids that false positive.
-    fn near_far_depths(cam: &PerspectiveCamera, depth_axis: DepthAxis, board_extent: u16) -> (f32, f32) {
+    /// avoids that false positive. `depth_is_x` selects which world axis is
+    /// this camera's depth axis (Sideline: x: yaw 90°; OverShoulder: y: yaw 180°).
+    fn near_far_depths(cam: &PerspectiveCamera, depth_is_x: bool, board_extent: u16) -> (f32, f32) {
         let low = 0.5;
         let high = board_extent as f32 - 0.5;
         let forward_at = |d: f32| {
-            let pos = match depth_axis {
-                DepthAxis::Col => WorldPos::new(d, cam.spread_center),
-                DepthAxis::Row => WorldPos::new(cam.spread_center, d),
+            let pos = if depth_is_x {
+                WorldPos::new(d, spread_coord(cam, depth_is_x))
+            } else {
+                WorldPos::new(spread_coord(cam, depth_is_x), d)
             };
             cam.forward_distance(pos)
         };
@@ -355,22 +373,27 @@ mod camera_migration_tests {
         }
     }
 
+    /// The camera's own aim-line coordinate on the non-depth (spread) axis —
+    /// Sideline's is `y`, OverShoulder's is `x` (the deleted `spread_center`
+    /// field's replacement).
+    fn spread_coord(cam: &PerspectiveCamera, depth_is_x: bool) -> f32 {
+        if depth_is_x { cam.y } else { cam.x }
+    }
+
     /// Projects `cam` at a fixed depth-axis coordinate `depth` across every
     /// spread-axis cell center and returns the range (`max - min`) of the
     /// resulting screen_x — a proxy for "how wide this depth slice reads on
     /// screen," used to prove/disprove real perspective convergence without
     /// needing fit-to-viewport framing (b4-t1, not yet landed).
-    fn column_spread(cam: &BattleCamera, depth_axis: DepthAxis, depth: f32) -> i32 {
-        let spread_extent = match depth_axis {
-            DepthAxis::Col => BOARD_ROWS,
-            DepthAxis::Row => BOARD_COLS,
-        };
+    fn column_spread(cam: &BattleCamera, depth_is_x: bool, depth: f32) -> i32 {
+        let spread_extent = if depth_is_x { BOARD_ROWS } else { BOARD_COLS };
         let xs: Vec<i32> = (0..spread_extent)
             .map(|i| {
                 let spread = i as f32 + 0.5;
-                let pos = match depth_axis {
-                    DepthAxis::Col => WorldPos::new(depth, spread),
-                    DepthAxis::Row => WorldPos::new(spread, depth),
+                let pos = if depth_is_x {
+                    WorldPos::new(depth, spread)
+                } else {
+                    WorldPos::new(spread, depth)
                 };
                 cam.project(pos).0
             })
@@ -382,32 +405,27 @@ mod camera_migration_tests {
     /// oblique-taper-camera-based test this replaces): a real perspective camera
     /// must converge — the depth-axis coordinate nearer the camera projects
     /// a WIDER spread of screen-x across the spread axis than the farther
-    /// one. Computable without fit-to-viewport framing. Gated on both
-    /// candidate depths clearing `FORWARD_DISTANCE_MARGIN` first — under the
-    /// interim placeholder `camera_depth` this gate itself fails (one board
-    /// extreme sits behind the still mid-board camera plane), which is the
-    /// honest reason this can't yet be evaluated, rather than silently
-    /// passing on a `NEAR_EPS`-clamp numerical artifact.
+    /// one. Computable without fit-to-viewport framing.
     #[test]
     fn sideline_near_depth_spread_exceeds_far_depth() {
         let cam = BattleCamera::sideline_preset().with_scale_dots(8.0);
         let AnyCamera::Perspective(inner) = cam.camera else {
             unreachable!()
         };
-        let (near_depth, far_depth) = near_far_depths(&inner, DepthAxis::Col, BOARD_COLS);
-        let near_forward = inner.forward_distance(WorldPos::new(near_depth, inner.spread_center));
-        let far_forward = inner.forward_distance(WorldPos::new(far_depth, inner.spread_center));
+        let (near_depth, far_depth) = near_far_depths(&inner, true, BOARD_COLS);
+        let near_forward = inner.forward_distance(WorldPos::new(near_depth, inner.y));
+        let far_forward = inner.forward_distance(WorldPos::new(far_depth, inner.y));
         assert!(
             near_forward > FORWARD_DISTANCE_MARGIN && far_forward > FORWARD_DISTANCE_MARGIN,
             "both candidate depths must be comfortably in front of the camera \
              (forward_distance > {FORWARD_DISTANCE_MARGIN}) before a convergence-direction \
              comparison is meaningful; got near_forward={near_forward} far_forward={far_forward} \
-             (camera_depth={})",
-            inner.camera_depth
+             (x={})",
+            inner.x
         );
 
-        let near_spread = column_spread(&cam, DepthAxis::Col, near_depth);
-        let far_spread = column_spread(&cam, DepthAxis::Col, far_depth);
+        let near_spread = column_spread(&cam, true, near_depth);
+        let far_spread = column_spread(&cam, true, far_depth);
         assert!(
             near_spread > far_spread,
             "a depth-axis coordinate nearer the camera ({near_depth}) must project a WIDER \
@@ -417,27 +435,27 @@ mod camera_migration_tests {
     }
 
     /// `over_shoulder_preset()` counterpart of
-    /// `sideline_near_depth_spread_exceeds_far_depth` (depth axis Row).
+    /// `sideline_near_depth_spread_exceeds_far_depth` (depth axis y).
     #[test]
     fn over_shoulder_near_depth_spread_exceeds_far_depth() {
         let cam = BattleCamera::over_shoulder_preset().with_scale_dots(8.0);
         let AnyCamera::Perspective(inner) = cam.camera else {
             unreachable!()
         };
-        let (near_depth, far_depth) = near_far_depths(&inner, DepthAxis::Row, BOARD_ROWS);
-        let near_forward = inner.forward_distance(WorldPos::new(inner.spread_center, near_depth));
-        let far_forward = inner.forward_distance(WorldPos::new(inner.spread_center, far_depth));
+        let (near_depth, far_depth) = near_far_depths(&inner, false, BOARD_ROWS);
+        let near_forward = inner.forward_distance(WorldPos::new(inner.x, near_depth));
+        let far_forward = inner.forward_distance(WorldPos::new(inner.x, far_depth));
         assert!(
             near_forward > FORWARD_DISTANCE_MARGIN && far_forward > FORWARD_DISTANCE_MARGIN,
             "both candidate depths must be comfortably in front of the camera \
              (forward_distance > {FORWARD_DISTANCE_MARGIN}) before a convergence-direction \
              comparison is meaningful; got near_forward={near_forward} far_forward={far_forward} \
-             (camera_depth={})",
-            inner.camera_depth
+             (y={})",
+            inner.y
         );
 
-        let near_spread = column_spread(&cam, DepthAxis::Row, near_depth);
-        let far_spread = column_spread(&cam, DepthAxis::Row, far_depth);
+        let near_spread = column_spread(&cam, false, near_depth);
+        let far_spread = column_spread(&cam, false, far_depth);
         assert!(
             near_spread > far_spread,
             "a depth-axis coordinate nearer the camera ({near_depth}) must project a WIDER \
@@ -594,8 +612,9 @@ mod handle_input_camera_tests {
     #[test]
     fn free_roam_preset_has_pinned_starting_transform() {
         let cam = BattleCamera::free_roam_preset();
-        let AnyCamera::FreeRoam(fr) = cam.camera else {
-            panic!("free_roam_preset() must wrap AnyCamera::FreeRoam, got {:?}", cam.camera);
+        assert_eq!(cam.fit, FitMode::Manual, "free_roam_preset() must set fit: FitMode::Manual");
+        let AnyCamera::Perspective(fr) = cam.camera else {
+            panic!("free_roam_preset() must wrap AnyCamera::Perspective, got {:?}", cam.camera);
         };
         assert_eq!(fr.x, SIDELINE_CAMERA_DEPTH);
         assert_eq!(fr.y, BOARD_CENTER_COL);
@@ -635,16 +654,17 @@ mod handle_input_camera_tests {
         }
     }
 
-    /// Re-pressing '4' while already in FreeRoam must NOT clobber a
-    /// flown-to position/orientation back to the starting preset.
+    /// Re-pressing '4' while already in FreeRoam (`fit: FitMode::Manual`)
+    /// must NOT clobber a flown-to position/orientation back to the
+    /// starting preset.
     #[test]
     fn key_4_from_nudged_free_roam_is_noop() {
         let mut scene = BattleViewer {
             camera_mode: BattleCamera::free_roam_preset(),
             ..Default::default()
         };
-        let AnyCamera::FreeRoam(ref mut fr) = scene.camera_mode.camera else {
-            panic!("expected AnyCamera::FreeRoam");
+        let AnyCamera::Perspective(ref mut fr) = scene.camera_mode.camera else {
+            panic!("expected AnyCamera::Perspective");
         };
         fr.nudge(1.0, 0.0, 15.0, 0.0, 0.5);
         let nudged = scene.camera_mode;
@@ -654,25 +674,24 @@ mod handle_input_camera_tests {
         assert!(transition.is_none(), "'4' must never request a scene transition");
         assert_eq!(
             scene.camera_mode, nudged,
-            "'4' from an already-FreeRoam session must not reset the flown-to transform"
+            "'4' from an already-Manual-fit session must not reset the flown-to transform"
         );
     }
 
-    /// spec 42 Decision 5 movement keys (b6-t2, revised): from
-    /// `AnyCamera::FreeRoam`, each of the 12 keys applies exactly its pinned
-    /// delta to the wrapped `FreeRoamCamera` and never requests a
+    /// spec 42 Decision 5 movement keys (b6-t2, revised): under
+    /// `fit: FitMode::Manual`, each of the 12 keys applies exactly its
+    /// pinned delta to the wrapped `PerspectiveCamera` and never requests a
     /// transition. Expected values are computed by applying the same
     /// `nudge`/`scale_dots` op the prod code must use, on a copy of the
     /// starting camera — this proves the key is wired to the exact pinned
     /// args, not just "something changed". Move/height keys are the
     /// lowercase letter (case-insensitivity itself is covered separately by
     /// `free_roam_letter_keys_are_case_insensitive`); yaw/pitch are the
-    /// arrow keys, never `q`/`e`/`r`/`f` (see `nudge_free_roam`'s doc
-    /// comment for why `q` in particular can never be bound to anything
-    /// here).
+    /// arrow keys, never `q`/`e`/`r`/`f` (see `nudge_camera`'s doc comment
+    /// for why `q` in particular can never be bound to anything here).
     #[test]
     fn free_roam_movement_keys_apply_exact_delta() {
-        type NudgeFn = fn(&mut FreeRoamCamera);
+        type NudgeFn = fn(&mut PerspectiveCamera);
         let cases: [(KeyCode, NudgeFn); 12] = [
             (KeyCode::Char('w'), |c| c.nudge(0.5, 0.0, 0.0, 0.0, 0.0)),
             (KeyCode::Char('s'), |c| c.nudge(-0.5, 0.0, 0.0, 0.0, 0.0)),
@@ -693,8 +712,8 @@ mod handle_input_camera_tests {
                 camera_mode: BattleCamera::free_roam_preset(),
                 ..Default::default()
             };
-            let AnyCamera::FreeRoam(start) = scene.camera_mode.camera else {
-                panic!("expected AnyCamera::FreeRoam");
+            let AnyCamera::Perspective(start) = scene.camera_mode.camera else {
+                panic!("expected AnyCamera::Perspective");
             };
             let mut expected = start;
             apply(&mut expected);
@@ -704,8 +723,8 @@ mod handle_input_camera_tests {
             assert!(transition.is_none(), "{key:?} must never request a scene transition");
             assert_eq!(
                 scene.camera_mode,
-                BattleCamera { camera: AnyCamera::FreeRoam(expected) },
-                "{key:?} from FreeRoam must apply its pinned delta exactly"
+                BattleCamera { camera: AnyCamera::Perspective(expected), fit: FitMode::Manual },
+                "{key:?} from Manual-fit must apply its pinned delta exactly"
             );
         }
     }
@@ -785,7 +804,7 @@ mod handle_input_camera_tests {
                 assert!(transition.is_none(), "{key:?} must never request a scene transition");
                 assert_eq!(
                     scene.camera_mode, start,
-                    "{key:?} from {:?} (non-FreeRoam) must be a complete no-op",
+                    "{key:?} from {:?} (non-Manual-fit) must be a complete no-op",
                     start
                 );
             }
@@ -853,4 +872,3 @@ mod handle_input_camera_tests {
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests: BattleViewer sources 8 distinct bundled creatures (b5-t1)
 // ─────────────────────────────────────────────────────────────────────────────
-

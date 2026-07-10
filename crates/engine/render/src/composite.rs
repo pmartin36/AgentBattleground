@@ -156,7 +156,7 @@ pub fn composite_scene<C: Camera>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::camera::SideView;
+    use crate::camera::OrthographicCamera;
     use crate::dots::{dots_to_grid, Dot, DotBuffer};
     use crate::grid::Cell;
     use engine_core::color::Rgba;
@@ -386,7 +386,7 @@ mod tests {
 
     /// Test-only camera that decouples `project` (fixed) from `depth_key`
     /// (`pos.x`) — needed to place two draws at the *same* screen position
-    /// with *different* depths, which `SideView` cannot do (it couples both
+    /// with *different* depths, which `OrthographicCamera` cannot do (it couples both
     /// to `pos.y`).
     struct FixedProjectCamera {
         project: (i32, i32),
@@ -566,7 +566,7 @@ mod tests {
         let sprite =
             AnimatedSprite::new(vec![solid_image(4, 8, 200, 200, 200, 255)], Duration::from_millis(100));
         let transform = Transform::default();
-        let camera = SideView::new(1.0);
+        let camera = OrthographicCamera::new(1.0);
 
         let tint_a = Rgba::rgb(255, 232, 176);
         let expected_a = Rgba::rgb(mul(200, 255), mul(200, 232), mul(200, 176));

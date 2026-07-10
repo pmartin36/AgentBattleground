@@ -69,8 +69,8 @@ impl BoardGeometry {
 /// always rebuilt from the area-derived scale (see `BattleCamera::with_scale_dots`),
 /// not taken from whatever scale the caller's `mode` happened to carry in.
 pub fn board_geometry(area: Rect, mode: BattleCamera, tuning: BattleViewerTuning) -> BoardGeometry {
-    match mode.camera {
-        AnyCamera::Orthographic(_) => {
+    match mode.fit {
+        FitMode::ExactFit => {
             // `BENCH_COL == BOARD_COLS`: bench sits one column past the
             // drawn grid's own 7 columns (deliberately outside it — see
             // `BENCH_COL`'s doc comment), so the allocated board_rect needs
@@ -100,8 +100,8 @@ pub fn board_geometry(area: Rect, mode: BattleCamera, tuning: BattleViewerTuning
                 screen_offset: (0, 0),
             }
         }
-        AnyCamera::Perspective(_) => fit_perspective_geometry(area, mode, tuning),
-        AnyCamera::FreeRoam(_) => {
+        FitMode::ViewportFit => fit_perspective_geometry(area, mode, tuning),
+        FitMode::Manual => {
             let board_rect = Rect::new(area.left(), area.top(), area.width.max(1), area.height.max(1));
             let cell_width_cols = (area.width / BOARD_COLS).max(1);
             let cell_height_rows = (area.height / BOARD_ROWS).max(1);
@@ -359,33 +359,34 @@ mod board_geometry_tests {
         );
     }
 
-    /// OverShoulder mode: the caller-supplied `camera_depth` is preserved
-    /// (not reset/discarded) and scale is rebuilt to some positive
+    /// OverShoulder mode: the caller-supplied depth coordinate (`y`) is
+    /// preserved (not reset/discarded) and scale is rebuilt to some positive
     /// area-derived value. (b4-t1: dropped the pinned `scale_dots == 36.0`
     /// expectation — perspective presets are now fit-to-viewport sized, so
     /// the exact scale is no longer the flat `cell_height_rows*4` value;
-    /// only positivity is asserted, per the no-pinned-constant guardrail.)
+    /// only positivity is asserted, per the no-pinned-constant guardrail.
+    /// Depth/facing are expressed as `y`/`yaw_deg`.)
     #[test]
     fn over_shoulder_mode_rebuilds_scale_and_preserves_camera_depth() {
         let area = Rect::new(0, 0, 128, 64);
         let mode = BattleCamera {
             camera: AnyCamera::Perspective(PerspectiveCamera {
-                scale_dots: 0.0,
-                depth_axis: DepthAxis::Row,
-                elevation_deg: 30.0,
-                camera_depth: 6.0,
-                camera_height: 4.0,
-                spread_center: BOARD_CENTER_COL,
+                x: BOARD_CENTER_COL,
+                y: 6.0,
+                height: 4.0,
+                yaw_deg: 180.0,
+                pitch_deg: 30.0,
                 fov_deg: 55.0,
-                facing_sign: -1.0,
+                scale_dots: 0.0,
             }),
+            fit: FitMode::ViewportFit,
         };
         let g = board_geometry(area, mode, tuning());
 
         let AnyCamera::Perspective(inner) = g.camera.camera else {
             panic!("expected Perspective variant");
         };
-        assert_eq!(inner.camera_depth, 6.0, "camera_depth must be preserved, not reset");
+        assert_eq!(inner.y, 6.0, "the depth coordinate (y) must be preserved, not reset");
         assert!(
             inner.scale_dots > 0.0,
             "scale must be rebuilt to some positive area-derived value, got {}",
