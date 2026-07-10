@@ -15,7 +15,7 @@ pub fn construct(id: SceneId) -> Box<dyn Scene> {
         SceneId::BattleViewer => Box::new(BattleViewer::default()),
         SceneId::RosterManager => Box::new(RosterManager::new()),
         SceneId::Leaderboard => Box::new(Leaderboard),
-        SceneId::PostBattle => Box::new(PostBattle),
+        SceneId::PostBattle => Box::new(PostBattle::new()),
         other => unimplemented!("scene {:?} is not implemented in M1", other),
     }
 }
