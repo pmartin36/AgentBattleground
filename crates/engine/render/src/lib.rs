@@ -23,15 +23,18 @@ pub mod screen_layout;
 pub mod shapes;
 pub mod transform;
 pub mod tween;
+pub mod ui_primitives;
 pub use anim::AnimatedSprite;
 pub use button::{Button, ButtonCore, ButtonState, FrameButton};
 pub use convert::convert;
 pub use debug_grid::{draw_debug_grid, GRID_SPACING_COLS, GRID_SPACING_ROWS};
 pub use dot_diff::{decode_braille_cell, diff_dots, DotDiff, DotMismatch};
 pub use flex::{flex, Align, Basis, Direction, DotRect, DotRectTween, FlexChild, FlexStyle, Justify};
+pub use dots::draw_dots;
 pub use grid::{draw_grid, Cell, Grid};
 pub use screen_layout::{anchor, anchor_with_margin, stack, Anchor, RectTween, StackAxis};
 pub use shapes::{rasterize_shape, ShapeKind};
+pub use ui_primitives::{rect, rounded_rect};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;

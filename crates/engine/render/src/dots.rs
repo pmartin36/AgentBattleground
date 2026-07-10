@@ -5,9 +5,11 @@
 
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use engine_core::color::Rgba;
 
-use crate::grid::Grid;
+use crate::grid::{draw_grid, Grid};
 
 /// One sub-cell dot.
 ///
@@ -314,6 +316,17 @@ pub fn dots_to_grid_tinted(shape: &DotBuffer, color: &DotBuffer) -> Grid {
 /// Identity case of [`dots_to_grid_tinted`]: `dots_to_grid(buf) == dots_to_grid_tinted(buf, buf)`.
 pub fn dots_to_grid(buf: &DotBuffer) -> Grid {
     dots_to_grid_tinted(buf, buf)
+}
+
+/// Convenience wrapper for the common "I have a `DotBuffer`, just draw it"
+/// call site: packs `dots` into a braille [`Grid`] and blits it centered in
+/// `area`. Exactly `draw_grid(buf, area, &dots_to_grid(dots))`, fused into one
+/// call so callers don't repeat the conversion dance.
+///
+/// Prefer [`draw_grid`] directly when you already hold a `Grid` (e.g. a cached
+/// or composited one) — routing it through here would re-convert it every call.
+pub fn draw_dots(buf: &mut Buffer, area: Rect, dots: &DotBuffer) {
+    draw_grid(buf, area, &dots_to_grid(dots));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -938,6 +951,35 @@ mod tests {
             out.get(1, 0),
             Dot::Lit(Rgba::rgb(200, 100, 40)),
             "Lit white must tint to the target color"
+        );
+    }
+
+    /// `draw_dots` is the fused form of `draw_grid(.., &dots_to_grid(..))`, so
+    /// blitting the same buffer both ways must yield a byte-identical result.
+    #[test]
+    fn draw_dots_equals_draw_grid_of_dots_to_grid() {
+        use crate::grid::draw_grid;
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        // A fully-lit 2×4 block → one full braille glyph.
+        let mut dots = DotBuffer::new(2, 4);
+        for y in 0..4 {
+            for x in 0..2 {
+                dots.set(x, y, Dot::Lit(Rgba::rgb(200, 100, 50)));
+            }
+        }
+        let area = Rect::new(0, 0, 1, 1);
+
+        let mut via_helper = Buffer::empty(area);
+        draw_dots(&mut via_helper, area, &dots);
+
+        let mut via_manual = Buffer::empty(area);
+        draw_grid(&mut via_manual, area, &dots_to_grid(&dots));
+
+        assert_eq!(
+            via_helper, via_manual,
+            "draw_dots must equal draw_grid(dots_to_grid(..)) byte-for-byte"
         );
     }
 }
