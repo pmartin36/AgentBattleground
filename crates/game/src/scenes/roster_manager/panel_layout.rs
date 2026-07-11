@@ -31,14 +31,10 @@ impl RosterManager {
     /// b1-t3: gap between the ability grid band and the instructions header
     /// band.
     pub(super) const ABILITIES_INSTRUCTIONS_GAP_CELLS: i32 = 2;
-    /// b1-t3: pinned Edit button width (matches `chrome.rs`'s `HOME_W`), so
-    /// b3-t1's button reuses the identical home/arrow geometry idiom on the
-    /// returned `edit_button` rect.
-    pub(super) const EDIT_BUTTON_W_CELLS: i32 = 6;
-    /// Small left margin (cells) indenting the ability GRID off the interior's
-    /// left edge. Only the ability names move — the "Abilities" header stays
-    /// flush to the interior left.
-    pub(super) const ABILITY_GRID_LEFT_MARGIN_CELLS: i32 = 2;
+    /// b1-t3: pinned Edit button width. 7 cells fits "Edit" (4) centered with
+    /// 1 cell of left padding and 2 of right padding (integer-centered), giving
+    /// the extra right breathing room.
+    pub(super) const EDIT_BUTTON_W_CELLS: i32 = 7;
     /// Edit-button height (cells). The button is a rounded-rect OUTLINE around
     /// its "Edit" label; braille border dots and the terminal label can't
     /// share a cell, so it needs a top-border row, a text row, and a
@@ -133,8 +129,7 @@ impl RosterManager {
             engine_render::DotRect { h: abilities_header_band.h.min(4), ..abilities_header_band };
 
         // Ability grid: 2 columns x 2 rows, reading order [TL, TR, BL, BR].
-        // Indent the grid off the interior left edge (header stays flush).
-        let grid_band = grid_band.inset(Self::ABILITY_GRID_LEFT_MARGIN_CELLS * 2, 0, 0, 0);
+        // Names are centered within each column (no left indent).
         let grid_cols = engine_render::flex(
             grid_band,
             engine_render::FlexStyle {

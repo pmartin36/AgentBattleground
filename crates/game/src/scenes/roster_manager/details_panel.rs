@@ -111,17 +111,21 @@ impl RosterManager {
         crate::scenes::post_battle::columns::blit_dots(buf, target, &local);
     }
 
-    /// Fixed dot-width of the b2-t2 stamina capsule bar (spec Constants).
-    pub(super) const STAMINA_BAR_W_DOTS: i32 = 24;
-    /// Dot gap between the b2-t2 stamina label slot and its bar slot.
+    /// Dot gap between the stamina label slot and its bar slot.
     pub(super) const STAMINA_LABEL_BAR_GAP_DOTS: i32 = 2;
+    /// 1-cell (2-dot) left/right margin the stamina row keeps off the panel
+    /// interior edges.
+    pub(super) const STAMINA_EDGE_MARGIN_DOTS: i32 = 2;
 
-    /// Paints, into `region`, a centered (`Justify::Center`) "Stamina" label
-    /// plus a `bars::draw_bar` capsule for `creatures[index]` (b2-t2). Label
-    /// text is `"Stamina"` when rested, else `Self::stamina_text(stamina)`
-    /// (the injured "Exhausted: {N} days remain" form). Fill fraction is
-    /// `percent/100`; fill color is `stamina_fill_color(percent)`. See
-    /// research.md for the flex composition.
+    /// Paints, into `region`, a left `"Stamina"` label plus the stamina bar for
+    /// `creatures[index]`. Layout on one line: `[1-cell margin]` + label +
+    /// bar-area (grows to fill the rest) `[1-cell margin]`. The bar TRACK length
+    /// scales with the creature's `stamina().max()` —
+    /// `clamp(max / STAMINA_MAX_CAP, 0.25, 1.0)` of the bar area, so a full-cap
+    /// creature spans the whole line and a low-max one is shorter but never
+    /// below 25%. The FILL inside the track is `percent/100` (= `current/max`)
+    /// and can be anywhere from 0 to full (the 25% floor is on the track bounds,
+    /// not the fill). Injured shows `Self::stamina_text` in place of the label.
     pub(super) fn render_stamina_row(
         &self,
         buf: &mut ratatui::buffer::Buffer,
@@ -130,6 +134,7 @@ impl RosterManager {
     ) {
         let stamina = self.creatures[index].stamina();
         let percent = stamina.percent();
+        let max = stamina.max();
         let label = if stamina.is_injured() {
             Self::stamina_text(stamina)
         } else {
@@ -138,24 +143,27 @@ impl RosterManager {
         let fraction = percent as f32 / 100.0;
         let fill = crate::scenes::post_battle::columns::stamina_fill_color(percent);
 
-        let label_w = ((label.chars().count() as i32) * 2)
-            .min((region.w - Self::STAMINA_BAR_W_DOTS - Self::STAMINA_LABEL_BAR_GAP_DOTS).max(0));
+        // 1-cell L/R margin, then [label | bar-area]; the bar area grows to
+        // absorb all remaining width of the line.
+        let inner = region.inset(
+            Self::STAMINA_EDGE_MARGIN_DOTS,
+            Self::STAMINA_EDGE_MARGIN_DOTS,
+            0,
+            0,
+        );
+        let label_w = ((label.chars().count() as i32) * 2).min(inner.w.max(0));
 
         let style = engine_render::FlexStyle {
             direction: engine_render::Direction::Row,
-            justify_content: engine_render::Justify::Center,
+            justify_content: engine_render::Justify::Start,
             align_items: engine_render::Align::Stretch,
             gap: Self::STAMINA_LABEL_BAR_GAP_DOTS,
         };
         let children = [
             engine_render::FlexChild { basis: engine_render::Basis::Fixed(label_w), grow: 0.0, shrink: 0.0 },
-            engine_render::FlexChild {
-                basis: engine_render::Basis::Fixed(Self::STAMINA_BAR_W_DOTS),
-                grow: 0.0,
-                shrink: 0.0,
-            },
+            engine_render::FlexChild { basis: engine_render::Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
         ];
-        let parts = engine_render::flex(region, style, &children);
+        let parts = engine_render::flex(inner, style, &children);
         if parts.len() < 2 {
             return;
         }
@@ -164,25 +172,26 @@ impl RosterManager {
             buf,
             parts[0].to_cell_rect(),
             &label,
-            engine_render::TextAlign::Center,
+            engine_render::TextAlign::Left,
             ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(
                 Self::STAMINA_COLOR.r,
                 Self::STAMINA_COLOR.g,
                 Self::STAMINA_COLOR.b,
             )),
         );
-        // Floor the bar to the same cell grid the "Stamina" label uses
-        // (`label` draws at `to_cell_rect()`), so the label and bar share one
-        // plane. Otherwise the panel interior's sub-cell y offset drops the
-        // bar ~2 dots below the label, so it reads as sitting on a lower row.
+
+        // Track scales with max stamina, left-aligned in the bar area (all bars
+        // start at the same x). Floor to the cell grid so the bar shares the
+        // label's plane (the panel interior carries a sub-cell y offset).
         let bar_cell = parts[1].to_cell_rect();
-        let bar_rect = engine_render::DotRect {
-            x: bar_cell.x as i32 * 2,
-            y: bar_cell.y as i32 * 4,
-            w: bar_cell.width as i32 * 2,
-            h: bar_cell.height as i32 * 4,
-        };
-        crate::scenes::bars::draw_bar(buf, bar_rect, fraction, fill);
+        let bar_x = bar_cell.x as i32 * 2;
+        let bar_y = bar_cell.y as i32 * 4;
+        let bar_h = bar_cell.height as i32 * 4;
+        let bar_full_w = bar_cell.width as i32 * 2;
+        let track_frac = (max as f32 / crate::stamina::STAMINA_MAX_CAP as f32).clamp(0.25, 1.0);
+        let track_w = ((bar_full_w as f32) * track_frac).round() as i32;
+        let track_rect = engine_render::DotRect { x: bar_x, y: bar_y, w: track_w, h: bar_h };
+        crate::scenes::bars::draw_bar(buf, track_rect, fraction, fill);
     }
 
     /// Draws a left-aligned white section header label at `header`'s cell
@@ -234,7 +243,7 @@ impl RosterManager {
                 buf,
                 cell.to_cell_rect(),
                 ability.description(),
-                engine_render::TextAlign::Left,
+                engine_render::TextAlign::Center,
                 ratatui::style::Style::default()
                     .fg(ratatui::style::Color::Rgb(
                         Self::ABILITY_COLOR.r,
@@ -290,15 +299,26 @@ impl RosterManager {
             engine_render::ButtonState::Idle => Self::EDIT_BUTTON_BORDER_IDLE,
             _ => Self::EDIT_BUTTON_BORDER_ACTIVE,
         };
+        // Outline that HUGS the label: a 6-dot-tall rounded box centered in the
+        // 3-cell region, so the top edge lands on the bottom dot-rows of the
+        // cell above "Edit" and the bottom edge on the top dot-rows of the cell
+        // below it (same hug as `draw_header_underline`) — not at the region's
+        // far top/bottom rows, which read as too tall.
+        let w_dots = cr.width as i32 * 2;
+        let box_h = 6;
         let dots = engine_render::ui_primitives::rounded_rect(
-            cr.width as usize * 2,
-            cr.height as usize * 4,
+            w_dots as usize,
+            box_h as usize,
             1,
             1,
             border,
             engine_render::dots::Dot::Transparent,
         );
-        engine_render::draw_dots(buf, cr, &dots);
+        crate::scenes::post_battle::columns::blit_dots(
+            buf,
+            engine_render::DotRect { x: cr.x as i32 * 2, y: cr.y as i32 * 4 + 3, w: w_dots, h: box_h },
+            &dots,
+        );
         engine_render::label(
             buf,
             cr,

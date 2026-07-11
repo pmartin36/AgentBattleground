@@ -25,16 +25,22 @@ use ratatui::style::{Color, Style};
 /// its text width, leaving no un-overwritten margin for the tinted capsule
 /// to show through.
 pub(super) const TOOLTIP_WIDTH_CELLS: u16 = 36;
-/// Interior `.inset` padding applied to the card's content area (spec:26).
+/// Interior vertical (top/bottom) `.inset` padding applied to the card's
+/// content area (spec:26).
 pub(super) const INTERIOR_PADDING_CELLS: u16 = 1;
-/// Corner radius (dots) for the pill capsule. Chamfer 1 (the house default —
-/// see the chamfer-1 style memory): lightly-rounded corners that keep the
-/// capsule's top and bottom edge rows filled, so it reads as a solid pill
-/// rather than a pinched sliver. A deeper cut on a 1-cell-tall pill eats the
-/// top/bottom rows away entirely.
-pub(super) const PILL_CORNER_RADIUS_DOTS: usize = 1;
-/// Pill row height — one text line.
-pub(super) const PILL_HEIGHT_CELLS: u16 = 1;
+/// Interior horizontal (left/right) padding — 2 cells so there's a blank
+/// margin cell between the card frame and every content row (1 cell clears the
+/// frame, the second is the visible margin).
+pub(super) const INTERIOR_PADDING_H_CELLS: u16 = 2;
+/// Corner radius (dots) for the pill capsule ends — 2 for visibly rounded
+/// caps that close onto the over/underline (the fixed chamfer now lights the
+/// diagonal connector dot, so radius 2 reads clean). Explicit deviation from
+/// the chamfer-1 house default, per the pill design.
+pub(super) const PILL_CORNER_RADIUS_DOTS: usize = 2;
+/// Pill height — 3 cells: an overline row, the text row, and an underline
+/// row. Braille border dots can't share a cell with the terminal-text label,
+/// so the dot lines above/below the text live in the adjacent cells.
+pub(super) const PILL_HEIGHT_CELLS: u16 = 3;
 /// Gap between adjacent pills in the pill row.
 pub(super) const INTER_PILL_GAP_CELLS: u16 = 1;
 /// Pill capsule border ring thickness (dots).
@@ -72,29 +78,35 @@ pub(super) fn class_color(class: DamageClass) -> Rgba {
     }
 }
 
-/// A 1-text-line-tall rounded capsule ("pill"): a deep-chamfer border ring
-/// AND interior fill both tinted `color` (a solid colored chip, not a
-/// hollow outline — spec:41), with `text` centered on top as plain terminal
-/// chars. `rect` is dot-precise; the capsule is rasterized at `rect`'s
-/// floored cell rect (pill content is plain text, which is inherently
-/// cell-quantized — see research.md's placement note). A zero-area `rect`
-/// draws nothing and does not panic.
-///
+/// A rounded capsule ("pill") drawn as a tinted OUTLINE hugging its centered
+/// `text`: a 6-dot-tall ring centered in the 3-cell `rect` so its top edge is
+/// the OVERLINE (bottom dot-row of the cell above the text) and its bottom edge
+/// the UNDERLINE (top dot-row of the cell below), with radius-2 ends rounding
+/// onto those rows. The interior is `Transparent` so the label stays legible.
+/// `rect` is dot-precise; the label is placed at the floored cell rect (plain
+/// terminal text is cell-quantized). A zero-area `rect` draws nothing and does
+/// not panic.
 pub(super) fn pill(buf: &mut Buffer, rect: DotRect, text: &str, color: Rgba) {
     let cr = rect.to_cell_rect();
     if cr.width == 0 || cr.height == 0 {
         return;
     }
 
+    let w_dots = cr.width as i32 * 2;
+    let box_h: i32 = 6;
     let dots = ui_primitives::rounded_rect(
-        cr.width as usize * 2,
-        cr.height as usize * 4,
+        w_dots as usize,
+        box_h as usize,
         PILL_BORDER_THICKNESS_DOTS,
         PILL_CORNER_RADIUS_DOTS,
         color,
-        Dot::Lit(color),
+        Dot::Transparent,
     );
-    draw_dots(buf, cr, &dots);
+    crate::scenes::post_battle::columns::blit_dots(
+        buf,
+        DotRect { x: cr.x as i32 * 2, y: cr.y as i32 * 4 + 3, w: w_dots, h: box_h },
+        &dots,
+    );
 
     label(
         buf,
@@ -116,8 +128,8 @@ pub(super) const FLAVOR_MAX_LINES: u16 = 2;
 pub(super) const PRE_FLAVOR_GAP_CELLS: u16 = 1;
 /// Whole-cell gap the card is anchored off the hovered ability cell's
 /// top-left corner (card's bottom-right sits `ANCHOR_GAP_CELLS` cells
-/// above-left, no clamp).
-pub(super) const ANCHOR_GAP_CELLS: u16 = 1;
+/// above-left, no clamp). 0 = the card sits right against the hover point.
+pub(super) const ANCHOR_GAP_CELLS: u16 = 0;
 
 /// Card frame border color — amber, matches the `BattleMenu` overlay.
 pub(super) const CARD_BORDER_COLOR: Rgba = Rgba::rgb(0xff, 0xbf, 0x00);
@@ -239,8 +251,8 @@ pub(super) fn layout_tooltip(ability: &Ability, hovered_cell: DotRect) -> Toolti
     };
 
     let interior = card.inset(
-        INTERIOR_PADDING_CELLS as i32 * 2,
-        INTERIOR_PADDING_CELLS as i32 * 2,
+        INTERIOR_PADDING_H_CELLS as i32 * 2,
+        INTERIOR_PADDING_H_CELLS as i32 * 2,
         INTERIOR_PADDING_CELLS as i32 * 4,
         INTERIOR_PADDING_CELLS as i32 * 4,
     );
@@ -610,41 +622,43 @@ mod tests {
 
     // ---------------------------------------------------------------- pill
 
-    /// Border ring AND interior fill both decode to the passed `color` (a
-    /// solid colored chip, not a hollow outline). Sampled mid-height,
-    /// mid-span, well clear of the chamfered ends; empty `text` so no glyph
-    /// overwrites the sampled dot.
+    /// The capsule is a tinted OUTLINE: the overline (top edge, dot row 3) and
+    /// underline (bottom edge, dot row 8) decode to `color`, and the interior
+    /// (dot row 5) is transparent — not a filled chip. Empty `text` so no glyph
+    /// overwrites the sampled dots. Pill is 3 cells tall (6-cell × 3-cell rect).
     #[test]
-    fn pill_capsule_color_decodes_to_passed_color() {
-        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 1));
-        let rect = DotRect { x: 0, y: 0, w: 12, h: 4 };
+    fn pill_outline_over_underline_lit_interior_transparent() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 3));
+        let rect = DotRect { x: 0, y: 0, w: 12, h: 12 };
         let color = Rgba::rgb(0x11, 0x22, 0x33);
 
         pill(&mut buf, rect, "", color);
 
-        assert_eq!(lit_dot_color(&buf, 5, 1), Some(color));
+        assert_eq!(lit_dot_color(&buf, 5, 3), Some(color), "overline (top edge) dot must be lit");
+        assert_eq!(lit_dot_color(&buf, 5, 8), Some(color), "underline (bottom edge) dot must be lit");
+        assert_eq!(lit_dot_color(&buf, 5, 5), None, "interior must be transparent (outline, not filled)");
     }
 
     /// The capsule's outermost corner dot is chamfered (transparent/unlit)
-    /// while a mid-edge dot on the same border row is lit — proving rounded,
+    /// while a mid-edge dot on the same overline row is lit — proving rounded,
     /// not square, caps.
     #[test]
     fn pill_chamfered_corner_is_unlit_while_mid_edge_is_lit() {
-        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 1));
-        let rect = DotRect { x: 0, y: 0, w: 12, h: 4 };
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 3));
+        let rect = DotRect { x: 0, y: 0, w: 12, h: 12 };
         let color = Rgba::rgb(0x11, 0x22, 0x33);
 
         pill(&mut buf, rect, "", color);
 
         assert_eq!(
-            lit_dot_color(&buf, 0, 0),
+            lit_dot_color(&buf, 0, 3),
             None,
             "outermost corner dot must be chamfered (unlit)"
         );
         assert_eq!(
-            lit_dot_color(&buf, 5, 0),
+            lit_dot_color(&buf, 5, 3),
             Some(color),
-            "mid-edge dot on the same border row must be lit"
+            "mid-edge dot on the same overline row must be lit"
         );
     }
 
