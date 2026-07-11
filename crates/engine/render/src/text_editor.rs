@@ -1,12 +1,20 @@
-//! Multi-line text editor widget (spec 50) — config/event types and the
-//! text round-trip primitive. Editing, movement, scrolling, and rendering
-//! are added by later tasks in this same module.
+//! Multi-line text editor widget (spec 50) — config/event types, the text
+//! round-trip primitive, editing, movement, scrolling, and rendering.
 
+use engine_core::color::Rgba;
+use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
+
+use crate::dots::{Dot, DotBuffer};
 
 /// Display rows scrolled per mouse wheel notch (one `ScrollUp`/`ScrollDown`
 /// event = one notch, crossterm's model).
 const WHEEL_SCROLL_ROWS: usize = 3;
+
+/// Uniform ink color for the scrollbar track + thumb (see `draw_scrollbar`).
+const SCROLLBAR_COLOR: Rgba = Rgba::rgb(0x80, 0x80, 0x80);
 
 /// How the editor's row count behaves: fixed at the caller's rect height,
 /// or grows with content up to `max_rows`.
@@ -349,6 +357,20 @@ impl TextEditor {
             .saturating_sub(self.viewport_height.max(1))
     }
 
+    /// Rows the caller should allot at `width_cells`. Grow: wrapped
+    /// display-row count clamped to `[1, max_rows]` (at max_rows the widget
+    /// scrolls instead of growing). Fixed: natural wrapped row count,
+    /// floored at 1. Side-effect-free: does not read or write viewport
+    /// state.
+    pub fn desired_rows(&self, width_cells: u16) -> u16 {
+        let rows = self.wrap_rows(width_cells.max(1) as usize).len();
+        let capped = match self.config.sizing {
+            Sizing::Grow { max_rows } => rows.min(max_rows as usize),
+            Sizing::Fixed => rows,
+        };
+        capped.max(1).min(u16::MAX as usize) as u16
+    }
+
     /// Move `scroll_offset` by `delta` display rows, clamped to
     /// `[0, max_scroll_offset()]`. Returns `true` iff the offset actually
     /// changed. Touches only `scroll_offset` — never the caret or buffer.
@@ -361,6 +383,94 @@ impl TextEditor {
         } else {
             false
         }
+    }
+
+    /// Render the visible wrapped rows as plain text, a reverse-video block
+    /// cursor, and (when the buffer is empty) a dimmed placeholder. Caches
+    /// `viewport_width`/`viewport_height` from `rect` (re-clamping
+    /// `scroll_offset` in case the rect shrank since the last input event).
+    /// Text is drawn as plain terminal chars (the rule-4 exception); as the
+    /// last step, draws a dot-pipeline vertical scrollbar in the right-most
+    /// cell column when content overflows the viewport (see
+    /// [`Self::draw_scrollbar`]).
+    pub fn render(&mut self, buf: &mut Buffer, rect: Rect) {
+        self.viewport_width = rect.width as usize;
+        self.viewport_height = rect.height as usize;
+        self.scroll_offset = self.scroll_offset.min(self.max_scroll_offset());
+
+        if self.text().is_empty() {
+            let style = Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM);
+            crate::wrapped_text(buf, rect, &self.config.placeholder, crate::TextAlign::Left, style, false);
+            return;
+        }
+
+        let width = (rect.width as usize).max(1);
+        let height = rect.height as usize;
+        let rows = self.wrap_rows(width);
+        let text_style = Style::default();
+
+        let end = (self.scroll_offset + height).min(rows.len());
+        for (i, row) in rows[self.scroll_offset..end].iter().enumerate() {
+            let y = rect.y + i as u16;
+            if y >= buf.area.bottom() {
+                continue;
+            }
+            let line = &self.lines[row.line];
+            let s: String = line.chars().skip(row.start).take(row.end - row.start).collect();
+            buf.set_stringn(rect.x, y, &s, width, text_style);
+        }
+
+        let (crow, ccol) = self.cursor_display_pos(width);
+        if crow >= self.scroll_offset && crow < self.scroll_offset + height {
+            let cy = rect.y + (crow - self.scroll_offset) as u16;
+            let cx = rect.x + ccol as u16;
+            if cx < rect.right() {
+                if let Some(cell) = buf.cell_mut((cx, cy)) {
+                    cell.set_style(Style::default().add_modifier(Modifier::REVERSED));
+                }
+            }
+        }
+
+        self.draw_scrollbar(buf, rect);
+    }
+
+    /// Draw a vertical scrollbar in the right-most terminal cell column of
+    /// `rect` through the dot pipeline, when `total_display_rows()` exceeds
+    /// the viewport height. A no-op when content fits.
+    ///
+    /// Geometry (not color) distinguishes track from thumb: the track is the
+    /// right dot-column lit for the full height; the thumb additionally lights
+    /// the left dot-column for the rows it spans, bulging to 2 dots wide.
+    /// Uniform color keeps every lit dot at/above the cell's average luma, so
+    /// `dots_to_grid`'s adaptive-luma rule never drops a dot at the
+    /// track/thumb boundary.
+    fn draw_scrollbar(&self, buf: &mut Buffer, rect: Rect) {
+        if rect.width == 0 || rect.height == 0 {
+            return;
+        }
+        let total = self.total_display_rows();
+        let view = rect.height as usize;
+        if total <= view {
+            return;
+        }
+        let track_dots = view * 4;
+        let max_scroll = self.max_scroll_offset();
+        let thumb_dots = ((view * track_dots) / total).clamp(4, track_dots);
+        let max_top = track_dots - thumb_dots;
+        // `max_scroll` is `total - view`, which is > 0 here: the `total <=
+        // view` early-return above already ruled out the fits-viewport case.
+        let thumb_top = self.scroll_offset * max_top / max_scroll;
+
+        let mut dotbuf = DotBuffer::new(2, track_dots);
+        for row in 0..track_dots {
+            dotbuf.set(1, row, Dot::Lit(SCROLLBAR_COLOR));
+        }
+        for row in thumb_top..(thumb_top + thumb_dots) {
+            dotbuf.set(0, row, Dot::Lit(SCROLLBAR_COLOR));
+        }
+
+        let area = Rect::new(rect.right().saturating_sub(1), rect.y, 1, rect.height);
+        crate::draw_dots(buf, area, &dotbuf);
     }
 
     /// Remove the char at the caret, or join the next line up at

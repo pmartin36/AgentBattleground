@@ -450,3 +450,278 @@ fn page_up_moves_offset_back_toward_zero_clamped() {
     editor.handle_key(key(KeyCode::PageUp)); // would underflow without clamp
     assert_eq!(editor.scroll_offset, 0);
 }
+
+// --- b3-t1: render text + reverse-video block cursor + placeholder ---
+
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::Modifier;
+
+fn make_buf(w: u16, h: u16) -> Buffer {
+    Buffer::empty(Rect::new(0, 0, w, h))
+}
+
+/// Collect the visible symbol of each cell in row `y` of `rect`, trailing
+/// spaces stripped, for row-by-row wrap assertions.
+fn row_text(buf: &Buffer, rect: Rect, y: u16) -> String {
+    (rect.left()..rect.right())
+        .map(|x| buf.cell((x, y)).unwrap().symbol().chars().next().unwrap_or(' '))
+        .collect::<String>()
+        .trim_end()
+        .to_string()
+}
+
+fn placeholder_config(placeholder: &str) -> TextEditorConfig {
+    TextEditorConfig {
+        sizing: Sizing::Fixed,
+        submit_on_enter: false,
+        placeholder: placeholder.to_string(),
+    }
+}
+
+#[test]
+fn caret_cell_is_reverse_video_and_preserves_underlying_char() {
+    let mut editor = TextEditor::new(config());
+    editor.set_text("hi"); // caret lands at end (col 2) after set_text
+    let rect = Rect::new(0, 0, 10, 3);
+    let mut buf = make_buf(10, 3);
+
+    editor.render(&mut buf, rect);
+
+    // Caret is one past "hi" (row 0, col 2) — a reverse-video blank cell.
+    let caret = buf.cell((2, 0)).unwrap();
+    assert!(
+        caret.modifier.contains(Modifier::REVERSED),
+        "caret cell must carry REVERSED for the block-cursor effect"
+    );
+    assert_eq!(caret.symbol(), " ", "caret must not overwrite/blank an existing char");
+
+    // The written text cells themselves are not reverse-video.
+    let h_cell = buf.cell((0, 0)).unwrap();
+    assert_eq!(h_cell.symbol(), "h");
+    assert!(!h_cell.modifier.contains(Modifier::REVERSED));
+}
+
+#[test]
+fn long_line_occupies_expected_display_rows() {
+    let mut editor = TextEditor::new(config());
+    editor.set_text("one two three"); // wraps to 3 rows @ width 6
+    // Height (5) exceeds the 3 wrapped rows so content fits vertically —
+    // no scrollbar/gutter, full width available (stable across b3-t2).
+    let rect = Rect::new(0, 0, 6, 5);
+    let mut buf = make_buf(6, 5);
+
+    editor.render(&mut buf, rect);
+
+    assert_eq!(row_text(&buf, rect, 0), "one");
+    assert_eq!(row_text(&buf, rect, 1), "two");
+    assert_eq!(row_text(&buf, rect, 2), "three");
+    assert_eq!(row_text(&buf, rect, 3), "", "row past the last wrapped row must be blank");
+}
+
+#[test]
+fn empty_editor_renders_dim_placeholder_with_no_reverse_video() {
+    let mut editor = TextEditor::new(placeholder_config("type here"));
+    let rect = Rect::new(0, 0, 20, 3);
+    let mut buf = make_buf(20, 3);
+
+    editor.render(&mut buf, rect);
+
+    assert_eq!(row_text(&buf, rect, 0), "type here");
+    let first = buf.cell((0, 0)).unwrap();
+    assert!(
+        first.modifier.contains(Modifier::DIM),
+        "placeholder text must render dimmed"
+    );
+    for x in rect.left()..rect.right() {
+        for y in rect.top()..rect.bottom() {
+            let cell = buf.cell((x, y)).unwrap();
+            assert!(
+                !cell.modifier.contains(Modifier::REVERSED),
+                "an empty editor must not draw a block cursor"
+            );
+        }
+    }
+}
+
+#[test]
+fn render_respects_scroll_offset_showing_rows_from_the_offset_down() {
+    let mut editor = TextEditor::new(config());
+    editor.set_text("a\nb\nc\nd\ne"); // 5 single-char logical lines
+    editor.scroll_offset = 2; // skip past "a", "b"
+    let rect = Rect::new(0, 0, 6, 2);
+    let mut buf = make_buf(6, 2);
+
+    editor.render(&mut buf, rect);
+
+    // 5 display rows > viewport height 2, so this scenario overflows and
+    // (as of b3-t2) the right-most column carries scrollbar ink, not text —
+    // assert column 0 directly rather than the full-row string.
+    assert_eq!(buf.cell((0, 0)).unwrap().symbol(), "c");
+    assert_eq!(buf.cell((0, 1)).unwrap().symbol(), "d");
+}
+
+// --- b3-t2: scrollbar fixture through the dot pipeline ---
+
+use crate::decode_braille_cell;
+
+const TRACK_MASK: u8 = 0b1011_1000; // right dot-column bits {3,4,5,7} (dots.rs DOTS)
+const THUMB_MASK: u8 = 0b0100_0111; // left dot-column bits {0,1,2,6}
+
+/// 6 single-char logical lines rendered at width 6 -> 6 display rows;
+/// viewport height 2 -> overflow (`max_scroll_offset() == 4`). Viewport
+/// dims come from `render()`'s rect, not hand-seeded fields, so the
+/// scrollbar math matches exactly what render() itself computes.
+fn overflowing_editor_and_rect() -> (TextEditor, Rect) {
+    let mut editor = TextEditor::new(config());
+    editor.set_text("a\nb\nc\nd\ne\nf");
+    (editor, Rect::new(0, 0, 6, 2))
+}
+
+#[test]
+fn overflowing_content_draws_track_and_thumb_in_rightmost_column() {
+    let (mut editor, rect) = overflowing_editor_and_rect();
+    let mut buf = make_buf(rect.width, rect.height);
+
+    editor.render(&mut buf, rect);
+
+    // total=6 rows, view=2 cells -> thumb is exactly 1 cell tall and sits
+    // at the top cell when scroll_offset == 0.
+    let x = rect.right() - 1;
+    let (top_mask, _) = decode_braille_cell(&buf, x, 0).expect("top cell must carry scrollbar dots");
+    assert_eq!(top_mask & TRACK_MASK, TRACK_MASK, "track is full-height lit");
+    assert_eq!(top_mask & THUMB_MASK, THUMB_MASK, "thumb bulges on the top cell at offset 0");
+
+    let (bottom_mask, _) =
+        decode_braille_cell(&buf, x, 1).expect("bottom cell must carry scrollbar dots");
+    assert_eq!(bottom_mask & TRACK_MASK, TRACK_MASK, "track is full-height lit");
+    assert_eq!(bottom_mask & THUMB_MASK, 0, "bottom cell has no thumb at offset 0");
+}
+
+#[test]
+fn thumb_moves_down_as_scroll_offset_increases() {
+    let (mut editor, rect) = overflowing_editor_and_rect();
+    let mut buf = make_buf(rect.width, rect.height);
+    editor.render(&mut buf, rect); // establishes viewport dims / max_scroll_offset
+
+    editor.scroll_offset = editor.max_scroll_offset();
+    let mut buf2 = make_buf(rect.width, rect.height);
+    editor.render(&mut buf2, rect);
+
+    let x = rect.right() - 1;
+    let (top_mask, _) =
+        decode_braille_cell(&buf2, x, 0).expect("top cell must still carry track dots");
+    assert_eq!(top_mask & THUMB_MASK, 0, "thumb has moved off the top cell at max offset");
+
+    let (bottom_mask, _) =
+        decode_braille_cell(&buf2, x, 1).expect("bottom cell must carry scrollbar dots");
+    assert_eq!(
+        bottom_mask & THUMB_MASK,
+        THUMB_MASK,
+        "thumb is flush to the bottom cell at max scroll offset"
+    );
+}
+
+#[test]
+fn content_that_fits_draws_no_scrollbar() {
+    let mut editor = TextEditor::new(config());
+    editor.set_text("a\nb");
+    let rect = Rect::new(0, 0, 6, 3); // 2 display rows <= 3 visible rows
+    let mut buf = make_buf(6, 3);
+
+    editor.render(&mut buf, rect);
+
+    let x = rect.right() - 1;
+    for y in rect.top()..rect.bottom() {
+        assert!(
+            decode_braille_cell(&buf, x, y).is_none(),
+            "no scrollbar dots when content fits the viewport"
+        );
+    }
+}
+
+// --- b3-t3: Grow sizing — desired_rows(width) clamp + Fixed-at-max behavior ---
+
+fn grow_config(max_rows: u16) -> TextEditorConfig {
+    TextEditorConfig {
+        sizing: Sizing::Grow { max_rows },
+        submit_on_enter: false,
+        placeholder: String::new(),
+    }
+}
+
+#[test]
+fn grow_desired_rows_tracks_wrap_count_as_width_narrows() {
+    let mut editor = TextEditor::new(grow_config(10));
+    editor.set_text("one two three");
+
+    let wide = editor.desired_rows(100);
+    let narrow = editor.desired_rows(6);
+
+    assert_eq!(wide, 1, "fits on one row at a wide width");
+    assert_eq!(narrow, 3, "wraps to 3 rows at width 6, matching wrap_rows(6)");
+    assert!(narrow > wide, "narrower width wraps to more rows");
+}
+
+#[test]
+fn grow_desired_rows_clamps_to_max_rows() {
+    let mut editor = TextEditor::new(grow_config(3));
+    editor.set_text("a\nb\nc\nd\ne\nf"); // 6 single-char logical lines -> 6 display rows at width 6
+
+    assert_eq!(editor.desired_rows(6), 3, "clamped to max_rows even though content wraps to 6 rows");
+}
+
+#[test]
+fn grow_at_max_rows_still_allows_scrolling_past_cap() {
+    let mut editor = TextEditor::new(grow_config(3));
+    editor.set_text("a\nb\nc\nd\ne\nf");
+    editor.viewport_width = 6;
+    editor.viewport_height = 3; // caller sized the rect to desired_rows(6) == 3
+
+    assert_eq!(editor.desired_rows(6), 3, "reporting stays capped at max_rows");
+    assert_eq!(
+        editor.max_scroll_offset(),
+        editor.total_display_rows() - 3,
+        "content beyond max_rows is still reachable by scrolling"
+    );
+    assert!(editor.max_scroll_offset() > 0, "there is scrollable overflow beyond the cap");
+}
+
+#[test]
+fn desired_rows_never_returns_zero_for_empty_editor() {
+    let grow_empty = TextEditor::new(grow_config(5));
+    assert_eq!(grow_empty.desired_rows(10), 1, "empty Grow editor floors to 1");
+
+    let fixed_empty = TextEditor::new(config());
+    assert_eq!(fixed_empty.desired_rows(10), 1, "empty Fixed editor floors to 1");
+}
+
+#[test]
+fn fixed_desired_rows_is_uncapped_natural_wrap_count() {
+    let mut editor = TextEditor::new(config()); // Sizing::Fixed
+    editor.set_text("a\nb\nc\nd\ne\nf"); // 6 display rows at width 6
+
+    assert_eq!(editor.desired_rows(6), 6, "Fixed reports the natural wrapped row count, no cap");
+}
+
+#[test]
+fn desired_rows_does_not_mutate_editor_state() {
+    let mut editor = TextEditor::new(grow_config(3));
+    editor.set_text("one two three");
+    editor.viewport_width = 6;
+    editor.viewport_height = 2;
+    editor.scroll_offset = 1;
+    let before_text = editor.text();
+    let before_cursor = (editor.cursor_line, editor.cursor_col);
+    let before_scroll = editor.scroll_offset;
+    let before_vw = editor.viewport_width;
+    let before_vh = editor.viewport_height;
+
+    let _ = editor.desired_rows(6);
+
+    assert_eq!(editor.text(), before_text);
+    assert_eq!((editor.cursor_line, editor.cursor_col), before_cursor);
+    assert_eq!(editor.scroll_offset, before_scroll);
+    assert_eq!(editor.viewport_width, before_vw);
+    assert_eq!(editor.viewport_height, before_vh);
+}
