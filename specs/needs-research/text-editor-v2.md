@@ -12,10 +12,11 @@ Carried over from `50`'s deferred list:
 
 - **Text selection** (shift+arrows, and mouse drag).
 - **Copy / paste / cut** (system clipboard).
-- **Mouse click-to-place cursor** inside the text.
 - **Draggable scrollbar** thumb (v1's scrollbar is a wheel/keyboard-driven indicator only).
 - **Horizontal scroll** (v1 soft-wraps and scrolls vertically only).
 - **Undo / redo.**
+
+> **Carved out:** click-to-place caret, focus-switching between editors, and the slow cursor blink are now specced as a buildable unit in `53-text-editor-cursor-placement-and-blink` — no longer parked here.
 
 ## `@` mention commands
 
