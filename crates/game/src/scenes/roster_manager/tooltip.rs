@@ -15,6 +15,7 @@ use engine_render::{
     FlexChild, FlexStyle, Justify, TextAlign,
 };
 use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 
 /// Tooltip card width (spec:26). Placeholder — tunable. Wide enough that the
@@ -26,9 +27,12 @@ use ratatui::style::{Color, Style};
 pub(super) const TOOLTIP_WIDTH_CELLS: u16 = 36;
 /// Interior `.inset` padding applied to the card's content area (spec:26).
 pub(super) const INTERIOR_PADDING_CELLS: u16 = 1;
-/// Corner radius (dots) for the pill capsule — deeper than BattleMenu's
-/// standard chamfer (2) so the ends read as rounded caps.
-pub(super) const PILL_CORNER_RADIUS_DOTS: usize = 3;
+/// Corner radius (dots) for the pill capsule. Chamfer 1 (the house default —
+/// see the chamfer-1 style memory): lightly-rounded corners that keep the
+/// capsule's top and bottom edge rows filled, so it reads as a solid pill
+/// rather than a pinched sliver. A deeper cut on a 1-cell-tall pill eats the
+/// top/bottom rows away entirely.
+pub(super) const PILL_CORNER_RADIUS_DOTS: usize = 1;
 /// Pill row height — one text line.
 pub(super) const PILL_HEIGHT_CELLS: u16 = 1;
 /// Gap between adjacent pills in the pill row.
@@ -119,12 +123,20 @@ pub(super) const ANCHOR_GAP_CELLS: u16 = 1;
 pub(super) const CARD_BORDER_COLOR: Rgba = Rgba::rgb(0xff, 0xbf, 0x00);
 /// Card frame border ring thickness (dots).
 pub(super) const CARD_BORDER_THICKNESS_DOTS: usize = 1;
-/// Card frame corner radius (dots) — standard chamfer, not the pill's deep
-/// cut.
-pub(super) const CARD_CORNER_RADIUS_DOTS: usize = 2;
+/// Card frame corner radius (dots) — chamfer 1, the house default (see the
+/// chamfer-1 style memory).
+pub(super) const CARD_CORNER_RADIUS_DOTS: usize = 1;
 /// Card body text color — legible fg over the `Occlude`-filled interior
-/// (matches `details_panel`'s white).
+/// (matches `details_panel`'s white). Used for field *values*.
 pub(super) const CARD_TEXT_COLOR: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
+/// Field *label* color (`Cost:`/`Damage:`/`Range:`/`Status:`) — a muted steel
+/// blue, stylistically distinct from the white values beside them.
+pub(super) const FIELD_LABEL_COLOR: Rgba = Rgba::rgb(0x8f, 0xa8, 0xc8);
+/// Flavor-text color — gray, de-emphasized under the field rows.
+pub(super) const FLAVOR_TEXT_COLOR: Rgba = Rgba::rgb(0x9e, 0x9e, 0x9e);
+/// Blank spacer (cells) inserted before the Pills row when a row precedes it,
+/// separating the pills from the Cost line above.
+pub(super) const PRE_PILLS_GAP_CELLS: u16 = 1;
 /// Horizontal padding (cells) each side of a pill label, inside the pill.
 /// 2 cells (not 1) so at least one dot column of the tinted border/fill
 /// clears `PILL_CORNER_RADIUS_DOTS`'s chamfer and survives outside the
@@ -203,9 +215,16 @@ pub(super) fn layout_tooltip(ability: &Ability, hovered_cell: DotRect) -> Toolti
     // Flavor is always the last present row (fixed order); the gap only
     // applies when at least one row precedes it.
     let pre_flavor_gap = rows.len() > 1 && matches!(rows.last(), Some(TooltipRow::Flavor));
+    // A blank row before Pills when a row (Cost) precedes it, separating the
+    // pills from the Cost line above.
+    let pre_pills_gap = rows
+        .iter()
+        .position(|&r| r == TooltipRow::Pills)
+        .is_some_and(|i| i > 0);
 
     let content_dots: i32 = rows.iter().map(|&r| row_height_cells(r, ability) as i32 * 4).sum::<i32>()
-        + if pre_flavor_gap { PRE_FLAVOR_GAP_CELLS as i32 * 4 } else { 0 };
+        + if pre_flavor_gap { PRE_FLAVOR_GAP_CELLS as i32 * 4 } else { 0 }
+        + if pre_pills_gap { PRE_PILLS_GAP_CELLS as i32 * 4 } else { 0 };
 
     let card_w = TOOLTIP_WIDTH_CELLS as i32 * 2;
     let card_h = content_dots + 2 * INTERIOR_PADDING_CELLS as i32 * 4;
@@ -232,6 +251,14 @@ pub(super) fn layout_tooltip(ability: &Ability, hovered_cell: DotRect) -> Toolti
     let mut markers: Vec<Option<TooltipRow>> = Vec::with_capacity(rows.len() + 1);
     let mut children: Vec<FlexChild> = Vec::with_capacity(rows.len() + 1);
     for &row in &rows {
+        if pre_pills_gap && row == TooltipRow::Pills {
+            children.push(FlexChild {
+                basis: Basis::Fixed(PRE_PILLS_GAP_CELLS as i32 * 4),
+                grow: 0.0,
+                shrink: 0.0,
+            });
+            markers.push(None);
+        }
         if pre_flavor_gap && row == TooltipRow::Flavor {
             children.push(FlexChild {
                 basis: Basis::Fixed(PRE_FLAVOR_GAP_CELLS as i32 * 4),
@@ -305,14 +332,14 @@ pub(super) fn render_tooltip(buf: &mut Buffer, ability: &Ability, hovered_cell: 
     }
 }
 
-/// Centered `"Cost: {n} stamina"`.
+/// Centered `"Cost: {n} stamina"` — label muted, value white.
 fn fill_cost(buf: &mut Buffer, rect: DotRect, cost: u8) {
-    label(
+    draw_labeled_value(
         buf,
         rect.to_cell_rect(),
-        &format!("Cost: {cost} stamina"),
+        "Cost:",
+        &format!("{cost} stamina"),
         TextAlign::Center,
-        text_style(),
     );
 }
 
@@ -370,22 +397,10 @@ fn fill_damage_range(buf: &mut Buffer, rect: DotRect, ability: &Ability) {
     let cols = flex(rect, style, &children);
 
     if let Some(damage) = ability.damage() {
-        label(
-            buf,
-            cols[0].to_cell_rect(),
-            &format!("Damage: {damage}"),
-            TextAlign::Left,
-            text_style(),
-        );
+        draw_labeled_value(buf, cols[0].to_cell_rect(), "Damage:", &damage.to_string(), TextAlign::Left);
     }
     if let Some(range) = ability.range() {
-        label(
-            buf,
-            cols[1].to_cell_rect(),
-            &format!("Range: {range}"),
-            TextAlign::Left,
-            text_style(),
-        );
+        draw_labeled_value(buf, cols[1].to_cell_rect(), "Range:", &range.to_string(), TextAlign::Left);
     }
 }
 
@@ -408,7 +423,7 @@ fn fill_status(buf: &mut Buffer, rect: DotRect, effects: &[StatusEffect]) {
     );
     let (header_rect, body_rect) = (sections[0], sections[1]);
 
-    label(buf, header_rect.to_cell_rect(), "Status:", TextAlign::Left, text_style());
+    draw_labeled_value(buf, header_rect.to_cell_rect(), "Status:", "", TextAlign::Left);
 
     let row_children: Vec<FlexChild> = (0..body_rows)
         .map(|_| FlexChild { basis: Basis::Fixed(4), grow: 0.0, shrink: 0.0 })
@@ -447,16 +462,70 @@ fn fill_status(buf: &mut Buffer, rect: DotRect, effects: &[StatusEffect]) {
     }
 }
 
-/// Word-wrapped flavor text, clipped to `FLAVOR_MAX_LINES` rows with a tail
-/// ellipsis.
+/// Word-wrapped flavor text (gray), clipped to `FLAVOR_MAX_LINES` rows with a
+/// tail ellipsis.
 fn fill_flavor(buf: &mut Buffer, rect: DotRect, text: &str) {
-    wrapped_text(buf, rect.to_cell_rect(), text, TextAlign::Left, text_style(), true);
+    wrapped_text(buf, rect.to_cell_rect(), text, TextAlign::Left, flavor_style(), true);
 }
 
-/// Legible fg over the `Occlude`-filled card interior — never
-/// `Style::default()`'s unset `Color::Reset`.
+/// White fg for field *values* over the `Occlude`-filled card interior —
+/// never `Style::default()`'s unset `Color::Reset`.
 fn text_style() -> Style {
     Style::default().fg(Color::Rgb(CARD_TEXT_COLOR.r, CARD_TEXT_COLOR.g, CARD_TEXT_COLOR.b))
+}
+
+/// Muted style for field *labels* (`Cost:`/`Damage:`/`Range:`/`Status:`).
+fn field_label_style() -> Style {
+    Style::default().fg(Color::Rgb(FIELD_LABEL_COLOR.r, FIELD_LABEL_COLOR.g, FIELD_LABEL_COLOR.b))
+}
+
+/// Gray style for flavor text.
+fn flavor_style() -> Style {
+    Style::default().fg(Color::Rgb(FLAVOR_TEXT_COLOR.r, FLAVOR_TEXT_COLOR.g, FLAVOR_TEXT_COLOR.b))
+}
+
+/// Draws `"{label} {value}"` with the label in [`field_label_style`] and the
+/// value in the white [`text_style`], so the two read distinctly. `align`
+/// centers or left-aligns the combined run within `cell_rect`; an empty
+/// `value` draws just the label.
+fn draw_labeled_value(
+    buf: &mut Buffer,
+    cell_rect: Rect,
+    label_text: &str,
+    value_text: &str,
+    align: TextAlign,
+) {
+    let label_w = label_text.chars().count() as u16;
+    let value_w = value_text.chars().count() as u16;
+    let combined = label_w + if value_w > 0 { 1 + value_w } else { 0 };
+    let start_x = match align {
+        TextAlign::Center => cell_rect.x + cell_rect.width.saturating_sub(combined) / 2,
+        _ => cell_rect.x,
+    };
+    label(
+        buf,
+        Rect { x: start_x, y: cell_rect.y, width: label_w, height: cell_rect.height },
+        label_text,
+        TextAlign::Left,
+        field_label_style(),
+    );
+    if value_w > 0 {
+        // Draw the value with a leading ASCII space (rather than relying on the
+        // untouched gap cell, which is a braille blank, not " ") so the label
+        // and value read as one string when the buffer is decoded.
+        label(
+            buf,
+            Rect {
+                x: start_x + label_w,
+                y: cell_rect.y,
+                width: value_w + 1,
+                height: cell_rect.height,
+            },
+            &format!(" {value_text}"),
+            TextAlign::Left,
+            text_style(),
+        );
+    }
 }
 
 /// A pill's fixed main-axis width in dots: label chars + padding each side,
@@ -679,10 +748,11 @@ mod tests {
 
         assert_eq!(layout.card.w, TOOLTIP_WIDTH_CELLS as i32 * 2);
 
-        // Cost(1) + Pills(PILL_HEIGHT_CELLS) + DamageRange(1) +
+        // Cost(1) + pre-pills gap + Pills(PILL_HEIGHT_CELLS) + DamageRange(1) +
         // Status(1 + ceil(1/2)) + pre-flavor gap + Flavor(FLAVOR_MAX_LINES),
         // all in cells, plus 2x interior padding.
         let content_cells = 1
+            + PRE_PILLS_GAP_CELLS as i32
             + PILL_HEIGHT_CELLS as i32
             + 1
             + (1 + 1)
@@ -737,6 +807,12 @@ mod tests {
                     gap,
                     PRE_FLAVOR_GAP_CELLS as i32 * 4,
                     "the single pre-flavor spacer must separate Status and Flavor"
+                );
+            } else if prev_row == TooltipRow::Cost && next_row == TooltipRow::Pills {
+                assert_eq!(
+                    gap,
+                    PRE_PILLS_GAP_CELLS as i32 * 4,
+                    "the single pre-pills spacer must separate Cost and Pills"
                 );
             } else {
                 assert_eq!(

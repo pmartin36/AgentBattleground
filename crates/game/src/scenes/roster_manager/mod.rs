@@ -37,7 +37,7 @@ pub struct RosterManager {
     /// opens `prompt_editor` on a completed click. `RefCell` for the same
     /// immutable-render-mutates-button-state reason as the other buttons.
     #[inspect(hidden)]
-    edit_button: RefCell<engine_render::Button>,
+    edit_button: RefCell<engine_render::ButtonCore>,
     /// Transient scene-internal slide transition (b5-t1), armed by
     /// `navigate()` and driven by `elapsed`. `None` when no slide is active.
     #[inspect(hidden)]
@@ -209,10 +209,7 @@ impl RosterManager {
                 engine_render::Button::new(Rect::default(), crate::assets::BUTTON_PANEL)
                     .icon(crate::assets::ICON_HOME),
             ),
-            edit_button: RefCell::new(
-                engine_render::Button::new(Rect::default(), crate::assets::BUTTON_PANEL)
-                    .label("Edit"),
-            ),
+            edit_button: RefCell::new(engine_render::ButtonCore::new(Rect::default())),
             slide: None,
             selected_index: None,
             current_dot: RefCell::new(engine_render::ButtonCore::new(Rect::default())),
@@ -383,10 +380,12 @@ impl Scene for RosterManager {
             self.render_instructions(frame.buffer_mut(), regions.instructions_header, regions.preview);
 
             {
-                let mut edit = self.edit_button.borrow_mut();
-                edit.set_rect(regions.edit_button.to_cell_rect());
-                edit.set_dot_offset_down(regions.edit_button.cell_remainder().1);
-                edit.render(frame.buffer_mut());
+                let state = {
+                    let mut edit = self.edit_button.borrow_mut();
+                    edit.set_rect(regions.edit_button.to_cell_rect());
+                    edit.state()
+                };
+                Self::render_edit_button(frame.buffer_mut(), regions.edit_button, state);
             }
 
             let n = self.creatures[idx].abilities().len();

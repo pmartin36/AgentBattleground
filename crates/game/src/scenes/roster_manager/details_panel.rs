@@ -13,6 +13,15 @@ impl RosterManager {
     /// `STAMINA_COLOR`/`LEVEL_COLOR` chrome.
     const ABILITY_COLOR: engine_core::color::Rgba = engine_core::color::Rgba::rgb(0xff, 0xff, 0xff);
 
+    /// Edit-button rounded-rect border color when idle — grey, matching the
+    /// panel's own border (`BORDER_COLOR`).
+    const EDIT_BUTTON_BORDER_IDLE: engine_core::color::Rgba =
+        engine_core::color::Rgba::rgb(0x88, 0x88, 0x88);
+    /// Edit-button border color when hovered/pressed — bright gold, so the
+    /// button visibly reacts to the cursor.
+    const EDIT_BUTTON_BORDER_ACTIVE: engine_core::color::Rgba =
+        engine_core::color::Rgba::rgb(0xff, 0xd7, 0x00);
+
     /// The stamina status line for `e` (b2-t4): `"Exhausted: {days} days
     /// remain"` when injured (days derived from `injured_until()`), else
     /// `"Stamina: {percent}%"`. Single source of both format strings.
@@ -74,12 +83,19 @@ impl RosterManager {
             return;
         }
 
-        // Dot-precise: anchored directly to `header.x`/`header.y + header.h`,
-        // never round-tripped through `header.to_cell_rect()` (CLAUDE.md rule
-        // 5) — `blit_dots` floors sub-cell precision correctly on its own.
+        // Anchor the underline to the SAME cell grid `label` drew the header
+        // text at (`header.to_cell_rect()`), NOT the sub-cell `header.y`: the
+        // header text is cell-quantized terminal text, and the panel interior
+        // carries a structural ~2-dot y offset, so `header.y + header.h` lands
+        // ~2 dots low — in the BOTTOM rows of the cell below the text, leaving
+        // a visible gap. Flooring to the text's own cell places the underline
+        // in the TOP `HEADER_UNDERLINE_THICKNESS_DOTS` rows of the cell row
+        // directly beneath the text, hugging it. (For a cell-aligned header
+        // this is identical to the old computation.)
+        let header_cell = header.to_cell_rect();
         let target = engine_render::DotRect {
-            x: header.x,
-            y: header.y + header.h,
+            x: header_cell.x as i32 * 2,
+            y: header_cell.bottom() as i32 * 4,
             w,
             h: Self::HEADER_UNDERLINE_THICKNESS_DOTS,
         };
@@ -155,7 +171,18 @@ impl RosterManager {
                 Self::STAMINA_COLOR.b,
             )),
         );
-        crate::scenes::bars::draw_bar(buf, parts[1], fraction, fill);
+        // Floor the bar to the same cell grid the "Stamina" label uses
+        // (`label` draws at `to_cell_rect()`), so the label and bar share one
+        // plane. Otherwise the panel interior's sub-cell y offset drops the
+        // bar ~2 dots below the label, so it reads as sitting on a lower row.
+        let bar_cell = parts[1].to_cell_rect();
+        let bar_rect = engine_render::DotRect {
+            x: bar_cell.x as i32 * 2,
+            y: bar_cell.y as i32 * 4,
+            w: bar_cell.width as i32 * 2,
+            h: bar_cell.height as i32 * 4,
+        };
+        crate::scenes::bars::draw_bar(buf, bar_rect, fraction, fill);
     }
 
     /// Draws a left-aligned white section header label at `header`'s cell
@@ -241,6 +268,47 @@ impl RosterManager {
                 Self::ABILITY_COLOR.b,
             )),
             true, // tail-ellipsis on overflow (spec line 51)
+        );
+    }
+
+    /// Draws the Edit button: a rounded-rect OUTLINE (`ui_primitives::rounded_rect`,
+    /// thickness 1, corner_radius 1 — the house chamfer default — with a
+    /// `Dot::Transparent` interior so only the border ring paints) around a
+    /// centered "Edit" label. Border color brightens on hover/press per
+    /// `state`. `region` is 3 cells tall (see `EDIT_BUTTON_H_CELLS`) so the
+    /// top/bottom border rows never share a cell with the label row.
+    pub(super) fn render_edit_button(
+        buf: &mut ratatui::buffer::Buffer,
+        region: engine_render::DotRect,
+        state: engine_render::ButtonState,
+    ) {
+        let cr = region.to_cell_rect();
+        if cr.width == 0 || cr.height == 0 {
+            return;
+        }
+        let border = match state {
+            engine_render::ButtonState::Idle => Self::EDIT_BUTTON_BORDER_IDLE,
+            _ => Self::EDIT_BUTTON_BORDER_ACTIVE,
+        };
+        let dots = engine_render::ui_primitives::rounded_rect(
+            cr.width as usize * 2,
+            cr.height as usize * 4,
+            1,
+            1,
+            border,
+            engine_render::dots::Dot::Transparent,
+        );
+        engine_render::draw_dots(buf, cr, &dots);
+        engine_render::label(
+            buf,
+            cr,
+            "Edit",
+            engine_render::TextAlign::Center,
+            ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(
+                Self::ABILITY_COLOR.r,
+                Self::ABILITY_COLOR.g,
+                Self::ABILITY_COLOR.b,
+            )),
         );
     }
 }
@@ -723,8 +791,12 @@ mod abilities_render_tests {
             "expected \"Abilities\" header text; got {header_text:?}"
         );
 
-        let underline_dot_row = regions.abilities_header.y + regions.abilities_header.h;
-        let underline_dot_col = regions.abilities_header.x + 4;
+        // The underline hugs the header text: it sits in the top rows of the
+        // cell directly beneath the header's own (floored) text cell — see
+        // `draw_header_underline`.
+        let header_cell = regions.abilities_header.to_cell_rect();
+        let underline_dot_row = header_cell.bottom() as i32 * 4;
+        let underline_dot_col = header_cell.x as i32 * 2 + 4;
         assert!(
             lit_dot_color(&buf, underline_dot_col, underline_dot_row).is_some(),
             "expected a lit underline dot at ({underline_dot_col}, {underline_dot_row}) beneath the Abilities header"
@@ -769,8 +841,11 @@ mod instructions_render_tests {
             "expected \"Instructions\" header text; got {header_text:?}"
         );
 
-        let underline_dot_row = regions.instructions_header.y + regions.instructions_header.h;
-        let underline_dot_col = regions.instructions_header.x + 4;
+        // The underline hugs the header text: top rows of the cell directly
+        // beneath the header's own (floored) text cell — see `draw_header_underline`.
+        let header_cell = regions.instructions_header.to_cell_rect();
+        let underline_dot_row = header_cell.bottom() as i32 * 4;
+        let underline_dot_col = header_cell.x as i32 * 2 + 4;
         assert!(
             lit_dot_color(&buf, underline_dot_col, underline_dot_row).is_some(),
             "expected a lit underline dot at ({underline_dot_col}, {underline_dot_row}) beneath the Instructions header"

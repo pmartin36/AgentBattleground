@@ -35,6 +35,17 @@ impl RosterManager {
     /// b3-t1's button reuses the identical home/arrow geometry idiom on the
     /// returned `edit_button` rect.
     pub(super) const EDIT_BUTTON_W_CELLS: i32 = 6;
+    /// Small left margin (cells) indenting the ability GRID off the interior's
+    /// left edge. Only the ability names move — the "Abilities" header stays
+    /// flush to the interior left.
+    pub(super) const ABILITY_GRID_LEFT_MARGIN_CELLS: i32 = 2;
+    /// Edit-button height (cells). The button is a rounded-rect OUTLINE around
+    /// its "Edit" label; braille border dots and the terminal label can't
+    /// share a cell, so it needs a top-border row, a text row, and a
+    /// bottom-border row = 3 cells. The instructions header band is only 2
+    /// cells, so the button extends 1 cell UP into the blank
+    /// `ABILITIES_INSTRUCTIONS` gap above it (never DOWN into preview text).
+    pub(super) const EDIT_BUTTON_H_CELLS: i32 = 3;
 
     /// b1-t3: carves the details-panel INTERIOR (inside the existing 1-cell
     /// border inset already applied by `details_panel_rects`) into named
@@ -122,6 +133,8 @@ impl RosterManager {
             engine_render::DotRect { h: abilities_header_band.h.min(4), ..abilities_header_band };
 
         // Ability grid: 2 columns x 2 rows, reading order [TL, TR, BL, BR].
+        // Indent the grid off the interior left edge (header stays flush).
+        let grid_band = grid_band.inset(Self::ABILITY_GRID_LEFT_MARGIN_CELLS * 2, 0, 0, 0);
         let grid_cols = engine_render::flex(
             grid_band,
             engine_render::FlexStyle {
@@ -182,26 +195,18 @@ impl RosterManager {
         let instructions_header =
             engine_render::DotRect { h: instr_header_left.h.min(4), ..instr_header_left };
 
-        // `edit_button` clamps to `.min(4)` too, for a DIFFERENT reason than
-        // the two header clamps above: `engine_render::Button` renders at
-        // true dot precision (`set_dot_offset_down(cell_remainder().1)`,
-        // CLAUDE.md rule 5), but whenever that sub-cell y offset is nonzero,
-        // `render_button` always reserves one FULL extra cell row below its
-        // nominal cell-height to have room to shift the composed image down
-        // (`render_button`'s `extra_cells`/`target_rect` growth in
-        // `button.rs`). The details panel's interior carries a structural
-        // 2-dot y misalignment (`DETAILS_PANEL_TOP_LIFT_DOTS` -
-        // `DETAILS_PANEL_TOP_GROWTH_DOTS`, `layout.rs`), so at the FULL
-        // band height (8 dots = 2 cell rows) the button's real painted
-        // footprint needs 2 nominal rows + 1 padding row = 3 rows, bleeding
-        // 1 row past the header band into the preview region's own top row
-        // (confirmed by direct buffer inspection: button pixels landing in
-        // `preview`'s first cell row, clobbering `render_instructions`'
-        // text there). Clamping to 4 dots (1 cell) keeps the worst case
-        // (1 nominal row + 1 padding row = 2 rows) inside the header band's
-        // 2 rows, so the button never paints past its own band regardless
-        // of the sub-cell offset.
-        let edit_button = engine_render::DotRect { h: edit_button_band.h.min(4), ..edit_button_band };
+        // The Edit button is a 3-cell-tall rounded-rect outline (see
+        // `EDIT_BUTTON_H_CELLS`): keep its BOTTOM edge aligned to the header
+        // band's bottom and grow UPWARD one cell into the blank
+        // `ABILITIES_INSTRUCTIONS` gap above, so it never paints DOWN into the
+        // preview text below. It draws its own border+label (`render_edit_button`),
+        // not through `engine_render::Button`, so there is no extra-row padding
+        // hazard to clamp against.
+        let edit_button = engine_render::DotRect {
+            y: edit_button_band.y + edit_button_band.h - Self::EDIT_BUTTON_H_CELLS * 4,
+            h: Self::EDIT_BUTTON_H_CELLS * 4,
+            ..edit_button_band
+        };
 
         PanelRegions {
             stamina,
