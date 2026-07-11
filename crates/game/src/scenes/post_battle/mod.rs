@@ -11,8 +11,7 @@ use serde_json::Value as JsonValue;
 use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use crate::scene_id::SceneId;
 
-mod bars;
-mod columns;
+pub(crate) mod columns;
 mod glow;
 mod spoils;
 

@@ -12,6 +12,8 @@ pub mod main_hub;
 pub mod roster_manager;
 pub mod post_battle;
 
+pub(crate) mod bars;
+
 #[cfg(test)]
 mod test_util;
 

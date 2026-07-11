@@ -2,8 +2,9 @@
 //! **exactly 1 cell (4 dots) tall**, a fill fraction, and a fill color, paints
 //! a slim bar with white rounded end-caps marking the track ends and a
 //! proportional colored interior fill between them. There is NO top/bottom
-//! border — the two caps are the only chrome. This is the single routine both
-//! the XP bar and the stamina bar consume.
+//! border — the two caps are the only chrome. This is the single routine
+//! shared across scenes: the post-battle XP/stamina rows and the roster
+//! manager's stamina row all consume it.
 
 use ratatui::buffer::Buffer;
 
@@ -11,14 +12,14 @@ use engine_core::color::Rgba;
 use engine_render::dots::Dot;
 use engine_render::{Align, Basis, Direction, DotRect, FlexChild, FlexStyle, Justify};
 
-use super::columns::blit_dots;
+use crate::scenes::post_battle::columns::blit_dots;
 
 /// White end-cap color (`0xffffff`) — the only chrome on the bar.
-pub(super) const CAP_COLOR: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
+pub(crate) const CAP_COLOR: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
 /// Width (dots) reserved for the row label ("STA"/"XP"), left of the bar.
-pub(super) const ROW_LABEL_W_DOTS: i32 = 8;
+pub(crate) const ROW_LABEL_W_DOTS: i32 = 8;
 /// Dot gap between the row label and the bar.
-pub(super) const ROW_LABEL_GAP_DOTS: i32 = 2;
+pub(crate) const ROW_LABEL_GAP_DOTS: i32 = 2;
 
 /// Paints, into `target` (expected exactly 4 dots tall), a thin capsule bar:
 /// a white rounded end-cap at the leftmost and rightmost dot column (its top
@@ -28,7 +29,7 @@ pub(super) const ROW_LABEL_GAP_DOTS: i32 = 2;
 /// No top/bottom border. Placed sub-cell precise via `columns::blit_dots`.
 ///
 /// Wired in by the XP bar and the stamina bar.
-pub(super) fn draw_bar(buf: &mut Buffer, target: DotRect, fraction: f32, fill_color: Rgba) {
+pub(crate) fn draw_bar(buf: &mut Buffer, target: DotRect, fraction: f32, fill_color: Rgba) {
     if target.w <= 0 || target.h <= 0 {
         return;
     }
@@ -65,7 +66,7 @@ pub(super) fn draw_bar(buf: &mut Buffer, target: DotRect, fraction: f32, fill_co
 /// within `row`, split via `flex` (Row, gap `ROW_LABEL_GAP_DOTS`). Shared by
 /// the XP row and the stamina row so both consume the exact same label|bar
 /// composition.
-pub(super) fn draw_labeled_bar(
+pub(crate) fn draw_labeled_bar(
     buf: &mut Buffer,
     row: DotRect,
     text: &str,

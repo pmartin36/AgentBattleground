@@ -202,7 +202,7 @@ pub(super) fn render(scene: &PostBattle, buf: &mut Buffer, creature_area: DotRec
         );
 
         let frac = xp_fill_fraction(creature.xp(), scene.xp_gained[i], scene.elapsed);
-        super::bars::draw_labeled_bar(
+        crate::scenes::bars::draw_labeled_bar(
             buf,
             layout.xp,
             "XP",
@@ -212,7 +212,7 @@ pub(super) fn render(scene: &PostBattle, buf: &mut Buffer, creature_area: DotRec
         );
 
         let stamina_percent = creature.stamina().percent();
-        super::bars::draw_labeled_bar(
+        crate::scenes::bars::draw_labeled_bar(
             buf,
             layout.stamina,
             "STA",
@@ -230,7 +230,7 @@ pub(super) fn render(scene: &PostBattle, buf: &mut Buffer, creature_area: DotRec
 /// centering never shifts it). Every column element (frame, sprite, and
 /// b4-t5's glow ring) must route through this — never re-floor a `DotRect`
 /// anywhere else in the column path (CLAUDE.md rule 5).
-pub(super) fn blit_dots(buf: &mut Buffer, target: DotRect, dots: &DotBuffer) {
+pub(crate) fn blit_dots(buf: &mut Buffer, target: DotRect, dots: &DotBuffer) {
     let (dx, dy) = target.cell_remainder();
     let cell_rect = target.to_cell_rect();
 
