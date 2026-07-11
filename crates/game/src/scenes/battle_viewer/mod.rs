@@ -214,7 +214,17 @@ impl BattleViewer {
             }
             let w = (line.chars().count() as u16).min(area.width);
             let x = area.right().saturating_sub(w);
-            engine_render::label(buf, Rect::new(x, y, w, 1), line, Self::HELP_TEXT_COLOR);
+            engine_render::label(
+                buf,
+                Rect::new(x, y, w, 1),
+                line,
+                engine_render::TextAlign::Center,
+                ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(
+                    Self::HELP_TEXT_COLOR.r,
+                    Self::HELP_TEXT_COLOR.g,
+                    Self::HELP_TEXT_COLOR.b,
+                )),
+            );
         }
     }
 }

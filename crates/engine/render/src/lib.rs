@@ -41,6 +41,14 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use engine_core::color::Rgba;
 
+/// Horizontal alignment for text rendering (`label`, `wrapped_text`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextAlign {
+    Left,
+    Center,
+    Right,
+}
+
 /// Fully-lit braille glyph (all 8 dots): U+28FF.
 const FULL: char = '⣿';
 
@@ -62,26 +70,116 @@ pub fn fill(buf: &mut Buffer, area: Rect, color: Rgba) {
     }
 }
 
-/// Draw `text` as a single centered line over `area` (clamped to `buf`), in
-/// `color`. Truncated to fit; no wrapping.
+/// Draw `text` as a single line over `area` (clamped to `buf`), placed
+/// horizontally per `align` and vertically centered. Truncated to fit; no
+/// wrapping. `style` (fg + any modifiers, e.g. `Modifier::UNDERLINED`) is
+/// applied whole to every written cell.
 ///
-/// `color` is a required, explicit parameter — not a "default" style — because
-/// `Style::default()`'s unset foreground renders as `Color::Reset` (the
-/// terminal's own default), which is illegible against a caller's own tinted
-/// background more often than not (confirmed: this is exactly why the main
-/// menu's button labels were invisible). Every caller must pick a color that
-/// actually contrasts with whatever it draws underneath.
-pub fn label(buf: &mut Buffer, area: Rect, text: &str, color: Rgba) {
+/// `style` must carry a legible foreground — not `Style::default()`'s unset
+/// foreground, which renders as `Color::Reset` (the terminal's own default),
+/// illegible against a caller's own tinted background more often than not
+/// (confirmed: this is exactly why the main menu's button labels were
+/// invisible). Every caller must pick a color that actually contrasts with
+/// whatever it draws underneath.
+pub fn label(buf: &mut Buffer, area: Rect, text: &str, align: TextAlign, style: Style) {
     let inter = area.intersection(buf.area);
     if inter.is_empty() {
         return;
     }
     let text_w = text.chars().count() as u16;
     let y = inter.top() + inter.height / 2;
-    let x = inter.left() + inter.width.saturating_sub(text_w) / 2;
+    let x = match align {
+        TextAlign::Left => inter.left(),
+        TextAlign::Center => inter.left() + inter.width.saturating_sub(text_w) / 2,
+        TextAlign::Right => inter.right().saturating_sub(text_w).max(inter.left()),
+    };
     let max_width = inter.right().saturating_sub(x) as usize;
-    let style = Style::default().fg(Color::Rgb(color.r, color.g, color.b));
     buf.set_stringn(x, y, text, max_width, style);
+}
+
+/// Word-wrap `text` to `area` width and draw it top-down, one wrapped row per
+/// line, each row placed horizontally per `align`; clipped to `area` height.
+/// An over-long single token is broken by character. When `ellipsis` is true
+/// AND the wrapped text overflows the visible rows, the last visible row ends
+/// with a single `…` (one tail ellipsis for the whole block). `style` (fg +
+/// modifiers) applies to every written cell; a legible fg is still required
+/// (same `Color::Reset` caveat as `label`).
+pub fn wrapped_text(
+    buf: &mut Buffer,
+    area: Rect,
+    text: &str,
+    align: TextAlign,
+    style: Style,
+    ellipsis: bool,
+) {
+    let inter = area.intersection(buf.area);
+    if inter.is_empty() {
+        return;
+    }
+    let width = inter.width as usize;
+    let max_rows = inter.height as usize;
+
+    let mut lines = wrap_to_width(text, width);
+    let overflow = lines.len() > max_rows;
+    lines.truncate(max_rows);
+
+    if ellipsis && overflow {
+        if let Some(last) = lines.last_mut() {
+            let keep = width.saturating_sub(1);
+            let mut s: String = last.chars().take(keep).collect();
+            s.push('…');
+            *last = s;
+        }
+    }
+
+    for (i, line) in lines.iter().enumerate() {
+        let row = Rect::new(inter.x, inter.top() + i as u16, inter.width, 1);
+        label(buf, row, line, align, style);
+    }
+}
+
+/// Greedy word-wrap `text` to `width` characters per line. Words never split
+/// at a space boundary; a single word longer than `width` is broken by
+/// character into `width`-char chunks.
+fn wrap_to_width(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    if width == 0 {
+        return lines;
+    }
+    let mut current = String::new();
+
+    for word in text.split_whitespace() {
+        let word_len = word.chars().count();
+        if word_len > width {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+            }
+            let chars: Vec<char> = word.chars().collect();
+            for chunk in chars.chunks(width) {
+                current = chunk.iter().collect();
+                if current.chars().count() == width {
+                    lines.push(std::mem::take(&mut current));
+                }
+            }
+            continue;
+        }
+
+        if current.is_empty() {
+            current = word.to_string();
+        } else if current.chars().count() + 1 + word_len <= width {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            lines.push(std::mem::take(&mut current));
+            current = word.to_string();
+        }
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+
+    lines
 }
 
 /// Paint a bundled raster asset (`bytes`, e.g. `game::assets::DOT_FILLED`)
@@ -199,8 +297,14 @@ mod tests {
 
     // ----------------------------------------------------------------- label
 
-    /// A string shorter than the area's width must appear centered on the
-    /// middle row, starting at `left + (width - len) / 2`.
+    fn white_style() -> Style {
+        Style::default().fg(Color::Rgb(0xff, 0xff, 0xff))
+    }
+
+    /// `TextAlign::Center`: a string shorter than the area's width must
+    /// appear centered on the middle row, starting at
+    /// `left + (width - len) / 2` — byte-identical to the pre-migration
+    /// centered behavior every existing caller relies on.
     #[test]
     fn label_centers_text_in_area() {
         let w: u16 = 10;
@@ -208,7 +312,7 @@ mod tests {
         let mut buf = make_buf(w, h);
         let area = Rect::new(0, 0, w, h);
 
-        label(&mut buf, area, "Hi", Rgba::rgb(0xff, 0xff, 0xff));
+        label(&mut buf, area, "Hi", TextAlign::Center, white_style());
 
         // Expected row: h/2 = 2; expected x start: (10 - 2) / 2 = 4
         let expected_y = h / 2;
@@ -237,7 +341,7 @@ mod tests {
         let mut buf = make_buf(5, 3);
         let area = Rect::new(0, 0, 5, 3);
         // "Hello!!" is 7 chars, wider than 5
-        label(&mut buf, area, "Hello!!", Rgba::rgb(0xff, 0xff, 0xff));
+        label(&mut buf, area, "Hello!!", TextAlign::Center, white_style());
 
         // Nothing must appear at x == 5 (which would be outside the 0..5 area)
         // The buffer is only 5 wide so x=5 doesn't exist — we verify col 4 is
@@ -253,6 +357,196 @@ mod tests {
             "⣿",
             "label should not write braille glyphs"
         );
+    }
+
+    /// `TextAlign::Left`: the first char must land at `area.left()`.
+    #[test]
+    fn label_left_places_text_at_area_left() {
+        let mut buf = make_buf(10, 3);
+        let area = Rect::new(0, 0, 10, 3);
+
+        label(&mut buf, area, "Hi", TextAlign::Left, white_style());
+
+        let y = 3 / 2;
+        assert_eq!(buf.cell((0, y)).unwrap().symbol(), "H");
+        assert_eq!(buf.cell((1, y)).unwrap().symbol(), "i");
+    }
+
+    /// `TextAlign::Right`: the text's right edge must be flush to
+    /// `area.right()` — the last char lands at `area.right() - 1`.
+    #[test]
+    fn label_right_places_text_flush_to_area_right() {
+        let w: u16 = 10;
+        let mut buf = make_buf(w, 3);
+        let area = Rect::new(0, 0, w, 3);
+
+        label(&mut buf, area, "Hi", TextAlign::Right, white_style());
+
+        let y = 3 / 2;
+        assert_eq!(buf.cell((w - 2, y)).unwrap().symbol(), "H");
+        assert_eq!(buf.cell((w - 1, y)).unwrap().symbol(), "i");
+    }
+
+    /// `TextAlign::Right` with text wider than the area must clamp to
+    /// `area.left()` (not underflow / panic) and still truncate cleanly.
+    #[test]
+    fn label_right_overlong_text_clamps_to_area_left_no_panic() {
+        let mut buf = make_buf(5, 3);
+        let area = Rect::new(0, 0, 5, 3);
+
+        label(&mut buf, area, "Hello!!", TextAlign::Right, white_style());
+
+        let y = 3 / 2;
+        assert_eq!(
+            buf.cell((0, y)).unwrap().symbol(),
+            "H",
+            "overlong Right-aligned text must start at area.left()"
+        );
+    }
+
+    /// `style`'s modifiers (e.g. `Modifier::UNDERLINED`) must be applied to
+    /// every written cell, not just the foreground color.
+    #[test]
+    fn label_applies_style_modifier_to_written_cells() {
+        use ratatui::style::Modifier;
+
+        let mut buf = make_buf(10, 3);
+        let area = Rect::new(0, 0, 10, 3);
+        let style = Style::default()
+            .fg(Color::Rgb(0x11, 0x22, 0x33))
+            .add_modifier(Modifier::UNDERLINED);
+
+        label(&mut buf, area, "Hi", TextAlign::Left, style);
+
+        let y = 3 / 2;
+        let cell = buf.cell((0, y)).unwrap();
+        assert_eq!(cell.fg, Color::Rgb(0x11, 0x22, 0x33));
+        assert!(
+            cell.modifier.contains(Modifier::UNDERLINED),
+            "label must apply style's modifier to written cells"
+        );
+    }
+
+    // ------------------------------------------------------------ wrapped_text
+
+    /// Collect the text of each row in `area` as a trimmed string (trailing
+    /// spaces stripped), for row-by-row wrap assertions.
+    fn row_text(buf: &Buffer, area: Rect, row: u16) -> String {
+        (area.left()..area.right())
+            .map(|x| buf.cell((x, row)).unwrap().symbol().chars().next().unwrap_or(' '))
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    /// A paragraph longer than one row must wrap onto multiple rows, one word
+    /// per row within the fit, with words never split at a space boundary.
+    #[test]
+    fn wrapped_text_wraps_paragraph_to_expected_rows() {
+        let mut buf = make_buf(6, 4);
+        let area = Rect::new(0, 0, 6, 4);
+        // "one two three" at width 6: "one" (3) fits, "one two" (7) doesn't ->
+        // row0 "one", row1 "two", row2 "three" (5, fits).
+        wrapped_text(&mut buf, area, "one two three", TextAlign::Left, white_style(), false);
+
+        assert_eq!(row_text(&buf, area, 0), "one");
+        assert_eq!(row_text(&buf, area, 1), "two");
+        assert_eq!(row_text(&buf, area, 2), "three");
+    }
+
+    /// When `ellipsis: true` and the wrapped block overflows the visible
+    /// rows, the LAST visible row must end in a single `…`; earlier visible
+    /// rows must not.
+    #[test]
+    fn wrapped_text_ellipsis_overflow_last_row_ends_in_ellipsis() {
+        let mut buf = make_buf(6, 2);
+        let area = Rect::new(0, 0, 6, 2);
+        // Wraps to 3 rows ("one","two","three") but area.height == 2, so it
+        // overflows; only rows 0..2 are visible, row1 ("two") must gain "…".
+        wrapped_text(&mut buf, area, "one two three", TextAlign::Left, white_style(), true);
+
+        assert_eq!(row_text(&buf, area, 0), "one");
+        let last_row = row_text(&buf, area, 1);
+        assert!(
+            last_row.ends_with('…'),
+            "last visible row must end with an ellipsis, got {last_row:?}"
+        );
+    }
+
+    /// A block that fits entirely within `area.height` must produce NO
+    /// ellipsis anywhere, even when `ellipsis: true`.
+    #[test]
+    fn wrapped_text_fitting_block_has_no_ellipsis() {
+        let mut buf = make_buf(6, 4);
+        let area = Rect::new(0, 0, 6, 4);
+        wrapped_text(&mut buf, area, "one two three", TextAlign::Left, white_style(), true);
+
+        for row in 0..4u16 {
+            let text = row_text(&buf, area, row);
+            assert!(
+                !text.contains('…'),
+                "a fitting block must have no ellipsis anywhere, row {row} was {text:?}"
+            );
+        }
+    }
+
+    /// A single token with no spaces, longer than `area.width`, must be
+    /// broken across rows by character (not dropped, not left unclipped).
+    #[test]
+    fn wrapped_text_breaks_overlong_token_by_char() {
+        let mut buf = make_buf(4, 3);
+        let area = Rect::new(0, 0, 4, 3);
+        // "ABCDEFGH" (8 chars) at width 4 -> "ABCD" / "EFGH", no spaces.
+        wrapped_text(&mut buf, area, "ABCDEFGH", TextAlign::Left, white_style(), false);
+
+        assert_eq!(row_text(&buf, area, 0), "ABCD");
+        assert_eq!(row_text(&buf, area, 1), "EFGH");
+    }
+
+    /// Each wrapped row is placed per `align` independently of the other
+    /// rows' lengths — `TextAlign::Right` must flush every row's own text to
+    /// `area.right()`, not to the longest row's width.
+    #[test]
+    fn wrapped_text_applies_alignment_per_row() {
+        let mut buf = make_buf(6, 2);
+        let area = Rect::new(0, 0, 6, 2);
+        // row0 "one" (3 chars) -> flush right ends at x=5, starts at x=3.
+        // row1 "two" (3 chars) -> same.
+        wrapped_text(&mut buf, area, "one two", TextAlign::Right, white_style(), false);
+
+        assert_eq!(buf.cell((3, 0)).unwrap().symbol(), "o");
+        assert_eq!(buf.cell((5, 0)).unwrap().symbol(), "e");
+        assert_eq!(buf.cell((3, 1)).unwrap().symbol(), "t");
+        assert_eq!(buf.cell((5, 1)).unwrap().symbol(), "o");
+    }
+
+    /// Empty text and a zero-area rect must draw nothing and must not panic.
+    #[test]
+    fn wrapped_text_zero_area_and_empty_text_no_panic() {
+        let mut buf = make_buf(4, 3);
+
+        // Zero-width area with non-empty text.
+        wrapped_text(
+            &mut buf,
+            Rect::new(0, 0, 0, 3),
+            "hello",
+            TextAlign::Left,
+            white_style(),
+            true,
+        );
+        for y in 0..3u16 {
+            for x in 0..4u16 {
+                assert_eq!(buf.cell((x, y)).unwrap().symbol(), " ");
+            }
+        }
+
+        // Empty text with a non-zero area.
+        wrapped_text(&mut buf, Rect::new(0, 0, 4, 3), "", TextAlign::Left, white_style(), true);
+        for y in 0..3u16 {
+            for x in 0..4u16 {
+                assert_eq!(buf.cell((x, y)).unwrap().symbol(), " ");
+            }
+        }
     }
 }
 

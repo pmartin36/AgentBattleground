@@ -8,6 +8,7 @@ use std::ops::{Deref, DerefMut};
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
+use ratatui::style::{Color, Style};
 use engine_core::color::Rgba;
 
 /// Visual/interaction state of a [`Button`].
@@ -407,7 +408,8 @@ impl Button {
             self.dot_down,
         );
         if let Some(text) = &self.label {
-            crate::label(buf, rect, text, sc.label);
+            let style = Style::default().fg(Color::Rgb(sc.label.r, sc.label.g, sc.label.b));
+            crate::label(buf, rect, text, crate::TextAlign::Center, style);
         }
     }
 }

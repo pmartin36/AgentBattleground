@@ -113,7 +113,17 @@ pub(super) fn render(scene: &PostBattle, buf: &mut Buffer, band: DotRect) {
     let top = engine_render::flex(band, row_style, &top_children);
     let label_slot = top[0];
     if label_slot.w > 0 && label_slot.h > 0 {
-        engine_render::label(buf, label_slot.to_cell_rect(), "SPOILS", PostBattle::LABEL_COLOR);
+        engine_render::label(
+            buf,
+            label_slot.to_cell_rect(),
+            "SPOILS",
+            engine_render::TextAlign::Center,
+            ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(
+                PostBattle::LABEL_COLOR.r,
+                PostBattle::LABEL_COLOR.g,
+                PostBattle::LABEL_COLOR.b,
+            )),
+        );
     }
 
     let layouts = spoil_item_layouts(band, scene.spoils.len());
@@ -139,7 +149,17 @@ pub(super) fn render(scene: &PostBattle, buf: &mut Buffer, band: DotRect) {
 
         let desc = layout.desc;
         if desc.w > 0 && desc.h > 0 {
-            engine_render::label(buf, desc.to_cell_rect(), &spoil.description, PostBattle::LABEL_COLOR);
+            engine_render::label(
+                buf,
+                desc.to_cell_rect(),
+                &spoil.description,
+                engine_render::TextAlign::Center,
+                ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(
+                    PostBattle::LABEL_COLOR.r,
+                    PostBattle::LABEL_COLOR.g,
+                    PostBattle::LABEL_COLOR.b,
+                )),
+            );
         }
     }
 }

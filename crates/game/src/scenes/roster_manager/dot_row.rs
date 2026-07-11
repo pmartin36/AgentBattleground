@@ -109,7 +109,17 @@ impl RosterManager {
                 label_band.height,
             )
             .intersection(cell_rect);
-            engine_render::label(buf, label_rect, label, Self::DOT_LABEL_COLOR);
+            engine_render::label(
+                buf,
+                label_rect,
+                label,
+                engine_render::TextAlign::Center,
+                ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(
+                    Self::DOT_LABEL_COLOR.r,
+                    Self::DOT_LABEL_COLOR.g,
+                    Self::DOT_LABEL_COLOR.b,
+                )),
+            );
         }
     }
 }

@@ -193,7 +193,12 @@ pub(super) fn render(scene: &PostBattle, buf: &mut Buffer, creature_area: DotRec
             buf,
             layout.level.to_cell_rect(),
             &format!("LVL {}", creature.level()),
-            PostBattle::LABEL_COLOR,
+            engine_render::TextAlign::Center,
+            ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(
+                PostBattle::LABEL_COLOR.r,
+                PostBattle::LABEL_COLOR.g,
+                PostBattle::LABEL_COLOR.b,
+            )),
         );
 
         let frac = xp_fill_fraction(creature.xp(), scene.xp_gained[i], scene.elapsed);

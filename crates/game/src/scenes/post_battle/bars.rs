@@ -87,7 +87,17 @@ pub(super) fn draw_labeled_bar(
     if parts.len() < 2 {
         return;
     }
-    engine_render::label(buf, parts[0].to_cell_rect(), text, text_color);
+    engine_render::label(
+        buf,
+        parts[0].to_cell_rect(),
+        text,
+        engine_render::TextAlign::Center,
+        ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(
+            text_color.r,
+            text_color.g,
+            text_color.b,
+        )),
+    );
     draw_bar(buf, parts[1], fraction, fill_color);
 }
 

@@ -34,11 +34,13 @@ pub(crate) fn fill_and_label(
     // Leaderboard's bright amber) is light enough that dark text reads
     // clearly; this is a placeholder helper (see module doc), not worth a
     // per-caller contrast computation.
+    let color = engine_core::color::Rgba::rgb(0x10, 0x10, 0x10);
     engine_render::label(
         frame.buffer_mut(),
         area,
         name,
-        engine_core::color::Rgba::rgb(0x10, 0x10, 0x10),
+        engine_render::TextAlign::Center,
+        ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(color.r, color.g, color.b)),
     );
 }
 

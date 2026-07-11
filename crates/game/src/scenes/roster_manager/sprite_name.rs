@@ -193,7 +193,17 @@ impl RosterManager {
     /// `current_index`, identical to `render_name`/`render_dot_row`).
     pub(super) fn render_level(&self, buf: &mut Buffer, level_rect: Rect, index: usize) {
         let text = format!("LVL {}", self.creatures[index].level());
-        engine_render::label(buf, level_rect, &text, Self::LEVEL_COLOR);
+        engine_render::label(
+            buf,
+            level_rect,
+            &text,
+            engine_render::TextAlign::Center,
+            ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(
+                Self::LEVEL_COLOR.r,
+                Self::LEVEL_COLOR.g,
+                Self::LEVEL_COLOR.b,
+            )),
+        );
     }
 
 }

@@ -236,7 +236,17 @@ impl RosterManager {
                 engine_render::draw_grid(buf, draw_area, &grid);
             }
 
-            engine_render::label(buf, label, Self::stat_label(kind), Self::DOT_LABEL_COLOR);
+            engine_render::label(
+                buf,
+                label,
+                Self::stat_label(kind),
+                engine_render::TextAlign::Center,
+                ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(
+                    Self::DOT_LABEL_COLOR.r,
+                    Self::DOT_LABEL_COLOR.g,
+                    Self::DOT_LABEL_COLOR.b,
+                )),
+            );
         }
     }
 

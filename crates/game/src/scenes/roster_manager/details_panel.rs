@@ -33,7 +33,17 @@ impl RosterManager {
     /// so the rect is left entirely unpainted during a transition.
     pub(super) fn render_stamina(&self, buf: &mut Buffer, rect: Rect, index: usize) {
         let text = Self::stamina_text(self.creatures[index].stamina());
-        engine_render::label(buf, rect, &text, Self::STAMINA_COLOR);
+        engine_render::label(
+            buf,
+            rect,
+            &text,
+            engine_render::TextAlign::Center,
+            ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(
+                Self::STAMINA_COLOR.r,
+                Self::STAMINA_COLOR.g,
+                Self::STAMINA_COLOR.b,
+            )),
+        );
     }
 
     /// Builds the flat line list for `creatures[index].abilities()` (b2-t5):
@@ -71,7 +81,17 @@ impl RosterManager {
             if y >= rect.bottom() {
                 break;
             }
-            engine_render::label(buf, Rect::new(rect.x, y, rect.width, 1), &line, Self::ABILITY_COLOR);
+            engine_render::label(
+                buf,
+                Rect::new(rect.x, y, rect.width, 1),
+                &line,
+                engine_render::TextAlign::Center,
+                ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(
+                    Self::ABILITY_COLOR.r,
+                    Self::ABILITY_COLOR.g,
+                    Self::ABILITY_COLOR.b,
+                )),
+            );
         }
     }
 
