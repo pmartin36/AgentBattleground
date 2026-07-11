@@ -16,12 +16,14 @@ pub(super) const SPOILS_LABEL_W_DOTS: i32 = 14;
 pub(super) const SPOILS_GAP_DOTS: i32 = 2;
 /// Spoil box border thickness, in dots.
 pub(super) const BOX_THICKNESS: usize = 1;
-/// Spoil box corner chamfer radius, in dots.
-pub(super) const BOX_RADIUS: usize = 2;
-/// Width (dots) reserved for the candy icon, left of the description.
-pub(super) const ICON_W_DOTS: i32 = 10;
+/// Spoil box corner chamfer radius, in dots (single-dot chamfer, matching
+/// RosterManager).
+pub(super) const BOX_RADIUS: usize = 1;
+/// Side (dots) of the square candy-icon region — a 12×12-dot square (3 cells
+/// tall × 6 cells wide), vertically centered in the box interior.
+pub(super) const ICON_SIZE_DOTS: i32 = 12;
 /// Dot gap between the icon and the description text.
-pub(super) const ICON_TEXT_GAP_DOTS: i32 = 1;
+pub(super) const ICON_TEXT_GAP_DOTS: i32 = 2;
 
 /// One spoil item's computed sub-rects, all dot-precise — the shared
 /// geometry both `render` and its tests consume, never re-derived.
@@ -34,9 +36,10 @@ pub(super) struct SpoilItemLayout {
 
 /// Pure geometry: splits `band` into a label slot (`SPOILS_LABEL_W_DOTS`)
 /// and an items slot (Row flex, `count` evenly-dividing boxes, gap
-/// `SPOILS_GAP_DOTS`), then each box into `frame` / `icon` (`ICON_W_DOTS`)
-/// / `desc` (grows). Sole source of spoil-item geometry for `render` and
-/// tests.
+/// `SPOILS_GAP_DOTS`), then each box into a square `icon` (`ICON_SIZE_DOTS` ×
+/// `ICON_SIZE_DOTS`, vertically centered in the interior) and a `desc`
+/// (fills the rest, to its right). Sole source of spoil-item geometry for
+/// `render` and tests.
 pub(super) fn spoil_item_layouts(band: DotRect, count: usize) -> Vec<SpoilItemLayout> {
     let row_style = FlexStyle {
         direction: Direction::Row,
@@ -58,17 +61,6 @@ pub(super) fn spoil_item_layouts(band: DotRect, count: usize) -> Vec<SpoilItemLa
         (0..count).map(|_| FlexChild { basis: Basis::Fixed(0), grow: 1.0, shrink: 0.0 }).collect();
     let items = engine_render::flex(items_slot, row_style, &item_children);
 
-    let inner_style = FlexStyle {
-        direction: Direction::Row,
-        justify_content: Justify::Start,
-        align_items: Align::Stretch,
-        gap: ICON_TEXT_GAP_DOTS,
-    };
-    let inner_children = [
-        FlexChild { basis: Basis::Fixed(ICON_W_DOTS), grow: 0.0, shrink: 0.0 },
-        FlexChild { basis: Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
-    ];
-
     items
         .into_iter()
         .map(|frame| {
@@ -78,9 +70,22 @@ pub(super) fn spoil_item_layouts(band: DotRect, count: usize) -> Vec<SpoilItemLa
                 BOX_THICKNESS as i32,
                 BOX_THICKNESS as i32,
             );
-            let inner_rects = engine_render::flex(inner, inner_style, &inner_children);
-            let icon = inner_rects[0];
-            let desc = inner_rects[1];
+            // The candy icon fills a fixed square, vertically centered in the
+            // interior; the description takes the remaining width to its right.
+            let side = ICON_SIZE_DOTS.min(inner.w).min(inner.h).max(0);
+            let icon = DotRect {
+                x: inner.x,
+                y: inner.y + (inner.h - side) / 2,
+                w: side,
+                h: side,
+            };
+            let desc_x = inner.x + side + ICON_TEXT_GAP_DOTS;
+            let desc = DotRect {
+                x: desc_x,
+                y: inner.y,
+                w: (inner.x + inner.w - desc_x).max(0),
+                h: inner.h,
+            };
             SpoilItemLayout { frame, icon, desc }
         })
         .collect()

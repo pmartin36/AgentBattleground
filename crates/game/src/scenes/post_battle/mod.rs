@@ -60,7 +60,18 @@ impl PostBattle {
     /// Portrait frame border color (b4-t1) — muted slate, distinct from
     /// `TITLE_COLOR`/`DEFEAT_COLOR`. TBD placeholder.
     pub const FRAME_COLOR: Rgba = Rgba::rgb(0x80, 0x80, 0x90);
-    pub const XP_ANIM_DUR: Duration = Duration::from_millis(1200);
+    /// Seconds a *full* bar's worth of XP fill takes to ease in. The per-column
+    /// animation duration scales with the fill amount:
+    /// `dur = gained / XP_TO_NEXT_LEVEL * XP_FILL_SECONDS_PER_BAR`.
+    pub const XP_FILL_SECONDS_PER_BAR: Duration = Duration::from_secs(5);
+    /// On-screen hold before the XP fill begins easing — the "wait until the
+    /// scene is actually displayed" fallback (guards against a scene-load spike
+    /// fast-forwarding the animation).
+    pub const XP_ANIM_START_DELAY: Duration = Duration::from_millis(500);
+    /// Per-`update` `dt` clamp: a large first post-`enter` `dt` (which absorbs
+    /// scene-load/transition cost) must not fast-forward the XP animation, so
+    /// the scene-local anim clock advances by at most this much per frame.
+    pub const MAX_UPDATE_DT: Duration = Duration::from_millis(100);
     /// XP bar fill color (b4-t3) — blue, distinct from the amber title and
     /// the green/yellow/red stamina bands (b4-t4). TBD placeholder.
     pub const XP_BAR_COLOR: Rgba = Rgba::rgb(0x40, 0xa0, 0xff);
@@ -74,8 +85,9 @@ impl PostBattle {
     pub const STAMINA_MID_COLOR: Rgba = Rgba::rgb(0xe0, 0xc0, 0x40);
     /// Stamina bar fill color for `< 15` (b4-t4). TBD placeholder red.
     pub const STAMINA_LOW_COLOR: Rgba = Rgba::rgb(0xe0, 0x50, 0x40);
-    /// Fraction of the screen height reserved for the spoils band (b4-t6).
-    pub const SPOILS_BAND_FRAC: f32 = 0.25;
+    /// Fixed height (cells) of the spoils band: 2 border rows + 3 content
+    /// rows.
+    pub const SPOILS_BAND_CELLS: u16 = 5;
     /// Pulse period of the selection glow ring (b4-t5).
     pub const GLOW_PERIOD: Duration = Duration::from_millis(1000);
     /// Number of discrete color steps the glow pulse quantizes into (b4-t5).
@@ -131,9 +143,21 @@ impl PostBattle {
         }
     }
 
-    /// Dot-space top-right geometry for the home button, mirroring
-    /// `RosterManager::home_dot_rect` (chrome.rs) — inset from the right/top
-    /// edges of `area` by `EDGE_MARGIN` cells, sized `HOME_W`x`HOME_H` cells.
+    /// The cell row of the top edge of the centered VICTORY glyphs within the
+    /// title band. `braille_name::draw_name` centers `GLYPH_H` (8) dots inside
+    /// the `TITLE_BAND_H`-cell band, so the glyph top sits `(band_dots -
+    /// GLYPH_H)/2` dots below the band top. The home button shares this cell
+    /// row (change E).
+    fn title_glyph_top_cell_row(area: Rect) -> u16 {
+        let band_h_dots = Self::TITLE_BAND_H as i32 * 4;
+        let start_y = (band_h_dots - crate::braille_name::GLYPH_H as i32).max(0) / 2;
+        area.y + (start_y / 4) as u16
+    }
+
+    /// Dot-space top-right geometry for the home button — inset from the right
+    /// edge of `area` by `EDGE_MARGIN` cells, sized `HOME_W`x`HOME_H` cells,
+    /// its top edge cell-aligned to the top cell-row of the VICTORY glyphs
+    /// (change E: shares the title's top row, not floating below it).
     fn home_dot_rect(&self, area: Rect) -> engine_render::DotRect {
         let a = engine_render::DotRect {
             x: area.x as i32 * 2,
@@ -141,10 +165,11 @@ impl PostBattle {
             w: area.width as i32 * 2,
             h: area.height as i32 * 4,
         };
-        let inner = a.inset(0, Self::EDGE_MARGIN as i32 * 2, Self::EDGE_MARGIN as i32 * 4, 0);
+        let inner = a.inset(0, Self::EDGE_MARGIN as i32 * 2, 0, 0);
         let w = Self::HOME_W as i32 * 2;
         let h = Self::HOME_H as i32 * 4;
-        engine_render::DotRect { x: inner.x + inner.w - w, y: inner.y, w, h }
+        let y = Self::title_glyph_top_cell_row(area) as i32 * 4;
+        engine_render::DotRect { x: inner.x + inner.w - w, y, w, h }
     }
 
     /// Cell-space view of `home_dot_rect`, for tests only (mirrors
@@ -157,7 +182,7 @@ impl PostBattle {
     /// Single-source top-to-bottom split of the full render `area`: the
     /// title band (cell rect, `TITLE_BAND_H` cells), the creature-column band
     /// (dot-precise, the gap between title and spoils), and the spoils band
-    /// (dot-precise, the bottom `SPOILS_BAND_FRAC` of the screen). b4-t6's
+    /// (dot-precise, the bottom `SPOILS_BAND_CELLS` cells of the screen). b4-t6's
     /// spoils render must consume the same `spoils` rect this returns, never
     /// recompute it.
     fn bands(&self, area: Rect) -> (Rect, engine_render::DotRect, engine_render::DotRect) {
@@ -175,7 +200,7 @@ impl PostBattle {
             h: area.height as i32 * 4,
         };
         let title_h_dots = title.height as i32 * 4;
-        let spoils_h_dots = (area_dots.h as f32 * Self::SPOILS_BAND_FRAC).round() as i32;
+        let spoils_h_dots = (Self::SPOILS_BAND_CELLS.min(area.height) as i32) * 4;
         let spoils = engine_render::DotRect {
             x: area_dots.x,
             y: area_dots.y + area_dots.h - spoils_h_dots,
@@ -213,7 +238,11 @@ impl Scene for PostBattle {
     }
 
     fn update(&mut self, _ctx: &mut EngineCtx, dt: Duration) -> Option<Transition> {
-        self.elapsed += dt;
+        // Clamp `dt` so a large first post-`enter` frame (absorbing scene-load
+        // / transition cost) cannot fast-forward the XP animation past its
+        // start — the scene-local anim clock advances at most `MAX_UPDATE_DT`
+        // per frame (change D's load-spike guard).
+        self.elapsed += dt.min(Self::MAX_UPDATE_DT);
         None
     }
 
@@ -415,6 +444,130 @@ mod tests {
         assert_eq!(scene.spoils.len(), 2, "enter must seed exactly 2 spoils");
     }
 
+    /// Drive the LIVE scene via successive `update(dt)` calls and observe the
+    /// XP fill behavior end to end (change D — this cannot be proven by the
+    /// pure fraction function alone):
+    /// (a) a huge first `dt` (2s, simulating scene-load cost) is clamped and
+    ///     the fill HOLDS at `start` through the `XP_ANIM_START_DELAY` window;
+    /// (b) after enough on-screen time the fill EASES upward toward `end`;
+    /// (c) the animation DURATION SCALES with `gained` — a column with a larger
+    ///     `gained` reaches its `end` later than one with a smaller `gained`.
+    #[test]
+    fn xp_animation_holds_then_eases_and_duration_scales_on_live_scene() {
+        let mut scene = PostBattle::new();
+        let mut ctx = EngineCtx;
+
+        // Read the seeded start/gained for two non-crossing columns:
+        // col1 (start 30, gained 30, ease 1.5s) and col3 (start 15, gained 25,
+        // ease 1.25s). Both stay below XP_TO_NEXT_LEVEL, so no rollover
+        // complicates the fraction.
+        let (s1, g1) = (scene.creatures[1].xp(), scene.xp_gained[1]);
+        let (s3, g3) = (scene.creatures[3].xp(), scene.xp_gained[3]);
+        let start_frac1 = s1 as f32 / 100.0;
+
+        // (a) A single huge first dt must be clamped — the fill must still be
+        // holding at start (not fast-forwarded).
+        scene.update(&mut ctx, Duration::from_secs(2));
+        assert!(
+            scene.elapsed <= PostBattle::MAX_UPDATE_DT,
+            "a 2s first dt must be clamped to MAX_UPDATE_DT, got {:?}",
+            scene.elapsed
+        );
+        let held = columns::xp_fill_fraction(s1, g1, scene.elapsed);
+        assert!(
+            (held - start_frac1).abs() < 0.01,
+            "after a huge first dt the fill must still hold at start ({start_frac1}), got {held}"
+        );
+
+        // Advance to just past the start delay — still at start.
+        let mut ctx2 = EngineCtx;
+        while scene.elapsed < PostBattle::XP_ANIM_START_DELAY {
+            scene.update(&mut ctx2, PostBattle::MAX_UPDATE_DT);
+        }
+        let at_delay = columns::xp_fill_fraction(s1, g1, scene.elapsed);
+        assert!(
+            (at_delay - start_frac1).abs() < 0.02,
+            "through the start delay the fill must still hold near start ({start_frac1}), got {at_delay}"
+        );
+
+        // (b) Advance well into the ease window — the fill must have climbed.
+        while scene.elapsed < PostBattle::XP_ANIM_START_DELAY + Duration::from_millis(900) {
+            scene.update(&mut ctx2, PostBattle::MAX_UPDATE_DT);
+        }
+        let climbing = columns::xp_fill_fraction(s1, g1, scene.elapsed);
+        assert!(
+            climbing > start_frac1 + 0.02,
+            "after the delay the fill must ease upward from start ({start_frac1}), got {climbing}"
+        );
+
+        // (c) Duration scales with gained: at this same mid-animation time,
+        // col1 (gained 30 → ease 1.5s) is proportionally LESS far along its own
+        // journey than col3 (gained 25 → ease 1.25s). Both are non-crossing, so
+        // fraction*100 recovers the eased value; normalized progress =
+        // (v - start) / gained. A larger `gained` ⇒ longer ease ⇒ lower
+        // normalized progress at the same instant ⇒ it reaches `end` later.
+        let f1 = columns::xp_fill_fraction(s1, g1, scene.elapsed);
+        let f3 = columns::xp_fill_fraction(s3, g3, scene.elapsed);
+        let p1 = (f1 * 100.0 - s1 as f32) / g1 as f32;
+        let p3 = (f3 * 100.0 - s3 as f32) / g3 as f32;
+        assert!(p1 > 0.0 && p1 < 1.0, "col1 must be mid-animation, progress={p1}");
+        assert!(p3 > 0.0 && p3 < 1.0, "col3 must be mid-animation, progress={p3}");
+        assert!(
+            p3 > p1 + 0.05,
+            "col3 (smaller gained → shorter ease) must be further along its journey than \
+             col1 (larger gained → longer ease): p3={p3} p1={p1}"
+        );
+
+        // …and eventually both settle at their own end fraction.
+        while scene.elapsed < Duration::from_secs(3) {
+            scene.update(&mut ctx2, PostBattle::MAX_UPDATE_DT);
+        }
+        let end1 = (s1 + g1) as f32 / 100.0;
+        let end3 = (s3 + g3) as f32 / 100.0;
+        assert!(
+            (columns::xp_fill_fraction(s1, g1, scene.elapsed) - end1).abs() < 0.01,
+            "col1 must settle at its end fraction {end1}"
+        );
+        assert!(
+            (columns::xp_fill_fraction(s3, g3, scene.elapsed) - end3).abs() < 0.01,
+            "col3 must settle at its end fraction {end3}"
+        );
+    }
+
+    /// (change E) The home button's top edge shares the top cell-row of the
+    /// VICTORY glyphs — verified by decoding actual lit dots: the topmost lit
+    /// dot of the title glyphs and the topmost lit dot of the home button icon
+    /// fall in the SAME cell row.
+    #[test]
+    fn home_button_top_shares_title_glyph_top_cell_row() {
+        let scene = PostBattle::new();
+        let (w, h) = (100u16, 40u16);
+        let buf = render_to_buffer(&scene, w, h);
+        let area = Rect::new(0, 0, w, h);
+
+        let expected_row = PostBattle::title_glyph_top_cell_row(area);
+
+        // The home button's rect top cell-row equals the glyph top cell-row.
+        let btn = scene.home_rect(area);
+        assert_eq!(
+            btn.y, expected_row,
+            "home button top cell-row ({}) must equal the VICTORY glyph top cell-row ({expected_row})",
+            btn.y
+        );
+
+        // And the actually-rendered glyphs' topmost lit cell-row matches too:
+        // find the first row within the title band that has any lit braille cell.
+        let title_band = title_band(area);
+        let glyph_top = (title_band.top()..title_band.bottom())
+            .find(|&y| (title_band.left()..title_band.right())
+                .any(|x| engine_render::decode_braille_cell(&buf, x, y).is_some()))
+            .expect("title band must have a lit glyph row");
+        assert_eq!(
+            glyph_top, expected_row,
+            "rendered VICTORY glyphs' top lit cell-row ({glyph_top}) must equal the derived row ({expected_row})"
+        );
+    }
+
     /// (b4-t5 iter3) The frame and ring occupy DIFFERENT dot positions but
     /// routinely share the same 2x4 braille CELL at their boundary. A cell
     /// that is a genuine dot-merge decodes each pure color only in cells that
@@ -495,7 +648,13 @@ mod tests {
 
         let mut scene1 = PostBattle::new();
         let mut ctx = EngineCtx;
-        scene1.update(&mut ctx, PostBattle::GLOW_PERIOD / 2);
+        // `update` clamps each `dt` to `MAX_UPDATE_DT` (change D's load-spike
+        // guard), so advance to GLOW_PERIOD/2 across several frame-sized steps
+        // rather than one big update.
+        let steps = (PostBattle::GLOW_PERIOD / 2).as_millis() / PostBattle::MAX_UPDATE_DT.as_millis();
+        for _ in 0..steps {
+            scene1.update(&mut ctx, PostBattle::MAX_UPDATE_DT);
+        }
         let buf1 = render_to_buffer(&scene1, w, h);
 
         let color1 = glow::glow_color(PostBattle::GLOW_PERIOD / 2);

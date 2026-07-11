@@ -28,16 +28,23 @@ pub(super) const COLUMN_GAP_DOTS: i32 = 2;
 pub(super) const GLOW_MARGIN_DOTS: i32 = 1;
 /// Portrait frame border thickness, in dots.
 pub(super) const FRAME_THICKNESS: usize = 1;
-/// Portrait frame corner chamfer radius, in dots.
-pub(super) const FRAME_RADIUS: usize = 2;
-/// Height (dots) reserved for the level row.
+/// Portrait frame corner chamfer radius, in dots (single-dot chamfer, matching
+/// RosterManager).
+pub(super) const FRAME_RADIUS: usize = 1;
+/// Height (dots) reserved for the level row (1 cell).
 pub(super) const LEVEL_ROW_DOTS: i32 = 4;
-/// Height (dots) reserved for the XP row.
-pub(super) const XP_ROW_DOTS: i32 = 12;
-/// Height (dots) reserved for the stamina row.
-pub(super) const STA_ROW_DOTS: i32 = 12;
+/// Height (dots) reserved for the XP row — exactly 1 cell (thin capsule bar).
+pub(super) const XP_ROW_DOTS: i32 = 4;
+/// Height (dots) reserved for the stamina row — exactly 1 cell (thin capsule
+/// bar).
+pub(super) const STA_ROW_DOTS: i32 = 4;
 /// Dot gap between the portrait/level/xp/stamina rows.
 pub(super) const ROW_GAP_DOTS: i32 = 1;
+/// Numerator/denominator of the portrait's share of the space it could
+/// otherwise fill — deliberately compact (≈ 2/3), leaving the rest of the
+/// column empty below the bars for progression UI coming later.
+pub(super) const PORTRAIT_NUM: i32 = 2;
+pub(super) const PORTRAIT_DEN: i32 = 3;
 
 /// One creature column's computed sub-rects, all dot-precise — the shared
 /// geometry b4-t3 (level/xp), b4-t4 (stamina), and b4-t5 (glow ring, reuses
@@ -74,18 +81,28 @@ pub(super) fn column_layouts(creature_area: DotRect, count: usize) -> Vec<Column
         align_items: Align::Stretch,
         gap: ROW_GAP_DOTS,
     };
-    let col_children = [
-        FlexChild { basis: Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
-        FlexChild { basis: Basis::Fixed(LEVEL_ROW_DOTS), grow: 0.0, shrink: 0.0 },
-        FlexChild { basis: Basis::Fixed(XP_ROW_DOTS), grow: 0.0, shrink: 0.0 },
-        FlexChild { basis: Basis::Fixed(STA_ROW_DOTS), grow: 0.0, shrink: 0.0 },
-    ];
 
     columns
         .into_iter()
         .map(|col| {
             let inset_col =
                 col.inset(GLOW_MARGIN_DOTS, GLOW_MARGIN_DOTS, GLOW_MARGIN_DOTS, GLOW_MARGIN_DOTS);
+
+            // The portrait takes ≈ 2/3 of the space it *could* take (the column
+            // height minus the three fixed 1-cell rows and their gaps); the
+            // remaining ≈ 1/3 is left empty below the bars via a trailing
+            // grow-spacer. Portrait/level/xp/stamina sit flush at the top.
+            let fixed_below = LEVEL_ROW_DOTS + XP_ROW_DOTS + STA_ROW_DOTS + 3 * ROW_GAP_DOTS;
+            let portrait_could = (inset_col.h - fixed_below).max(0);
+            let frame_h = portrait_could * PORTRAIT_NUM / PORTRAIT_DEN;
+            let col_children = [
+                FlexChild { basis: Basis::Fixed(frame_h), grow: 0.0, shrink: 0.0 },
+                FlexChild { basis: Basis::Fixed(LEVEL_ROW_DOTS), grow: 0.0, shrink: 0.0 },
+                FlexChild { basis: Basis::Fixed(XP_ROW_DOTS), grow: 0.0, shrink: 0.0 },
+                FlexChild { basis: Basis::Fixed(STA_ROW_DOTS), grow: 0.0, shrink: 0.0 },
+                // Trailing empty space (reserved for future progression UI).
+                FlexChild { basis: Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
+            ];
             let rows = engine_render::flex(inset_col, col_style, &col_children);
             let frame = rows[0];
             let level = rows[1];
@@ -216,15 +233,26 @@ pub(super) fn blit_dots(buf: &mut Buffer, target: DotRect, dots: &DotBuffer) {
     draw_grid(buf, draw_area, &grid);
 }
 
-/// (b4-t3) The XP bar's displayed fill fraction at `elapsed`: eases
-/// `start -> start+gained` over `PostBattle::XP_ANIM_DUR`, then mod-wraps by
-/// `creatures::XP_TO_NEXT_LEVEL` so a column whose eased value crosses a
-/// multiple of the cap rolls the bar over (fills full, wraps to empty, keeps
-/// filling) rather than clamping at 1.0. Sole source of the fraction for
-/// both render and tests — see research.md's Tween/`rem_euclid` formula.
+/// The XP bar's displayed fill fraction at `elapsed`. The animation:
+/// - **holds at `start`** for `PostBattle::XP_ANIM_START_DELAY` of on-screen
+///   time (the anim clock is subtracted by the delay, clamped ≥ 0), then
+/// - **eases** `start -> start+gained` (`ease_in_out`) over a duration
+///   *proportional to the fill amount*: `gained / XP_TO_NEXT_LEVEL *
+///   XP_FILL_SECONDS_PER_BAR` — a full bar's worth eases over 5 s, so a larger
+///   `gained` reaches `end` later, then
+/// - **mod-wraps** by `creatures::XP_TO_NEXT_LEVEL` so a column whose eased
+///   value crosses a multiple of the cap rolls the bar over (fills full, wraps
+///   to empty, keeps filling) rather than clamping at 1.0.
 ///
+/// `elapsed` is the scene-local clock (`update` clamps `dt` per frame), so a
+/// scene-load spike cannot fast-forward past `start`. Sole source of the
+/// fraction for both render and tests.
 pub(super) fn xp_fill_fraction(start: u32, gained: u32, elapsed: Duration) -> f32 {
-    let v = Tween::new(start as f32, (start + gained) as f32, PostBattle::XP_ANIM_DUR).at(elapsed);
+    let anim_elapsed = elapsed.saturating_sub(PostBattle::XP_ANIM_START_DELAY);
+    let dur_secs = gained as f32 / XP_TO_NEXT_LEVEL as f32
+        * PostBattle::XP_FILL_SECONDS_PER_BAR.as_secs_f32();
+    let dur = Duration::from_secs_f32(dur_secs.max(0.0));
+    let v = Tween::new(start as f32, (start + gained) as f32, dur).at(anim_elapsed);
     v.rem_euclid(XP_TO_NEXT_LEVEL as f32) / XP_TO_NEXT_LEVEL as f32
 }
 
@@ -256,6 +284,19 @@ mod tests {
         let buf = Buffer::empty(Rect::new(0, 0, w_cells, h_cells));
         let creature_area = DotRect { x: 0, y: 0, w: w_cells as i32 * 2, h: h_cells as i32 * 4 };
         (scene, buf, creature_area)
+    }
+
+    /// Advance the live scene by `secs` of on-screen time via repeated
+    /// `Scene::update` calls (`update` clamps each `dt` to `MAX_UPDATE_DT`, so
+    /// a single huge `dt` cannot settle the animation — the loop mirrors real
+    /// frames). Used to drive the XP animation to rest in tests.
+    fn advance(scene: &mut PostBattle, secs: f32) {
+        let step = PostBattle::MAX_UPDATE_DT;
+        let mut ctx = engine_core::scene::EngineCtx;
+        let n = (secs / step.as_secs_f32()).ceil() as u32;
+        for _ in 0..n {
+            engine_core::scene::Scene::update(scene, &mut ctx, step);
+        }
     }
 
     /// `column_layouts` must produce exactly `count` layouts, each contained
@@ -362,9 +403,9 @@ mod tests {
         (a - b).abs() < EPS
     }
 
-    /// At `elapsed = 0` the eased `Tween` sits at `start` exactly (no
-    /// animation has played yet), so the fraction is just `start`'s own
-    /// position within the current XP-to-next-level band.
+    /// At `elapsed = 0` the eased `Tween` sits at `start` exactly (the anim
+    /// clock is still inside the start-delay hold), so the fraction is just
+    /// `start`'s own position within the current XP-to-next-level band.
     #[test]
     fn xp_fill_fraction_at_zero_elapsed_returns_start_fraction() {
         // frost_lizard-shaped column: start=30, gained=30 (never crosses).
@@ -372,34 +413,42 @@ mod tests {
         assert!(approx(frac, 0.30), "at elapsed=0 expected ~0.30, got {frac}");
     }
 
-    /// At `elapsed >= XP_ANIM_DUR` the tween rests at `start + gained`; for a
-    /// non-crossing column (`start + gained < XP_TO_NEXT_LEVEL`) the rest
-    /// fraction is simply `(start+gained)/100`.
+    /// The fill holds at `start` throughout the `XP_ANIM_START_DELAY` window —
+    /// even at the very end of the delay, no easing has begun yet.
     #[test]
-    fn xp_fill_fraction_at_full_duration_returns_end_fraction_non_crossing() {
-        let frac = xp_fill_fraction(30, 30, PostBattle::XP_ANIM_DUR);
-        assert!(approx(frac, 0.60), "at XP_ANIM_DUR expected ~0.60, got {frac}");
+    fn xp_fill_fraction_holds_at_start_through_delay() {
+        let frac = xp_fill_fraction(30, 30, PostBattle::XP_ANIM_START_DELAY);
+        assert!(approx(frac, 0.30), "at the end of the start delay expected ~0.30, got {frac}");
+    }
+
+    /// Well past the (delay + scaled duration) the tween rests at
+    /// `start + gained`; for a non-crossing column (`start + gained <
+    /// XP_TO_NEXT_LEVEL`) the rest fraction is simply `(start+gained)/100`.
+    #[test]
+    fn xp_fill_fraction_at_rest_returns_end_fraction_non_crossing() {
+        let frac = xp_fill_fraction(30, 30, Duration::from_secs(10));
+        assert!(approx(frac, 0.60), "at rest expected ~0.60, got {frac}");
     }
 
     /// For a column whose `start + gained` crosses `XP_TO_NEXT_LEVEL` (90 +
     /// 40 = 130), the rest fraction wraps to `(130 mod 100)/100 = 0.30`, not
     /// clamping at `1.0` — proving rollover, not saturation.
     #[test]
-    fn xp_fill_fraction_at_full_duration_wraps_past_cap() {
-        let frac = xp_fill_fraction(90, 40, PostBattle::XP_ANIM_DUR);
+    fn xp_fill_fraction_at_rest_wraps_past_cap() {
+        let frac = xp_fill_fraction(90, 40, Duration::from_secs(10));
         assert!(approx(frac, 0.30), "rollover rest fraction expected ~0.30, got {frac}");
     }
 
-    /// Sampling a crossing column (90, 40) either side of where its eased
-    /// value crosses 100 shows near-full then reset-toward-empty: at 200ms
-    /// (before the crossing) the fraction is high (~0.93, still climbing
-    /// toward 1.0); at 600ms (well after the crossing) the fraction is low
-    /// (~0.10) — the bar filled, wrapped, and kept filling, rather than
-    /// clamping at 1.0.
+    /// Sampling a crossing column (90, 40; delay 0.5s + 2.0s ease) either side
+    /// of where its eased value crosses 100 shows near-full then
+    /// reset-toward-empty: at 1000ms (before the crossing) the fraction is
+    /// high (~0.96, still climbing toward 1.0); at 1500ms (after the crossing)
+    /// the fraction is low (~0.10) — the bar filled, wrapped, and kept
+    /// filling, rather than clamping at 1.0.
     #[test]
     fn xp_fill_fraction_rollover_shows_near_full_then_wraps_low() {
-        let before = xp_fill_fraction(90, 40, Duration::from_millis(200));
-        let after = xp_fill_fraction(90, 40, Duration::from_millis(600));
+        let before = xp_fill_fraction(90, 40, Duration::from_millis(1000));
+        let after = xp_fill_fraction(90, 40, Duration::from_millis(1500));
 
         assert!(before > 0.85, "before the crossing expected near-full (>0.85), got {before}");
         assert!(after < 0.35, "after the crossing expected wrapped-low (<0.35), got {after}");
@@ -414,7 +463,7 @@ mod tests {
     /// wraps.
     #[test]
     fn xp_fill_fraction_non_crossing_is_monotonic_and_bounded() {
-        let samples: Vec<f32> = [0, 300, 600, 900, 1200]
+        let samples: Vec<f32> = [0, 500, 1000, 1500, 2000, 3000]
             .into_iter()
             .map(|ms| xp_fill_fraction(30, 30, Duration::from_millis(ms)))
             .collect();
@@ -425,6 +474,23 @@ mod tests {
             assert!(s + 1e-4 >= prev, "non-crossing fraction must be non-decreasing: {samples:?}");
             prev = s;
         }
+    }
+
+    /// Duration scales with fill amount: a larger `gained` reaches its `end`
+    /// LATER than a smaller one. col1 (gained 30 → 1.5s ease) and col3 (gained
+    /// 25 → 1.25s ease) are both non-crossing; sampled at 0.5s delay + 1.3s
+    /// (past col3's ease, inside col1's), col3 has settled to its end fraction
+    /// (0.40) while col1 has NOT yet reached its end (0.60).
+    #[test]
+    fn xp_fill_fraction_duration_scales_with_gained() {
+        let t = Duration::from_millis(1800); // 0.5s delay + 1.3s
+        let col1 = xp_fill_fraction(30, 30, t); // gained 30, ease 1.5s
+        let col3 = xp_fill_fraction(15, 25, t); // gained 25, ease 1.25s
+        assert!(approx(col3, 0.40), "col3 (shorter ease) must have settled to 0.40, got {col3}");
+        assert!(
+            col1 < 0.60 - EPS,
+            "col1 (longer ease) must NOT have reached its end 0.60 yet, got {col1}"
+        );
     }
 
     /// Each column paints its level line `"LVL {creature.level()}"` into
@@ -451,8 +517,7 @@ mod tests {
     #[test]
     fn xp_rollover_does_not_change_level_text() {
         let (mut scene, mut buf, creature_area) = scene_and_buffer(80, 40);
-        let mut ctx = engine_core::scene::EngineCtx;
-        engine_core::scene::Scene::update(&mut scene, &mut ctx, PostBattle::XP_ANIM_DUR);
+        advance(&mut scene, 4.0);
 
         render(&scene, &mut buf, creature_area);
         let layouts = column_layouts(creature_area, N_COLUMNS);
@@ -465,7 +530,7 @@ mod tests {
         );
     }
 
-    /// At rest (`elapsed >= XP_ANIM_DUR`), the rendered XP bar's proportional
+    /// At rest (animation settled), the rendered XP bar's proportional
     /// fill (counted as `XP_BAR_COLOR`-lit dots inside `layout.xp`) is longer
     /// for a higher rest fraction: column 1 (frost_lizard: 30+30 -> 0.60)
     /// must show more lit fill dots than column 2 (stone_golem: 90+40 ->
@@ -473,8 +538,7 @@ mod tests {
     #[test]
     fn xp_bar_fill_at_rest_is_proportional_across_columns() {
         let (mut scene, mut buf, creature_area) = scene_and_buffer(80, 40);
-        let mut ctx = engine_core::scene::EngineCtx;
-        engine_core::scene::Scene::update(&mut scene, &mut ctx, PostBattle::XP_ANIM_DUR);
+        advance(&mut scene, 4.0);
 
         render(&scene, &mut buf, creature_area);
         let layouts = column_layouts(creature_area, N_COLUMNS);
@@ -535,11 +599,11 @@ mod tests {
         render(&scene, &mut buf, creature_area);
         let layouts = column_layouts(creature_area, N_COLUMNS);
 
-        // The bar's border ring (PostBattle::FRAME_COLOR) shares `rect` with the
-        // fill, so a plain "first lit dot" scan hits the border before any fill
-        // dot regardless of implementation. Instead confirm the fill region
-        // contains at least one dot of the expected band color (mirroring the
-        // `count_fill` idiom in the sibling proportional-length test below).
+        // The bar's white end-caps share `rect` with the fill, so a plain
+        // "first lit dot" scan can hit a cap before any fill dot. Instead
+        // confirm the fill region contains at least one dot of the expected
+        // band color (mirroring the `count_fill` idiom in the sibling
+        // proportional-length test below).
         let has_fill_color = |rect: DotRect, expected: Rgba| -> bool {
             (rect.y..rect.y + rect.h)
                 .flat_map(|y| (rect.x..rect.x + rect.w).map(move |x| (x, y)))
@@ -594,7 +658,7 @@ mod tests {
     }
 
     /// The stamina bar is static: rendering at `elapsed = 0` and after
-    /// `update(XP_ANIM_DUR)` produces the identical fill color and length —
+    /// advancing the scene by several seconds produces the identical fill color and length —
     /// unlike the XP bar, stamina never animates over time.
     #[test]
     fn stamina_bar_is_static_across_elapsed() {
@@ -602,8 +666,7 @@ mod tests {
         render(&scene, &mut buf_before, creature_area);
 
         let (mut scene_after, mut buf_after, _) = scene_and_buffer(80, 40);
-        let mut ctx = engine_core::scene::EngineCtx;
-        engine_core::scene::Scene::update(&mut scene_after, &mut ctx, PostBattle::XP_ANIM_DUR);
+        advance(&mut scene_after, 4.0);
         render(&scene_after, &mut buf_after, creature_area);
 
         let layouts = column_layouts(creature_area, N_COLUMNS);
