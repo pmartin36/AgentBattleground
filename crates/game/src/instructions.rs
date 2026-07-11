@@ -92,6 +92,17 @@ pub fn write_instructions(name: &str, contents: &str) -> io::Result<()> {
     write_instructions_in(&base_data_dir(None), name, contents)
 }
 
+/// Reads `name`'s instructions via `read_instructions_in(base, name)` when
+/// `base` is `Some`, else via the runtime resolver `read_instructions(name)`.
+/// Shared by `RosterManager::reload_instructions` and `PromptEditor::new` so
+/// the base-dir-overridable fallback is defined in exactly one place.
+pub fn read_instructions_maybe(base: Option<&Path>, name: &str) -> io::Result<String> {
+    match base {
+        Some(b) => read_instructions_in(b, name),
+        None => read_instructions(name),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

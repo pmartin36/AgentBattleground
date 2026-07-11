@@ -239,10 +239,8 @@ impl RosterManager {
     /// cannot call this; it takes `&self`).
     fn reload_instructions(&mut self) {
         let name = self.creatures[self.current_index].name().to_string();
-        let read = match self.instructions_base.as_deref() {
-            Some(base) => crate::instructions::read_instructions_in(base, &name),
-            None => crate::instructions::read_instructions(&name),
-        };
+        let read =
+            crate::instructions::read_instructions_maybe(self.instructions_base.as_deref(), &name);
         self.current_instructions = read.unwrap_or_default();
     }
 
@@ -476,7 +474,13 @@ impl Scene for RosterManager {
                     self.toggle_selection();
                 }
                 if hit_edit {
-                    self.prompt_editor = Some(prompt_editor::PromptEditor::new(self.current_index));
+                    let name = self.creatures[self.current_index].name().to_string();
+                    let base = self.instructions_base.clone();
+                    self.prompt_editor = Some(prompt_editor::PromptEditor::new(
+                        self.current_index,
+                        &name,
+                        base.as_deref(),
+                    ));
                 }
             }
         }
