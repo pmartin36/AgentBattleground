@@ -103,6 +103,17 @@ pub fn read_instructions_maybe(base: Option<&Path>, name: &str) -> io::Result<St
     }
 }
 
+/// `name`'s instructions path when `base` overrides the default resolver
+/// (`Some`) vs the runtime resolver (`None`) — exact parallel of
+/// `read_instructions_maybe`, used by `PromptEditor::render` (b2-t2) to show
+/// the path actually in use (temp base in tests, runtime resolver in prod).
+pub fn instructions_path_maybe(base: Option<&Path>, name: &str) -> PathBuf {
+    match base {
+        Some(b) => instructions_path_in(b, name),
+        None => instructions_path(name),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +192,18 @@ mod tests {
         assert_eq!(read_back, "second version");
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// `instructions_path_maybe` dispatches to `instructions_path_in` when
+    /// `base` is `Some`, and to `instructions_path` (runtime resolver) when
+    /// `None` — exact parallel of `read_instructions_maybe` (b2-t2).
+    #[test]
+    fn instructions_path_maybe_dispatches_on_base() {
+        let base = temp_base_dir("path-maybe");
+        let name = "Maybe Creature";
+
+        assert_eq!(instructions_path_maybe(Some(&base), name), instructions_path_in(&base, name));
+        assert_eq!(instructions_path_maybe(None, name), instructions_path(name));
     }
 
     #[test]

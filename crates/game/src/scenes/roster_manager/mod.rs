@@ -431,6 +431,12 @@ impl Scene for RosterManager {
                 }
             }
         }
+
+        // Prompt-editor popup (spec 51) — topmost overlay, occludes the
+        // roster beneath while open.
+        if let Some(popup) = &self.prompt_editor {
+            popup.render(frame, area);
+        }
     }
 
     fn handle_input(&mut self, ev: InputEvent) -> Option<Transition> {
