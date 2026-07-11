@@ -70,6 +70,71 @@ impl Ability {
     }
 }
 
+/// The elemental affinity of an ability. `label()` is the single source of
+/// display text — callers must never re-match on the variant themselves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Element {
+    Normal,
+    Fire,
+    Water,
+    Earth,
+    Lightning,
+}
+
+impl Element {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Element::Normal => "Normal",
+            Element::Fire => "Fire",
+            Element::Water => "Water",
+            Element::Earth => "Earth",
+            Element::Lightning => "Lightning",
+        }
+    }
+}
+
+/// Whether an ability attacks, buffs, or debuffs. `label()` is the single
+/// source of display text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbilityType {
+    Attack,
+    Buff,
+    Debuff,
+}
+
+impl AbilityType {
+    pub fn label(&self) -> &'static str {
+        match self {
+            AbilityType::Attack => "Attack",
+            AbilityType::Buff => "Buff",
+            AbilityType::Debuff => "Debuff",
+        }
+    }
+}
+
+/// Physical vs. magic damage. `label()` is the single source of display
+/// text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DamageClass {
+    Physical,
+    Magic,
+}
+
+impl DamageClass {
+    pub fn label(&self) -> &'static str {
+        match self {
+            DamageClass::Physical => "Physical",
+            DamageClass::Magic => "Magic",
+        }
+    }
+}
+
+/// A named status effect an ability may inflict/apply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusEffect {
+    pub name: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,5 +217,26 @@ mod tests {
         let ability = Ability::new("Roar", mods.clone());
         assert_eq!(ability.description(), "Roar");
         assert_eq!(ability.modifiers(), mods.as_slice());
+    }
+
+    #[test]
+    fn element_label_returns_display_string() {
+        assert_eq!(Element::Fire.label(), "Fire");
+    }
+
+    #[test]
+    fn ability_type_label_returns_display_string() {
+        assert_eq!(AbilityType::Attack.label(), "Attack");
+    }
+
+    #[test]
+    fn damage_class_label_returns_display_string() {
+        assert_eq!(DamageClass::Physical.label(), "Physical");
+    }
+
+    #[test]
+    fn status_effect_constructs_and_reads_back_name() {
+        let effect = StatusEffect { name: "Burn".to_string() };
+        assert_eq!(effect.name, "Burn");
     }
 }
