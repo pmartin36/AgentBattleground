@@ -4,7 +4,7 @@
 //! 6 near-identical files (name, GIF path, and function identifier are the
 //! only things that ever differed between them).
 
-use crate::ability::{Ability, Modifier};
+use crate::ability::{Ability, AbilityType, DamageClass, Element, Modifier, StatusEffect};
 use crate::squad_role::{squad_role, SquadRole, ACTIVE_SLOTS, BENCH_SLOTS};
 use crate::stamina::Stamina;
 use crate::stats::Stats;
@@ -208,7 +208,7 @@ pub fn reassign_injured_to_reserve(roster: &mut [Creature], injured_index: usize
 /// Wraps each of the 6 bundled creatures with illustrative, distinguishing
 /// placeholder `Stats`/`level`/`abilities` (default, full `Stamina`), in
 /// `all()`'s order. Values are non-canonical placeholders (spec
-/// `34-creature-attributes-data-model.md` `Decisions (v1)`) — TODO(code-writer): implement.
+/// `34-creature-attributes-data-model.md` `Decisions (v1)`).
 pub fn demo_roster() -> Vec<Creature> {
     let entry = |creature: Creature, stats: Stats, level: u32, abilities: Vec<Ability>| -> Creature {
         creature.with_stats(stats).with_level(level).with_abilities(abilities)
@@ -219,10 +219,21 @@ pub fn demo_roster() -> Vec<Creature> {
             ember_wolf(),
             Stats { strength: 30, dexterity: 28, intelligence: 12, vitality: 15 },
             5,
-            vec![Ability::new(
-                "Placeholder ability 1",
-                vec![Modifier { name: "Modifier A".to_string(), requires: None }],
-            )],
+            vec![
+                Ability::new("Ember Fang", vec![])
+                    .with_ability_type(AbilityType::Attack)
+                    .with_element(Element::Fire)
+                    .with_class(DamageClass::Physical)
+                    .with_cost(3)
+                    .with_damage(25)
+                    .with_range(1)
+                    .with_status_effects(vec![StatusEffect { name: "Burn".to_string() }])
+                    .with_flavor("Fangs wreathed in flame, searing on contact."),
+                Ability::new("Howl", vec![])
+                    .with_ability_type(AbilityType::Buff)
+                    .with_cost(2)
+                    .with_flavor("A bone-shaking howl that steels the pack's nerve."),
+            ],
         )
         .with_xp(65)
         .with_stamina(Stamina::default().drain_from_damage(20)),
@@ -230,10 +241,20 @@ pub fn demo_roster() -> Vec<Creature> {
             frost_lizard(),
             Stats { strength: 14, dexterity: 18, intelligence: 26, vitality: 22 },
             4,
-            vec![Ability::new(
-                "Placeholder ability 1",
-                vec![Modifier { name: "Modifier A".to_string(), requires: None }],
-            )],
+            vec![
+                Ability::new("Frost Bite", vec![])
+                    .with_ability_type(AbilityType::Attack)
+                    .with_element(Element::Water)
+                    .with_class(DamageClass::Magic)
+                    .with_cost(2)
+                    .with_damage(18)
+                    .with_range(2)
+                    .with_flavor("A chilling bite that numbs the target's reflexes."),
+                Ability::new("Ice Shield", vec![])
+                    .with_ability_type(AbilityType::Buff)
+                    .with_cost(2)
+                    .with_flavor("Conjures a shell of hardened ice."),
+            ],
         )
         .with_xp(30)
         .with_stamina(Stamina::default().drain_from_damage(55)),
@@ -241,10 +262,20 @@ pub fn demo_roster() -> Vec<Creature> {
             stone_golem(),
             Stats { strength: 22, dexterity: 8, intelligence: 10, vitality: 34 },
             6,
-            vec![Ability::new(
-                "Placeholder ability 1",
-                vec![Modifier { name: "Modifier A".to_string(), requires: None }],
-            )],
+            vec![
+                Ability::new("Boulder Smash", vec![Modifier { name: "Modifier A".to_string(), requires: None }])
+                    .with_ability_type(AbilityType::Attack)
+                    .with_element(Element::Earth)
+                    .with_class(DamageClass::Physical)
+                    .with_cost(4)
+                    .with_damage(30)
+                    .with_range(1)
+                    .with_flavor("A ground-shaking smash of raw stone."),
+                Ability::new("Stone Skin", vec![])
+                    .with_ability_type(AbilityType::Buff)
+                    .with_cost(3)
+                    .with_flavor("Hardens the golem's hide against incoming blows."),
+            ],
         )
         .with_xp(90)
         .with_stamina(Stamina::default().drain_from_damage(40)),
@@ -252,10 +283,25 @@ pub fn demo_roster() -> Vec<Creature> {
             storm_hawk(),
             Stats { strength: 12, dexterity: 32, intelligence: 24, vitality: 12 },
             4,
-            vec![Ability::new(
-                "Placeholder ability 1",
-                vec![Modifier { name: "Modifier A".to_string(), requires: None }],
-            )],
+            vec![
+                Ability::new("Thunder Strike", vec![])
+                    .with_ability_type(AbilityType::Attack)
+                    .with_element(Element::Lightning)
+                    .with_class(DamageClass::Magic)
+                    .with_cost(3)
+                    .with_damage(22)
+                    .with_range(3)
+                    .with_status_effects(vec![StatusEffect { name: "Shock".to_string() }])
+                    .with_flavor("A bolt of lightning called down from storm clouds."),
+                Ability::new("Wind Slash", vec![])
+                    .with_ability_type(AbilityType::Attack)
+                    .with_element(Element::Normal)
+                    .with_class(DamageClass::Physical)
+                    .with_cost(1)
+                    .with_damage(10)
+                    .with_range(1)
+                    .with_flavor("A quick slash carried on razor wind."),
+            ],
         )
         .with_xp(15)
         .with_stamina(Stamina::default().drain_from_damage(90)),
@@ -263,19 +309,52 @@ pub fn demo_roster() -> Vec<Creature> {
             verdant_treant(),
             Stats { strength: 20, dexterity: 10, intelligence: 22, vitality: 30 },
             7,
-            vec![Ability::new(
-                "Placeholder ability 1",
-                vec![Modifier { name: "Modifier A".to_string(), requires: None }],
-            )],
+            vec![
+                Ability::new("Root Bind", vec![])
+                    .with_ability_type(AbilityType::Debuff)
+                    .with_element(Element::Earth)
+                    .with_class(DamageClass::Magic)
+                    .with_cost(2)
+                    .with_range(2)
+                    .with_status_effects(vec![StatusEffect { name: "Rooted".to_string() }])
+                    .with_flavor("Grasping roots erupt to snare the target's feet."),
+                Ability::new("Photosynthesis", vec![])
+                    .with_ability_type(AbilityType::Buff)
+                    .with_cost(1)
+                    .with_flavor("Draws deep from sunlight to restore vigor."),
+                Ability::new("Thorn Whip", vec![])
+                    .with_ability_type(AbilityType::Attack)
+                    .with_element(Element::Earth)
+                    .with_class(DamageClass::Physical)
+                    .with_cost(2)
+                    .with_damage(15)
+                    .with_range(2)
+                    .with_flavor("A lashing whip of woody thorns."),
+                Ability::new("Regrowth", vec![])
+                    .with_ability_type(AbilityType::Buff)
+                    .with_cost(3)
+                    .with_flavor("Knits wounds shut with rapid new growth."),
+            ],
         ),
         entry(
             shadow_cat(),
             Stats { strength: 16, dexterity: 34, intelligence: 18, vitality: 12 },
             3,
-            vec![Ability::new(
-                "Placeholder ability 1",
-                vec![Modifier { name: "Modifier A".to_string(), requires: None }],
-            )],
+            vec![
+                Ability::new("Shadow Slash", vec![])
+                    .with_ability_type(AbilityType::Attack)
+                    .with_element(Element::Normal)
+                    .with_class(DamageClass::Physical)
+                    .with_cost(2)
+                    .with_damage(20)
+                    .with_range(1)
+                    .with_status_effects(vec![StatusEffect { name: "Bleed".to_string() }])
+                    .with_flavor("A blindingly fast strike from the shadows."),
+                Ability::new("Vanish", vec![])
+                    .with_ability_type(AbilityType::Buff)
+                    .with_cost(3)
+                    .with_flavor("Slips out of sight, evading the next attack."),
+            ],
         ),
     ]
 }
@@ -621,6 +700,51 @@ mod tests {
         let distinct: HashSet<u32> = xps.iter().copied().collect();
         assert_eq!(distinct.len(), 4, "the first four seeded xp values must be distinct, got {xps:?}");
         assert!(xps.iter().any(|&x| x != 0), "all four seeded xp values were 0, expected real seeds");
+    }
+
+    /// `demo_roster()` must exercise both presence and genuine absence of
+    /// the b2-t1 optional `Ability` fields: at least one ability has every
+    /// one of the 8 new fields populated (the "fully loaded" demonstrator),
+    /// and at least one ability leaves some optional field absent (the
+    /// "omit when absent" demonstrator specs 48/49 verify against). A
+    /// rewrite that populates every field on every ability would silently
+    /// lose the absence case and must fail this test.
+    #[test]
+    fn demo_roster_exercises_present_and_absent_optional_fields() {
+        let roster = demo_roster();
+        let abilities: Vec<&Ability> = roster.iter().flat_map(|c| c.abilities()).collect();
+        assert!(!abilities.is_empty(), "demo_roster() must have at least one ability");
+
+        let fully_populated = abilities.iter().any(|a| {
+            a.ability_type().is_some()
+                && a.element().is_some()
+                && a.class().is_some()
+                && a.cost().is_some()
+                && a.damage().is_some()
+                && a.range().is_some()
+                && !a.status_effects().is_empty()
+                && a.flavor().is_some()
+        });
+        assert!(
+            fully_populated,
+            "expected at least one demo_roster() ability with all 8 new fields populated"
+        );
+
+        let has_absence = abilities.iter().any(|a| {
+            a.ability_type().is_none()
+                || a.element().is_none()
+                || a.class().is_none()
+                || a.cost().is_none()
+                || a.damage().is_none()
+                || a.range().is_none()
+                || a.status_effects().is_empty()
+        });
+        assert!(
+            has_absence,
+            "expected at least one demo_roster() ability to leave some optional field \
+             absent (\"omit when absent\" demonstrator) — a rewrite that populates every \
+             field on every ability would silently lose this case"
+        );
     }
 
     /// Guards the b3-t1 feed-forward seam: pairing the seeded xp with the
