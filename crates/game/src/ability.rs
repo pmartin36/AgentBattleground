@@ -47,6 +47,14 @@ pub const MAX_MODIFIERS: usize = 4;
 pub struct Ability {
     description: String,
     modifiers: Vec<Modifier>,
+    ability_type: Option<AbilityType>,
+    element: Option<Element>,
+    class: Option<DamageClass>,
+    cost: Option<u8>,
+    damage: Option<u32>,
+    range: Option<u8>,
+    status_effects: Vec<StatusEffect>,
+    flavor: Option<String>,
 }
 
 impl Ability {
@@ -58,7 +66,18 @@ impl Ability {
             "Ability may hold at most {MAX_MODIFIERS} modifiers, got {}",
             modifiers.len()
         );
-        Self { description: description.into(), modifiers }
+        Self {
+            description: description.into(),
+            modifiers,
+            ability_type: None,
+            element: None,
+            class: None,
+            cost: None,
+            damage: None,
+            range: None,
+            status_effects: Vec::new(),
+            flavor: None,
+        }
     }
 
     pub fn description(&self) -> &str {
@@ -67,6 +86,78 @@ impl Ability {
 
     pub fn modifiers(&self) -> &[Modifier] {
         &self.modifiers
+    }
+
+    pub fn with_ability_type(mut self, ability_type: AbilityType) -> Self {
+        self.ability_type = Some(ability_type);
+        self
+    }
+
+    pub fn with_element(mut self, element: Element) -> Self {
+        self.element = Some(element);
+        self
+    }
+
+    pub fn with_class(mut self, class: DamageClass) -> Self {
+        self.class = Some(class);
+        self
+    }
+
+    pub fn with_cost(mut self, cost: u8) -> Self {
+        self.cost = Some(cost);
+        self
+    }
+
+    pub fn with_damage(mut self, damage: u32) -> Self {
+        self.damage = Some(damage);
+        self
+    }
+
+    pub fn with_range(mut self, range: u8) -> Self {
+        self.range = Some(range);
+        self
+    }
+
+    pub fn with_status_effects(mut self, status_effects: Vec<StatusEffect>) -> Self {
+        self.status_effects = status_effects;
+        self
+    }
+
+    pub fn with_flavor(mut self, flavor: impl Into<String>) -> Self {
+        self.flavor = Some(flavor.into());
+        self
+    }
+
+    pub fn ability_type(&self) -> Option<AbilityType> {
+        self.ability_type
+    }
+
+    pub fn element(&self) -> Option<Element> {
+        self.element
+    }
+
+    pub fn class(&self) -> Option<DamageClass> {
+        self.class
+    }
+
+    pub fn cost(&self) -> Option<u8> {
+        self.cost
+    }
+
+    pub fn damage(&self) -> Option<u32> {
+        self.damage
+    }
+
+    pub fn range(&self) -> Option<u8> {
+        self.range
+    }
+
+    pub fn status_effects(&self) -> &[StatusEffect] {
+        &self.status_effects
+    }
+
+    pub fn flavor(&self) -> Option<&str> {
+        self.flavor.as_deref()
     }
 }
 
@@ -238,5 +329,44 @@ mod tests {
     fn status_effect_constructs_and_reads_back_name() {
         let effect = StatusEffect { name: "Burn".to_string() };
         assert_eq!(effect.name, "Burn");
+    }
+
+    #[test]
+    fn builder_round_trip_sets_every_new_field() {
+        let ability = Ability::new("Roar", vec![])
+            .with_ability_type(AbilityType::Debuff)
+            .with_element(Element::Lightning)
+            .with_class(DamageClass::Magic)
+            .with_cost(3)
+            .with_damage(42)
+            .with_range(5)
+            .with_status_effects(vec![StatusEffect { name: "Stun".to_string() }])
+            .with_flavor("A crackling roar.");
+
+        assert_eq!(ability.ability_type(), Some(AbilityType::Debuff));
+        assert_eq!(ability.element(), Some(Element::Lightning));
+        assert_eq!(ability.class(), Some(DamageClass::Magic));
+        assert_eq!(ability.cost(), Some(3));
+        assert_eq!(ability.damage(), Some(42));
+        assert_eq!(ability.range(), Some(5));
+        assert_eq!(
+            ability.status_effects(),
+            &[StatusEffect { name: "Stun".to_string() }]
+        );
+        assert_eq!(ability.flavor(), Some("A crackling roar."));
+    }
+
+    #[test]
+    fn fresh_ability_new_leaves_new_fields_none_and_empty() {
+        let ability = Ability::new("Roar", vec![]);
+
+        assert_eq!(ability.ability_type(), None);
+        assert_eq!(ability.element(), None);
+        assert_eq!(ability.class(), None);
+        assert_eq!(ability.cost(), None);
+        assert_eq!(ability.damage(), None);
+        assert_eq!(ability.range(), None);
+        assert!(ability.status_effects().is_empty());
+        assert_eq!(ability.flavor(), None);
     }
 }
