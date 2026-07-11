@@ -38,8 +38,9 @@ pub(super) const XP_ROW_DOTS: i32 = 4;
 /// Height (dots) reserved for the stamina row — exactly 1 cell (thin capsule
 /// bar).
 pub(super) const STA_ROW_DOTS: i32 = 4;
-/// Dot gap between the portrait/level/xp/stamina rows.
-pub(super) const ROW_GAP_DOTS: i32 = 1;
+/// Dot gap between the portrait region and the stacked text/bar rows. A whole
+/// cell (4 dots) so the rows below stay cell-aligned.
+pub(super) const PORTRAIT_TEXT_GAP_DOTS: i32 = 4;
 /// Numerator/denominator of the portrait's share of the space it could
 /// otherwise fill — deliberately compact (≈ 2/3), leaving the rest of the
 /// column empty below the bars for progression UI coming later.
@@ -59,11 +60,16 @@ pub(super) struct ColumnLayout {
 }
 
 /// Pure column geometry: `count` evenly-sized columns across `creature_area`
-/// (Row flex, gap `COLUMN_GAP_DOTS`), each inset by `GLOW_MARGIN_DOTS` (room
-/// for b4-t5's ring), then split top-to-bottom into portrait (`frame`, grows)
-/// / `level` (Fixed `LEVEL_ROW_DOTS`) / `xp` (Fixed `XP_ROW_DOTS`) / `stamina`
-/// (Fixed `STA_ROW_DOTS`) rows (Column flex, gap `ROW_GAP_DOTS`). `inner` is
-/// `frame` inset by `FRAME_THICKNESS` dots (the sprite's render target).
+/// (Row flex, gap `COLUMN_GAP_DOTS`). Each column is split top-to-bottom into a
+/// portrait region (≈ `PORTRAIT_NUM`/`PORTRAIT_DEN` of the space it could take)
+/// and three stacked 1-cell rows — `level` / `xp` / `stamina` — that are
+/// **cell-aligned**: because `creature_area.y` is a whole-cell dot row and the
+/// portrait region height is rounded to a whole number of cells, each bar row's
+/// dot-Y lands on a 4-dot (cell) boundary, so a 4-dot-tall bar renders inside a
+/// single terminal cell rather than smearing across two. The remaining ≈ 1/3 is
+/// left empty below the bars. `frame` is the portrait region inset by
+/// `GLOW_MARGIN_DOTS` (room for the selection ring); `inner` is `frame` inset by
+/// `FRAME_THICKNESS` (the sprite's render target).
 pub(super) fn column_layouts(creature_area: DotRect, count: usize) -> Vec<ColumnLayout> {
     let row_style = FlexStyle {
         direction: Direction::Row,
@@ -75,45 +81,52 @@ pub(super) fn column_layouts(creature_area: DotRect, count: usize) -> Vec<Column
         (0..count).map(|_| FlexChild { basis: Basis::Fixed(0), grow: 1.0, shrink: 0.0 }).collect();
     let columns = engine_render::flex(creature_area, row_style, &row_children);
 
-    let col_style = FlexStyle {
-        direction: Direction::Column,
-        justify_content: Justify::Start,
-        align_items: Align::Stretch,
-        gap: ROW_GAP_DOTS,
-    };
+    // The three stacked 1-cell text/bar rows, plus a 1-cell gap between the
+    // portrait and them.
+    let text_block = LEVEL_ROW_DOTS + XP_ROW_DOTS + STA_ROW_DOTS; // 12 dots = 3 cells
+    let gap_dots = PORTRAIT_TEXT_GAP_DOTS; // 1 cell
 
     columns
         .into_iter()
         .map(|col| {
-            let inset_col =
-                col.inset(GLOW_MARGIN_DOTS, GLOW_MARGIN_DOTS, GLOW_MARGIN_DOTS, GLOW_MARGIN_DOTS);
-
             // The portrait takes ≈ 2/3 of the space it *could* take (the column
-            // height minus the three fixed 1-cell rows and their gaps); the
-            // remaining ≈ 1/3 is left empty below the bars via a trailing
-            // grow-spacer. Portrait/level/xp/stamina sit flush at the top.
-            let fixed_below = LEVEL_ROW_DOTS + XP_ROW_DOTS + STA_ROW_DOTS + 3 * ROW_GAP_DOTS;
-            let portrait_could = (inset_col.h - fixed_below).max(0);
-            let frame_h = portrait_could * PORTRAIT_NUM / PORTRAIT_DEN;
-            let col_children = [
-                FlexChild { basis: Basis::Fixed(frame_h), grow: 0.0, shrink: 0.0 },
-                FlexChild { basis: Basis::Fixed(LEVEL_ROW_DOTS), grow: 0.0, shrink: 0.0 },
-                FlexChild { basis: Basis::Fixed(XP_ROW_DOTS), grow: 0.0, shrink: 0.0 },
-                FlexChild { basis: Basis::Fixed(STA_ROW_DOTS), grow: 0.0, shrink: 0.0 },
-                // Trailing empty space (reserved for future progression UI).
-                FlexChild { basis: Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
-            ];
-            let rows = engine_render::flex(inset_col, col_style, &col_children);
-            let frame = rows[0];
-            let level = rows[1];
-            let xp = rows[2];
-            let stamina = rows[3];
+            // height minus the gap and the three 1-cell rows). Round the region
+            // to a WHOLE number of cells so the rows below it stay cell-aligned.
+            let portrait_could = (col.h - gap_dots - text_block).max(0);
+            let frame_region_h = ((portrait_could * PORTRAIT_NUM / PORTRAIT_DEN) / 4) * 4;
+
+            let frame_region = DotRect { x: col.x, y: col.y, w: col.w, h: frame_region_h };
+            let frame = frame_region.inset(
+                GLOW_MARGIN_DOTS,
+                GLOW_MARGIN_DOTS,
+                GLOW_MARGIN_DOTS,
+                GLOW_MARGIN_DOTS,
+            );
             let inner = frame.inset(
                 FRAME_THICKNESS as i32,
                 FRAME_THICKNESS as i32,
                 FRAME_THICKNESS as i32,
                 FRAME_THICKNESS as i32,
             );
+
+            // Text/bar rows start at a whole-cell boundary (`col.y` is one, and
+            // both `frame_region_h` and `gap_dots` are multiples of 4). They are
+            // inset horizontally by the glow margin to align with the frame; the
+            // vertical alignment — the thing that keeps a bar in one cell — is
+            // exact.
+            let rows_x = col.x + GLOW_MARGIN_DOTS;
+            let rows_w = (col.w - 2 * GLOW_MARGIN_DOTS).max(0);
+            let text_top = col.y + frame_region_h + gap_dots;
+            let level = DotRect { x: rows_x, y: text_top, w: rows_w, h: LEVEL_ROW_DOTS };
+            let xp =
+                DotRect { x: rows_x, y: text_top + LEVEL_ROW_DOTS, w: rows_w, h: XP_ROW_DOTS };
+            let stamina = DotRect {
+                x: rows_x,
+                y: text_top + LEVEL_ROW_DOTS + XP_ROW_DOTS,
+                w: rows_w,
+                h: STA_ROW_DOTS,
+            };
+
             ColumnLayout { frame, inner, level, xp, stamina }
         })
         .collect()
