@@ -21,6 +21,7 @@ pub const RECOVERY_DURATION: Duration = Duration::from_secs(24 * 60 * 60);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Stamina {
     current: u16,
+    // TODO: replace with a prop derived from STR rather than a stored field.
     max: u16,
     injured_until: Option<Duration>,
 }
