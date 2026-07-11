@@ -72,14 +72,19 @@ pub(super) fn spoil_item_layouts(band: DotRect, count: usize) -> Vec<SpoilItemLa
             );
             // The candy icon fills a fixed square, vertically centered in the
             // interior; the description takes the remaining width to its right.
-            let side = ICON_SIZE_DOTS.min(inner.w).min(inner.h).max(0);
+            // Start the icon at the first whole cell PAST the border's cell, so
+            // it never shares a braille cell with the left border (otherwise the
+            // border occludes part of the icon in that shared cell).
+            let icon_x = (frame.x.div_euclid(2) + 1) * 2;
+            let avail_w = (inner.x + inner.w - icon_x).max(0);
+            let side = ICON_SIZE_DOTS.min(avail_w).min(inner.h).max(0);
             let icon = DotRect {
-                x: inner.x,
+                x: icon_x,
                 y: inner.y + (inner.h - side) / 2,
                 w: side,
                 h: side,
             };
-            let desc_x = inner.x + side + ICON_TEXT_GAP_DOTS;
+            let desc_x = icon_x + side + ICON_TEXT_GAP_DOTS;
             let desc = DotRect {
                 x: desc_x,
                 y: inner.y,

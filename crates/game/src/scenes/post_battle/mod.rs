@@ -168,7 +168,9 @@ impl PostBattle {
         let inner = a.inset(0, Self::EDGE_MARGIN as i32 * 2, 0, 0);
         let w = Self::HOME_W as i32 * 2;
         let h = Self::HOME_H as i32 * 4;
-        let y = Self::title_glyph_top_cell_row(area) as i32 * 4;
+        // Nudged up one braille dot from the glyph's top cell-row so the
+        // rendered home icon reads as top-aligned with the VICTORY glyphs.
+        let y = Self::title_glyph_top_cell_row(area) as i32 * 4 - 1;
         engine_render::DotRect { x: inner.x + inner.w - w, y, w, h }
     }
 
@@ -323,6 +325,21 @@ mod tests {
             .any(|(x, y)| engine_render::decode_braille_cell(buf, x, y).is_some())
     }
 
+    /// The title band clipped to stop before the home button, so glyph-color /
+    /// glyph-top scans see only the VICTORY glyphs — the home button pokes into
+    /// the band's top-right corner (and, after the 1-dot nudge, into its top
+    /// cell-row), so scanning the full band would sample the button, not text.
+    fn title_glyph_band(scene: &PostBattle, area: Rect) -> Rect {
+        let band = title_band(area);
+        let home_left = scene.home_rect(area).x;
+        Rect {
+            x: band.x,
+            y: band.y,
+            width: home_left.saturating_sub(band.x),
+            height: band.height,
+        }
+    }
+
     /// A default (Victory) scene paints lit braille cells in the title band,
     /// colored `TITLE_COLOR`.
     #[test]
@@ -337,7 +354,7 @@ mod tests {
             any_lit_cell(&buf, band),
             "victory title band must paint at least one lit braille cell"
         );
-        let color = first_lit_color(&buf, band)
+        let color = first_lit_color(&buf, title_glyph_band(&scene, area))
             .expect("title band must have a lit cell to sample color from");
         assert_eq!(color, PostBattle::TITLE_COLOR, "victory title text must be colored TITLE_COLOR");
     }
@@ -358,7 +375,7 @@ mod tests {
             any_lit_cell(&buf, band),
             "defeat title band must paint at least one lit braille cell"
         );
-        let color = first_lit_color(&buf, band)
+        let color = first_lit_color(&buf, title_glyph_band(&scene, area))
             .expect("title band must have a lit cell to sample color from");
         assert_eq!(color, PostBattle::DEFEAT_COLOR, "defeat title text must be colored DEFEAT_COLOR");
 
@@ -534,12 +551,12 @@ mod tests {
         );
     }
 
-    /// (change E) The home button's top edge shares the top cell-row of the
-    /// VICTORY glyphs — verified by decoding actual lit dots: the topmost lit
-    /// dot of the title glyphs and the topmost lit dot of the home button icon
-    /// fall in the SAME cell row.
+    /// The home button's top sits exactly one braille dot above the VICTORY
+    /// glyphs' top cell-row (a deliberate 1-dot visual nudge so the rendered
+    /// icon reads as top-aligned with the title). The glyphs' own top lit
+    /// cell-row still matches the derived row.
     #[test]
-    fn home_button_top_shares_title_glyph_top_cell_row() {
+    fn home_button_top_sits_one_dot_above_title_glyph_top() {
         let scene = PostBattle::new();
         let (w, h) = (100u16, 40u16);
         let buf = render_to_buffer(&scene, w, h);
@@ -547,19 +564,21 @@ mod tests {
 
         let expected_row = PostBattle::title_glyph_top_cell_row(area);
 
-        // The home button's rect top cell-row equals the glyph top cell-row.
-        let btn = scene.home_rect(area);
+        // The home button's top sits exactly one braille dot above the glyph
+        // top cell-row (the deliberate 1-dot nudge).
+        let btn_dot_y = scene.home_dot_rect(area).y;
         assert_eq!(
-            btn.y, expected_row,
-            "home button top cell-row ({}) must equal the VICTORY glyph top cell-row ({expected_row})",
-            btn.y
+            btn_dot_y,
+            expected_row as i32 * 4 - 1,
+            "home button top dot-y ({btn_dot_y}) must sit 1 dot above the glyph top cell-row ({expected_row} → dot {})",
+            expected_row as i32 * 4 - 1
         );
 
         // And the actually-rendered glyphs' topmost lit cell-row matches too:
         // find the first row within the title band that has any lit braille cell.
-        let title_band = title_band(area);
-        let glyph_top = (title_band.top()..title_band.bottom())
-            .find(|&y| (title_band.left()..title_band.right())
+        let glyph_band = title_glyph_band(&scene, area);
+        let glyph_top = (glyph_band.top()..glyph_band.bottom())
+            .find(|&y| (glyph_band.left()..glyph_band.right())
                 .any(|x| engine_render::decode_braille_cell(&buf, x, y).is_some()))
             .expect("title band must have a lit glyph row");
         assert_eq!(
