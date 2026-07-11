@@ -1,7 +1,6 @@
 // `panel_interior_regions`, `PanelRegions`, and the region constants below
-// are consumed by b2 (widget rendering) and b3 (hit-testing) — not yet wired
-// into any production caller. Suppress dead_code until that wiring lands.
-#![allow(dead_code)]
+// are consumed by the detail-panel render pass (widget rendering) and input
+// (ability hit-testing) in `mod.rs`.
 
 use super::*;
 

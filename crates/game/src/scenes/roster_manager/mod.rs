@@ -373,7 +373,7 @@ impl Scene for RosterManager {
         self.render_level(frame.buffer_mut(), l.level, self.current_index);
         self.render_stat_bars(frame.buffer_mut(), Self::left_col_dots(area)[0]);
         if self.active_slide().is_none() {
-            let (border, ..) = Self::details_panel_rects(area);
+            let border = Self::details_panel_rects(area);
             Self::draw_dot_border(frame.buffer_mut(), border, Self::BORDER_COLOR);
 
             let regions = Self::panel_interior_regions(area);

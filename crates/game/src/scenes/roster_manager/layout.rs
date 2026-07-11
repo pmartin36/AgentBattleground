@@ -457,38 +457,27 @@ impl RosterManager {
         Self::right_col_dots(area)[1].to_cell_rect()
     }
 
-    /// Details-panel geometry (b1-t5): `(border, ex_text, ability_text)`.
-    /// `border` is the DOT-PRECISE (not cell-floored — see `draw_dot_border`)
-    /// 1-cell-perimeter rect around the union of `right_col_dots(area)`'s
-    /// two elements (they share x/width and are stacked contiguously in y,
-    /// so the union is exact without needing `Rect::union`) — calls
-    /// `right_col_dots` directly, NOT `layout(area).stamina`/
-    /// `.ability_list`, which are already cell-floored and cannot recover
-    /// the sub-cell precision `draw_dot_border` needs (see
-    /// `right_col_dots`'s doc comment). The text rects are inset 1 cell off
-    /// every bordered edge — there is NO border between stamina and
-    /// ability_list (they share an interior boundary), so `ability_text`
-    /// keeps its top edge un-inset. Sole source of this geometry; `render()`
-    /// and tests both call this rather than re-deriving it.
-    pub(super) fn details_panel_rects(area: Rect) -> (engine_render::DotRect, Rect, Rect) {
+    /// Details-panel border geometry: the DOT-PRECISE (not cell-floored —
+    /// see `draw_dot_border`) 1-cell-perimeter rect around the union of
+    /// `right_col_dots(area)`'s two elements (they share x/width and are
+    /// stacked contiguously in y, so the union is exact without needing
+    /// `Rect::union`) — calls `right_col_dots` directly, NOT
+    /// `layout(area).stamina`/`.ability_list`, which are already cell-floored
+    /// and cannot recover the sub-cell precision `draw_dot_border` needs (see
+    /// `right_col_dots`'s doc comment). The panel interior's text regions come
+    /// from `panel_interior_regions`, not here. Sole source of this border.
+    pub(super) fn details_panel_rects(area: Rect) -> engine_render::DotRect {
         let [ex_dots, ab_dots] = Self::right_col_dots(area);
-        // `border` is a union (they share x/width and are y-contiguous), not
+        // The border is a union (they share x/width and are y-contiguous), not
         // an inset — no negative-inset API, so build it via struct-update.
-        // Deliberately NOT `.to_cell_rect()`'d here — `draw_dot_border` now
+        // Deliberately NOT `.to_cell_rect()`'d here — `draw_dot_border`
         // consumes this at dot precision directly (see its doc comment for
         // why flooring it here would silently re-introduce the bug where
         // this panel's border landed 2 dots off from stat_bar's).
-        let border = engine_render::DotRect {
+        engine_render::DotRect {
             h: ex_dots.h + ab_dots.h,
             ..ex_dots
-        };
-        // 1 cell L/R, 1 cell off the TOP border only — stamina/ability
-        // share an un-bordered interior boundary, so no bottom inset.
-        let ex_text = ex_dots.inset(2, 2, 4, 0).to_cell_rect();
-        // 1 cell L/R, 1 cell off the BOTTOM border only — no top inset
-        // (shared boundary with `ex_text` above).
-        let ability_text = ab_dots.inset(2, 2, 0, 4).to_cell_rect();
-        (border, ex_text, ability_text)
+        }
     }
 
 }
