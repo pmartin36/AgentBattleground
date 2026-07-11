@@ -13,8 +13,8 @@ use crate::dots::{Dot, DotBuffer};
 /// event = one notch, crossterm's model).
 const WHEEL_SCROLL_ROWS: usize = 3;
 
-/// Uniform ink color for the scrollbar track + thumb (see `draw_scrollbar`).
-const SCROLLBAR_COLOR: Rgba = Rgba::rgb(0x80, 0x80, 0x80);
+/// Dim ink color for the scrollbar thumb (see `draw_scrollbar`).
+const SCROLLBAR_COLOR: Rgba = Rgba::rgb(0x5a, 0x5a, 0x5a);
 
 /// How the editor's row count behaves: fixed at the caller's rect height,
 /// or grows with content up to `max_rows`.
@@ -434,16 +434,13 @@ impl TextEditor {
         self.draw_scrollbar(buf, rect);
     }
 
-    /// Draw a vertical scrollbar in the right-most terminal cell column of
-    /// `rect` through the dot pipeline, when `total_display_rows()` exceeds
+    /// Draw a vertical scrollbar THUMB in the right-most terminal cell column
+    /// of `rect` through the dot pipeline, when `total_display_rows()` exceeds
     /// the viewport height. A no-op when content fits.
     ///
-    /// Geometry (not color) distinguishes track from thumb: the track is the
-    /// right dot-column lit for the full height; the thumb additionally lights
-    /// the left dot-column for the rows it spans, bulging to 2 dots wide.
-    /// Uniform color keeps every lit dot at/above the cell's average luma, so
-    /// `dots_to_grid`'s adaptive-luma rule never drops a dot at the
-    /// track/thumb boundary.
+    /// Thumb only — no full-height track: a short 2-dot-wide dim segment sized
+    /// and positioned to the visible fraction, so it reads as a scrollbar
+    /// indicator rather than a solid bar down the field.
     fn draw_scrollbar(&self, buf: &mut Buffer, rect: Rect) {
         if rect.width == 0 || rect.height == 0 {
             return;
@@ -462,11 +459,9 @@ impl TextEditor {
         let thumb_top = self.scroll_offset * max_top / max_scroll;
 
         let mut dotbuf = DotBuffer::new(2, track_dots);
-        for row in 0..track_dots {
-            dotbuf.set(1, row, Dot::Lit(SCROLLBAR_COLOR));
-        }
         for row in thumb_top..(thumb_top + thumb_dots) {
             dotbuf.set(0, row, Dot::Lit(SCROLLBAR_COLOR));
+            dotbuf.set(1, row, Dot::Lit(SCROLLBAR_COLOR));
         }
 
         let area = Rect::new(rect.right().saturating_sub(1), rect.y, 1, rect.height);

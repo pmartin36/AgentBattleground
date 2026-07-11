@@ -565,9 +565,6 @@ fn render_respects_scroll_offset_showing_rows_from_the_offset_down() {
 
 use crate::decode_braille_cell;
 
-const TRACK_MASK: u8 = 0b1011_1000; // right dot-column bits {3,4,5,7} (dots.rs DOTS)
-const THUMB_MASK: u8 = 0b0100_0111; // left dot-column bits {0,1,2,6}
-
 /// 6 single-char logical lines rendered at width 6 -> 6 display rows;
 /// viewport height 2 -> overflow (`max_scroll_offset() == 4`). Viewport
 /// dims come from `render()`'s rect, not hand-seeded fields, so the
@@ -579,23 +576,23 @@ fn overflowing_editor_and_rect() -> (TextEditor, Rect) {
 }
 
 #[test]
-fn overflowing_content_draws_track_and_thumb_in_rightmost_column() {
+fn overflowing_content_draws_thumb_only_in_rightmost_column() {
     let (mut editor, rect) = overflowing_editor_and_rect();
     let mut buf = make_buf(rect.width, rect.height);
 
     editor.render(&mut buf, rect);
 
-    // total=6 rows, view=2 cells -> thumb is exactly 1 cell tall and sits
-    // at the top cell when scroll_offset == 0.
+    // total=6 rows, view=2 cells -> thumb is exactly 1 cell tall and sits at
+    // the top cell when scroll_offset == 0. Thumb-only: it fills the top cell
+    // (both dot columns), and there is NO full-height track, so the cell below
+    // it is empty.
     let x = rect.right() - 1;
-    let (top_mask, _) = decode_braille_cell(&buf, x, 0).expect("top cell must carry scrollbar dots");
-    assert_eq!(top_mask & TRACK_MASK, TRACK_MASK, "track is full-height lit");
-    assert_eq!(top_mask & THUMB_MASK, THUMB_MASK, "thumb bulges on the top cell at offset 0");
-
-    let (bottom_mask, _) =
-        decode_braille_cell(&buf, x, 1).expect("bottom cell must carry scrollbar dots");
-    assert_eq!(bottom_mask & TRACK_MASK, TRACK_MASK, "track is full-height lit");
-    assert_eq!(bottom_mask & THUMB_MASK, 0, "bottom cell has no thumb at offset 0");
+    let (top_mask, _) = decode_braille_cell(&buf, x, 0).expect("top cell must carry the thumb");
+    assert_eq!(top_mask, 0xFF, "thumb fills the top cell (both dot columns) at offset 0");
+    assert!(
+        decode_braille_cell(&buf, x, 1).is_none(),
+        "no full-height track: the cell below the thumb is empty at offset 0"
+    );
 }
 
 #[test]
@@ -609,17 +606,13 @@ fn thumb_moves_down_as_scroll_offset_increases() {
     editor.render(&mut buf2, rect);
 
     let x = rect.right() - 1;
-    let (top_mask, _) =
-        decode_braille_cell(&buf2, x, 0).expect("top cell must still carry track dots");
-    assert_eq!(top_mask & THUMB_MASK, 0, "thumb has moved off the top cell at max offset");
-
-    let (bottom_mask, _) =
-        decode_braille_cell(&buf2, x, 1).expect("bottom cell must carry scrollbar dots");
-    assert_eq!(
-        bottom_mask & THUMB_MASK,
-        THUMB_MASK,
-        "thumb is flush to the bottom cell at max scroll offset"
+    assert!(
+        decode_braille_cell(&buf2, x, 0).is_none(),
+        "thumb has moved off the top cell at max scroll offset"
     );
+    let (bottom_mask, _) =
+        decode_braille_cell(&buf2, x, 1).expect("bottom cell must carry the thumb");
+    assert_eq!(bottom_mask, 0xFF, "thumb is flush to the bottom cell at max scroll offset");
 }
 
 #[test]
