@@ -111,7 +111,16 @@ impl RosterManager {
             unreachable!("flex() with 8 children returns exactly 8 rects")
         };
 
-        let abilities_header = engine_render::DotRect { h: 4, ..abilities_header_band };
+        // `.min(4)` (not a bare `4`) so a collapsed band (insufficient
+        // vertical room — e.g. a short terminal) yields a genuinely
+        // zero-height header instead of one whose height claims more than
+        // the band actually has, which would make `draw_header_underline`
+        // (anchored at `header.y + header.h`) draw past the band's real
+        // bottom edge — this shipped as a real bug: at a short area the
+        // "Instructions" header (see `instructions_header` below) painted
+        // its underline 1 dot into the `dot_row` band beneath the panel.
+        let abilities_header =
+            engine_render::DotRect { h: abilities_header_band.h.min(4), ..abilities_header_band };
 
         // Ability grid: 2 columns x 2 rows, reading order [TL, TR, BL, BR].
         let grid_cols = engine_render::flex(
@@ -165,10 +174,35 @@ impl RosterManager {
                 },
             ],
         );
-        let [instr_header_left, edit_button] = instr_split[..] else {
+        let [instr_header_left, edit_button_band] = instr_split[..] else {
             unreachable!("flex() with 2 children returns exactly 2 rects")
         };
-        let instructions_header = engine_render::DotRect { h: 4, ..instr_header_left };
+        // `.min(4)` — see `abilities_header`'s comment above; same collapsed-
+        // band hazard applies here (this is the field whose forced height
+        // actually shipped the bleed-into-`dot_row` bug).
+        let instructions_header =
+            engine_render::DotRect { h: instr_header_left.h.min(4), ..instr_header_left };
+
+        // `edit_button` clamps to `.min(4)` too, for a DIFFERENT reason than
+        // the two header clamps above: `engine_render::Button` renders at
+        // true dot precision (`set_dot_offset_down(cell_remainder().1)`,
+        // CLAUDE.md rule 5), but whenever that sub-cell y offset is nonzero,
+        // `render_button` always reserves one FULL extra cell row below its
+        // nominal cell-height to have room to shift the composed image down
+        // (`render_button`'s `extra_cells`/`target_rect` growth in
+        // `button.rs`). The details panel's interior carries a structural
+        // 2-dot y misalignment (`DETAILS_PANEL_TOP_LIFT_DOTS` -
+        // `DETAILS_PANEL_TOP_GROWTH_DOTS`, `layout.rs`), so at the FULL
+        // band height (8 dots = 2 cell rows) the button's real painted
+        // footprint needs 2 nominal rows + 1 padding row = 3 rows, bleeding
+        // 1 row past the header band into the preview region's own top row
+        // (confirmed by direct buffer inspection: button pixels landing in
+        // `preview`'s first cell row, clobbering `render_instructions`'
+        // text there). Clamping to 4 dots (1 cell) keeps the worst case
+        // (1 nominal row + 1 padding row = 2 rows) inside the header band's
+        // 2 rows, so the button never paints past its own band regardless
+        // of the sub-cell offset.
+        let edit_button = engine_render::DotRect { h: edit_button_band.h.min(4), ..edit_button_band };
 
         PanelRegions {
             stamina,

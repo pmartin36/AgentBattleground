@@ -26,84 +26,12 @@ impl RosterManager {
         }
     }
 
-    /// Draws `creatures[index]`'s stamina status statically into `rect` as
-    /// plain text — no `col_offset` (b2-t4: static panel). Text, so it
-    /// renders via `engine_render::label`, never the dot pipeline
-    /// (CLAUDE.md constraint 4). The caller gates this on `active_slide()`
-    /// so the rect is left entirely unpainted during a transition.
-    pub(super) fn render_stamina(&self, buf: &mut Buffer, rect: Rect, index: usize) {
-        let text = Self::stamina_text(self.creatures[index].stamina());
-        engine_render::label(
-            buf,
-            rect,
-            &text,
-            engine_render::TextAlign::Center,
-            ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(
-                Self::STAMINA_COLOR.r,
-                Self::STAMINA_COLOR.g,
-                Self::STAMINA_COLOR.b,
-            )),
-        );
-    }
-
-    /// Builds the flat line list for `creatures[index].abilities()` (b2-t5):
-    /// per ability, its description, then (if it has any) its modifier names
-    /// joined with ", " on their own line. Single source of the line format.
-    pub(super) fn ability_lines(&self, index: usize) -> Vec<String> {
-        let mut lines = Vec::new();
-        for ability in self.creatures[index].abilities() {
-            lines.push(ability.description().to_string());
-            if !ability.modifiers().is_empty() {
-                let names = ability
-                    .modifiers()
-                    .iter()
-                    .map(|m| m.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                lines.push(names);
-            }
-        }
-        lines
-    }
-
-    /// Draws `creatures[index]`'s full ability list statically into `rect` as
-    /// plain text — one line per row, top-down, no wrapping/scrolling
-    /// (overflow degrades via `label`'s silent truncation; see research.md).
-    /// Text, so it renders via `engine_render::label`, never the dot pipeline
-    /// (CLAUDE.md constraint 4). The caller gates this on `active_slide()` so
-    /// the rect is left entirely unpainted during a transition.
-    pub(super) fn render_ability_list(&self, buf: &mut Buffer, rect: Rect, index: usize) {
-        if rect.width == 0 || rect.height == 0 {
-            return;
-        }
-        for (i, line) in self.ability_lines(index).into_iter().enumerate() {
-            let y = rect.y + i as u16;
-            if y >= rect.bottom() {
-                break;
-            }
-            engine_render::label(
-                buf,
-                Rect::new(rect.x, y, rect.width, 1),
-                &line,
-                engine_render::TextAlign::Center,
-                ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(
-                    Self::ABILITY_COLOR.r,
-                    Self::ABILITY_COLOR.g,
-                    Self::ABILITY_COLOR.b,
-                )),
-            );
-        }
-    }
-
     /// Dot-rows tall for a header underline (spec Constants, b2-t1).
-    #[allow(dead_code)] // b2-t3/b2-t4 wire the first production caller.
     pub(super) const HEADER_UNDERLINE_THICKNESS_DOTS: i32 = 2;
     /// Extra dot-width the underline runs past the header text's right edge.
-    #[allow(dead_code)]
     pub(super) const HEADER_UNDERLINE_PAD_DOTS: i32 = 2;
     /// Underline color — white, matching the header/label text color
     /// (`ABILITY_COLOR`).
-    #[allow(dead_code)]
     pub(super) const HEADER_UNDERLINE_COLOR: engine_core::color::Rgba =
         engine_core::color::Rgba::rgb(0xff, 0xff, 0xff);
 
@@ -118,13 +46,26 @@ impl RosterManager {
     /// dot-pipeline chrome (spec line 36): routed through the shared
     /// `crate::scenes::post_battle::columns::blit_dots` sub-cell placer, not
     /// a hand-rolled `dots_to_grid`/`draw_grid` call.
-    #[allow(dead_code)] // b2-t3/b2-t4 wire the first production caller.
     pub(super) fn draw_header_underline(
         buf: &mut ratatui::buffer::Buffer,
         header: engine_render::DotRect,
         text: &str,
     ) {
         if text.is_empty() {
+            return;
+        }
+        // A collapsed header (no vertical room — e.g. a short terminal;
+        // `panel_layout.rs`'s `.min(4)` clamp yields a genuine `h == 0` in
+        // this case) means the header text itself already painted nothing
+        // (`engine_render::label` no-ops on a zero-height cell rect); the
+        // underline must match by not drawing either. Without this guard,
+        // `target.y = header.y + header.h` collapses to `header.y` itself —
+        // whatever row immediately follows the (nonexistent) header band,
+        // which can be the details panel's own bottom border row — and the
+        // underline paints directly into it (a real bug first exposed once
+        // `render_instructions`/`render_abilities` were wired into
+        // production `render()`, b3-t3).
+        if header.h <= 0 {
             return;
         }
         let text_w = text.chars().count() as i32 * 2;
@@ -155,10 +96,8 @@ impl RosterManager {
     }
 
     /// Fixed dot-width of the b2-t2 stamina capsule bar (spec Constants).
-    #[allow(dead_code)] // b2-t2: wired by render_stamina_row.
     pub(super) const STAMINA_BAR_W_DOTS: i32 = 24;
     /// Dot gap between the b2-t2 stamina label slot and its bar slot.
-    #[allow(dead_code)]
     pub(super) const STAMINA_LABEL_BAR_GAP_DOTS: i32 = 2;
 
     /// Paints, into `region`, a centered (`Justify::Center`) "Stamina" label
@@ -167,7 +106,6 @@ impl RosterManager {
     /// (the injured "Exhausted: {N} days remain" form). Fill fraction is
     /// `percent/100`; fill color is `stamina_fill_color(percent)`. See
     /// research.md for the flex composition.
-    #[allow(dead_code)] // b3-t3 wires the first production caller.
     pub(super) fn render_stamina_row(
         &self,
         buf: &mut ratatui::buffer::Buffer,
@@ -225,7 +163,6 @@ impl RosterManager {
     /// Abilities (b2-t3) and Instructions (b2-t4) headers so both stay
     /// pixel-identical.
     ///
-    #[allow(dead_code)] // b3-t3 wires the first production caller.
     pub(super) fn draw_section_header(
         buf: &mut ratatui::buffer::Buffer,
         header: engine_render::DotRect,
@@ -252,7 +189,6 @@ impl RosterManager {
     /// ability (fewer than `MAX_ABILITIES`) paints nothing (blank, no
     /// placeholder/border).
     ///
-    #[allow(dead_code)] // b3-t3 wires the first production caller.
     pub(super) fn render_abilities(
         &self,
         buf: &mut ratatui::buffer::Buffer,
@@ -287,7 +223,6 @@ impl RosterManager {
     /// then the cached `current_instructions` (raw Markdown source) into
     /// `preview`, word-wrapped/clipped/tail-ellipsized via
     /// `engine_render::wrapped_text` (b2-t4).
-    #[allow(dead_code)] // b3-t3 wires the first production caller.
     pub(super) fn render_instructions(
         &self,
         buf: &mut ratatui::buffer::Buffer,
@@ -310,248 +245,146 @@ impl RosterManager {
     }
 }
 
-/// b1-t2: stamina/injury status text (upper-right), disappearing entirely
-/// during an active slide (no cross-fade), reappearing populated with the
-/// incoming creature's data once settled.
+/// b3-t3: `render()` integration — the redesigned panel (stamina row,
+/// abilities grid, instructions preview) is wired into the REAL
+/// `panel_interior_regions` geometry, replacing the retired flat
+/// `render_stamina`/`render_ability_list` panel. Re-establishes the
+/// suppress-during-slide / incoming-after-settle coverage the pruned
+/// `stamina_render_tests`/`ability_list_render_tests` modules used to carry,
+/// now against the NEW region rects.
 #[cfg(test)]
-mod stamina_render_tests {
+mod panel_integration_tests {
     use super::*;
+    use crate::ability::Ability;
     use crate::creatures::Creature;
     use crate::scenes::test_util::{key_event, rect_text, render_to_buffer};
-    use crate::stamina::Stamina;
     use crossterm::event::KeyCode;
     use engine_core::scene::EngineCtx;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
-    /// A rested creature (non-injured, real percent) renders
-    /// `"Stamina: {N}%"`, never a "days remain" form.
-    #[test]
-    fn stamina_shows_percent_for_rested_creature() {
-        let mut rm = RosterManager::new();
-        rm.creatures[0] = Creature::new("Test")
-            .with_stamina(Stamina::default().drain_from_damage(58));
-        let (w, h) = (80u16, 30u16);
-        let buf = render_to_buffer(&rm, w, h);
-        let area = Rect::new(0, 0, w, h);
-        let rect = RosterManager::stamina_rect(area);
+    static TMP_COUNTER: AtomicU32 = AtomicU32::new(0);
 
-        let text = rect_text(&buf, rect);
-        assert!(
-            text.contains("Stamina: 42%"),
-            "expected \"Stamina: 42%\" for a rested creature; got {text:?}"
-        );
-        assert!(
-            !text.contains("days remain"),
-            "a rested (non-injured) creature must not show the days-remain form; got {text:?}"
-        );
+    /// Unique per-test temp base dir, mirroring `instructions_cache_tests.rs`.
+    fn temp_base_dir(tag: &str) -> PathBuf {
+        let n = TMP_COUNTER.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!(
+            "game-roster-panel-integration-test-{}-{}-{}",
+            std::process::id(),
+            tag,
+            n
+        ))
     }
 
-    /// An injured creature (`injured_until` set) renders
-    /// `"Exhausted: {N} days remain"` instead of a percent, N derived from
-    /// `injured_until()` (24h recovery -> 1 day). Unchanged by the b1-t2
-    /// rename (spec keeps the "Exhausted" display word).
-    #[test]
-    fn stamina_shows_days_remain_for_injured_creature() {
-        let mut rm = RosterManager::new();
-        rm.creatures[0] = Creature::new("Test")
-            .with_stamina(Stamina::default().drain_from_damage(100));
-        let (w, h) = (80u16, 30u16);
-        let buf = render_to_buffer(&rm, w, h);
-        let area = Rect::new(0, 0, w, h);
-        let rect = RosterManager::stamina_rect(area);
-
-        let text = rect_text(&buf, rect);
-        assert!(
-            text.contains("Exhausted: 1 days remain"),
-            "expected \"Exhausted: 1 days remain\" for an injured creature; got {text:?}"
-        );
-        assert!(
-            !text.contains('%'),
-            "an injured creature must not show a percent form; got {text:?}"
-        );
+    fn regions() -> crate::scenes::roster_manager::panel_layout::PanelRegions {
+        RosterManager::panel_interior_regions(Rect::new(0, 0, 80, 30))
     }
 
-    /// During an active slide (at trigger and at partial progress), the
-    /// stamina status is entirely absent — no cross-fade. Asserted as the
-    /// absence of any status TEXT (ASCII alphanumerics), which tolerates the
-    /// sliding sprite that legitimately crosses this region: the sprite renders
-    /// as braille dots (never ASCII), so an alphanumeric character in the rect
-    /// can only be stamina text.
+    /// After a nav slide settles, the panel (rendered through `render()`,
+    /// not called directly) shows the INCOMING creature's ability text at
+    /// the real `ability_cells` regions and its cached instructions at the
+    /// real `preview` region — the OUTGOING creature's data must not still
+    /// appear in either.
     #[test]
-    fn stamina_hidden_during_slide() {
+    fn panel_shows_incoming_creature_after_settle() {
+        let base = temp_base_dir("settle");
+        crate::instructions::write_instructions_in(&base, "Custom Zero", "zero instructions text")
+            .expect("seed write should succeed");
+        crate::instructions::write_instructions_in(&base, "Custom One", "one instructions text")
+            .expect("seed write should succeed");
+
+        let mut rm = RosterManager::new_with_instructions_base(base.clone());
+        // Names kept <=12 chars — the ability cell is 12 cells wide, so a
+        // longer name would be silently truncated by `render_abilities`
+        // (see `abilities_render_tests`), which would make either assertion
+        // below pass/fail for the wrong reason rather than genuinely
+        // distinguishing incoming from outgoing.
+        rm.creatures[0] =
+            Creature::new("Custom Zero").with_abilities(vec![Ability::new("FireZero", vec![])]);
+        rm.creatures[1] =
+            Creature::new("Custom One").with_abilities(vec![Ability::new("IceOne", vec![])]);
+
+        let mut ctx = EngineCtx;
+        rm.handle_input(key_event(KeyCode::Right)); // nav 0 -> 1
+        rm.update(&mut ctx, RosterManager::SLIDE_DUR + Duration::from_millis(1)); // past settle
+
         let (w, h) = (80u16, 30u16);
-        let area = Rect::new(0, 0, w, h);
-        let rect = RosterManager::stamina_rect(area);
-        let has_text = |buf: &ratatui::buffer::Buffer| {
-            rect_text(buf, rect).chars().any(|c| c.is_ascii_alphanumeric())
+        let buf = render_to_buffer(&rm, w, h);
+        let regions = regions();
+
+        let ability_text: String = regions
+            .ability_cells
+            .iter()
+            .map(|c| rect_text(&buf, c.to_cell_rect()))
+            .collect();
+        assert!(
+            ability_text.contains("IceOne"),
+            "settled render must show the incoming creature's ability at an ability_cells region; got {ability_text:?}"
+        );
+        assert!(
+            !ability_text.contains("FireZero"),
+            "settled render must not still show the outgoing creature's ability; got {ability_text:?}"
+        );
+
+        let preview_text = rect_text(&buf, regions.preview.to_cell_rect());
+        assert!(
+            preview_text.contains("one instructions text"),
+            "settled render must show the incoming creature's cached instructions at the preview region; got {preview_text:?}"
+        );
+        assert!(
+            !preview_text.contains("zero instructions text"),
+            "settled render must not still show the outgoing creature's instructions; got {preview_text:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// During an active slide (at trigger and mid-progress) the panel
+    /// interior is entirely suppressed at the new region rects — no
+    /// ability text, no instructions preview text.
+    #[test]
+    fn panel_suppressed_during_slide() {
+        let base = temp_base_dir("suppress");
+        crate::instructions::write_instructions_in(&base, "Custom Zero", "zero instructions text")
+            .expect("seed write should succeed");
+
+        let mut rm = RosterManager::new_with_instructions_base(base.clone());
+        // <=12 chars, matching `panel_shows_incoming_creature_after_settle` —
+        // a longer name would be truncated by `render_abilities`, making a
+        // leaked-text check against the full string pass even if suppression
+        // silently broke.
+        rm.creatures[0] =
+            Creature::new("Custom Zero").with_abilities(vec![Ability::new("FireZero", vec![])]);
+        rm.reload_instructions();
+
+        let (w, h) = (80u16, 30u16);
+        let regions = regions();
+        let has_panel_text = |buf: &ratatui::buffer::Buffer| {
+            let ability_text: String = regions
+                .ability_cells
+                .iter()
+                .map(|c| rect_text(buf, c.to_cell_rect()))
+                .collect();
+            let preview_text = rect_text(buf, regions.preview.to_cell_rect());
+            ability_text.contains("FireZero") || preview_text.contains("zero instructions text")
         };
 
-        let mut scene = RosterManager::new();
-        scene.handle_input(key_event(KeyCode::Right)); // trigger slide, no update() yet
-        let trigger_buf = render_to_buffer(&scene, w, h);
+        rm.handle_input(key_event(KeyCode::Right)); // trigger slide, no update() yet
+        let trigger_buf = render_to_buffer(&rm, w, h);
         assert!(
-            !has_text(&trigger_buf),
-            "stamina rect must show no status text at the instant a slide triggers"
+            !has_panel_text(&trigger_buf),
+            "panel regions must show no ability/instructions text at the instant a slide triggers"
         );
 
         let mut ctx = EngineCtx;
-        scene.update(&mut ctx, Duration::from_millis(75)); // ~25% of the 300ms SLIDE_DUR
-        let mid_buf = render_to_buffer(&scene, w, h);
+        rm.update(&mut ctx, Duration::from_millis(75)); // ~25% of SLIDE_DUR
+        let mid_buf = render_to_buffer(&rm, w, h);
         assert!(
-            !has_text(&mid_buf),
-            "stamina rect must show no status text mid-slide"
-        );
-    }
-
-    /// Once the slide settles (elapsed past SLIDE_DUR), the stamina rect
-    /// shows the INCOMING (new current_index) creature's data, not the
-    /// outgoing creature's.
-    #[test]
-    fn stamina_shows_incoming_after_settle() {
-        let mut rm = RosterManager::new();
-        rm.creatures[0] = Creature::new("Rested")
-            .with_stamina(Stamina::default().drain_from_damage(58));
-        rm.creatures[1] = Creature::new("Injured")
-            .with_stamina(Stamina::default().drain_from_damage(100));
-
-        let mut ctx = EngineCtx;
-        rm.handle_input(key_event(KeyCode::Right)); // nav 0 -> 1
-        rm.update(&mut ctx, Duration::from_millis(350)); // past the 300ms SLIDE_DUR
-
-        let (w, h) = (80u16, 30u16);
-        let buf = render_to_buffer(&rm, w, h);
-        let area = Rect::new(0, 0, w, h);
-        let rect = RosterManager::stamina_rect(area);
-
-        let text = rect_text(&buf, rect);
-        assert!(
-            text.contains("Exhausted: 1 days remain"),
-            "settled render must show the incoming (index 1, injured) creature's data; got {text:?}"
-        );
-        assert!(
-            !text.contains("Stamina: 42%"),
-            "settled render must not still show the outgoing (index 0) creature's data; got {text:?}"
-        );
-    }
-}
-
-/// b2-t5: full ability list (right side, below stamina), disappearing
-/// entirely during an active slide (no cross-fade), reappearing populated
-/// with the incoming creature's abilities once settled.
-#[cfg(test)]
-mod ability_list_render_tests {
-    use super::*;
-    use crate::ability::{Ability, Modifier};
-    use crate::creatures::Creature;
-    use crate::scenes::test_util::{key_event, rect_text, render_to_buffer};
-    use crossterm::event::KeyCode;
-    use engine_core::scene::EngineCtx;
-
-    /// Every ability's description AND every modifier's name must appear
-    /// simultaneously inside `ability_list` — full expansion, no progressive
-    /// disclosure/pagination.
-    #[test]
-    fn ability_list_shows_all_abilities_and_modifiers_at_rest() {
-        let mut rm = RosterManager::new();
-        rm.creatures[0] = Creature::new("Test").with_abilities(vec![
-            Ability::new(
-                "Fire Breath",
-                vec![Modifier { name: "Burning".into(), requires: None }],
-            ),
-            Ability::new(
-                "Ice Shard",
-                vec![Modifier { name: "Frozen".into(), requires: None }],
-            ),
-        ]);
-        let (w, h) = (80u16, 30u16);
-        let buf = render_to_buffer(&rm, w, h);
-        let area = Rect::new(0, 0, w, h);
-        let rect = RosterManager::ability_list_rect(area);
-
-        let text = rect_text(&buf, rect);
-        assert!(
-            text.contains("Fire Breath"),
-            "expected \"Fire Breath\" ability description; got {text:?}"
-        );
-        assert!(
-            text.contains("Burning"),
-            "expected \"Burning\" modifier name; got {text:?}"
-        );
-        assert!(
-            text.contains("Ice Shard"),
-            "expected \"Ice Shard\" ability description; got {text:?}"
-        );
-        assert!(
-            text.contains("Frozen"),
-            "expected \"Frozen\" modifier name; got {text:?}"
-        );
-    }
-
-    /// During an active slide (at trigger and at partial progress), the
-    /// ability-list rect shows none of the current creature's ability text —
-    /// the display is entirely absent, not cross-faded. Checked via a
-    /// distinctive substring rather than whole-rect blankness so the test is
-    /// robust regardless of what else may paint in/near the rect.
-    #[test]
-    fn ability_list_hidden_during_slide() {
-        let (w, h) = (80u16, 30u16);
-        let area = Rect::new(0, 0, w, h);
-        let rect = RosterManager::ability_list_rect(area);
-
-        let mut scene = RosterManager::new();
-        scene.creatures[0] =
-            Creature::new("Test").with_abilities(vec![Ability::new("Fire Breath", vec![])]);
-
-        let rest_buf = render_to_buffer(&scene, w, h);
-        assert!(
-            rect_text(&rest_buf, rect).contains("Fire Breath"),
-            "sanity check: ability text must render at rest before triggering a slide"
+            !has_panel_text(&mid_buf),
+            "panel regions must remain free of ability/instructions text mid-slide"
         );
 
-        scene.handle_input(key_event(KeyCode::Right)); // trigger slide, no update() yet
-        let trigger_buf = render_to_buffer(&scene, w, h);
-        assert!(
-            !rect_text(&trigger_buf, rect).contains("Fire Breath"),
-            "ability_list must show no ability text at the instant a slide triggers"
-        );
-
-        let mut ctx = EngineCtx;
-        scene.update(&mut ctx, Duration::from_millis(75)); // ~25% of the 300ms SLIDE_DUR
-        let mid_buf = render_to_buffer(&scene, w, h);
-        assert!(
-            !rect_text(&mid_buf, rect).contains("Fire Breath"),
-            "ability_list must remain free of ability text mid-slide"
-        );
-    }
-
-    /// Once the slide settles (elapsed past SLIDE_DUR), the ability-list rect
-    /// shows the INCOMING (new current_index) creature's abilities, not the
-    /// outgoing creature's.
-    #[test]
-    fn ability_list_shows_incoming_after_settle() {
-        let mut rm = RosterManager::new();
-        rm.creatures[0] =
-            Creature::new("Outgoing").with_abilities(vec![Ability::new("Outgoing Move", vec![])]);
-        rm.creatures[1] =
-            Creature::new("Incoming").with_abilities(vec![Ability::new("Incoming Move", vec![])]);
-
-        let mut ctx = EngineCtx;
-        rm.handle_input(key_event(KeyCode::Right)); // nav 0 -> 1
-        rm.update(&mut ctx, Duration::from_millis(350)); // past the 300ms SLIDE_DUR
-
-        let (w, h) = (80u16, 30u16);
-        let buf = render_to_buffer(&rm, w, h);
-        let area = Rect::new(0, 0, w, h);
-        let rect = RosterManager::ability_list_rect(area);
-
-        let text = rect_text(&buf, rect);
-        assert!(
-            text.contains("Incoming Move"),
-            "settled render must show the incoming (index 1) creature's ability; got {text:?}"
-        );
-        assert!(
-            !text.contains("Outgoing Move"),
-            "settled render must not still show the outgoing (index 0) creature's ability; got {text:?}"
-        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
 

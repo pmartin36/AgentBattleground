@@ -33,6 +33,11 @@ pub struct RosterManager {
     /// arrows.
     #[inspect(hidden)]
     home_button: RefCell<engine_render::Button>,
+    /// Edit button in the details panel's Instructions header (b3-t1),
+    /// opens `prompt_editor` on a completed click. `RefCell` for the same
+    /// immutable-render-mutates-button-state reason as the other buttons.
+    #[inspect(hidden)]
+    edit_button: RefCell<engine_render::Button>,
     /// Transient scene-internal slide transition (b5-t1), armed by
     /// `navigate()` and driven by `elapsed`. `None` when no slide is active.
     #[inspect(hidden)]
@@ -59,6 +64,29 @@ pub struct RosterManager {
     /// `Some` in tests (`read_instructions_in`, hermetic temp dir).
     #[inspect(hidden)]
     instructions_base: Option<PathBuf>,
+    /// Set by the Edit button click (b3-t1); `None` until then. Full
+    /// popup behavior (rendering, text editors) is spec 51 — this field
+    /// only tracks the open/closed state spec 48's Testing Guidance
+    /// (line 87) requires.
+    #[inspect(hidden)]
+    prompt_editor: Option<prompt_editor::PromptEditor>,
+    /// The ability grid cell index currently under the cursor (b3-t2);
+    /// hover-only, no keyboard focus. `None` when the cursor is outside
+    /// every populated ability cell. Consumed by spec 49's tooltip
+    /// (out of scope here). Mutated in `handle_input(&mut self, ..)`, so a
+    /// plain field (unlike `ability_hit_rects`, which is read from
+    /// `render(&self, ..)`).
+    #[inspect(hidden)]
+    hovered_ability: Option<usize>,
+    /// The current frame's per-ability hit-test rects (b3-t2), in cell
+    /// space, refreshed each `render(&self, ..)` from
+    /// `panel_interior_regions(area).ability_cells`. `Some(rect)` for a
+    /// populated ability slot, `None` for an empty slot or while the
+    /// details panel is suppressed during a slide. `RefCell` because
+    /// `render(&self, ..)` must mutate it from an immutable receiver, same
+    /// reason as the button fields.
+    #[inspect(hidden)]
+    ability_hit_rects: RefCell<[Option<Rect>; 4]>,
 }
 
 /// Transient bookkeeping for an in-flight slide transition: the group that is
@@ -181,11 +209,18 @@ impl RosterManager {
                 engine_render::Button::new(Rect::default(), crate::assets::BUTTON_PANEL)
                     .icon(crate::assets::ICON_HOME),
             ),
+            edit_button: RefCell::new(
+                engine_render::Button::new(Rect::default(), crate::assets::BUTTON_PANEL)
+                    .label("Edit"),
+            ),
             slide: None,
             selected_index: None,
             current_dot: RefCell::new(engine_render::ButtonCore::new(Rect::default())),
             current_instructions: String::new(),
             instructions_base,
+            prompt_editor: None,
+            hovered_ability: None,
+            ability_hit_rects: RefCell::new([None; 4]),
         };
         scene.reload_instructions();
         scene
@@ -337,10 +372,29 @@ impl Scene for RosterManager {
         self.render_level(frame.buffer_mut(), l.level, self.current_index);
         self.render_stat_bars(frame.buffer_mut(), Self::left_col_dots(area)[0]);
         if self.active_slide().is_none() {
-            let (border, sta_text, ability_text) = Self::details_panel_rects(area);
+            let (border, ..) = Self::details_panel_rects(area);
             Self::draw_dot_border(frame.buffer_mut(), border, Self::BORDER_COLOR);
-            self.render_stamina(frame.buffer_mut(), sta_text, self.current_index);
-            self.render_ability_list(frame.buffer_mut(), ability_text, self.current_index);
+
+            let regions = Self::panel_interior_regions(area);
+            let idx = self.current_index;
+            self.render_stamina_row(frame.buffer_mut(), regions.stamina, idx);
+            self.render_abilities(frame.buffer_mut(), regions.abilities_header, regions.ability_cells, idx);
+            self.render_instructions(frame.buffer_mut(), regions.instructions_header, regions.preview);
+
+            {
+                let mut edit = self.edit_button.borrow_mut();
+                edit.set_rect(regions.edit_button.to_cell_rect());
+                edit.set_dot_offset_down(regions.edit_button.cell_remainder().1);
+                edit.render(frame.buffer_mut());
+            }
+
+            let n = self.creatures[idx].abilities().len();
+            let mut hits = self.ability_hit_rects.borrow_mut();
+            for i in 0..4 {
+                hits[i] = (i < n).then(|| regions.ability_cells[i].to_cell_rect());
+            }
+        } else {
+            *self.ability_hit_rects.borrow_mut() = [None; 4];
         }
         self.render_dot_row(frame.buffer_mut(), Self::top_bands_dots(area)[4]);
 
@@ -368,7 +422,8 @@ impl Scene for RosterManager {
     }
 
     fn handle_input(&mut self, ev: InputEvent) -> Option<Transition> {
-        use crossterm::event::KeyCode;
+        use crossterm::event::{KeyCode, MouseEventKind};
+        use ratatui::layout::Position;
 
         match ev {
             InputEvent::Key(key) => match key.code {
@@ -382,6 +437,15 @@ impl Scene for RosterManager {
                 let hit_right = self.right_button.get_mut().handle_mouse(&me);
                 let hit_home = self.home_button.get_mut().handle_mouse(&me);
                 let hit_dot = self.current_dot.get_mut().handle_mouse(&me);
+                let hit_edit = self.edit_button.get_mut().handle_mouse(&me);
+                if me.kind == MouseEventKind::Moved {
+                    let pos = Position { x: me.column, y: me.row };
+                    self.hovered_ability = self
+                        .ability_hit_rects
+                        .borrow()
+                        .iter()
+                        .position(|r| r.is_some_and(|rc| rc.contains(pos)));
+                }
                 if hit_home {
                     return Some(Transition {
                         target: SceneId::MainHub.into(),
@@ -396,6 +460,9 @@ impl Scene for RosterManager {
                 }
                 if hit_dot {
                     self.toggle_selection();
+                }
+                if hit_edit {
+                    self.prompt_editor = Some(prompt_editor::PromptEditor::new(self.current_index));
                 }
             }
         }
@@ -415,6 +482,7 @@ mod details_panel;
 mod dot_row;
 mod layout;
 mod panel_layout;
+mod prompt_editor;
 mod sprite_name;
 mod stat_bar;
 
@@ -430,3 +498,7 @@ mod slide_transition_tests;
 mod selection_tests;
 #[cfg(test)]
 mod instructions_cache_tests;
+#[cfg(test)]
+mod edit_button_tests;
+#[cfg(test)]
+mod ability_hover_tests;

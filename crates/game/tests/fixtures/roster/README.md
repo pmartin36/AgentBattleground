@@ -29,12 +29,19 @@ covered by `roster_manager.rs`'s existing `rect_text`-based assertions.
 ## Manual visual confirmation
 
 All 4 `*.preview.txt` files were visually reviewed before these fixtures were
-committed, against the shipped roster layout (post `fix(roster): correct
-roster screen layout`, commit `fd6b823`): sprite centered above its stat
+committed, against the current roster layout: sprite centered above its stat
 cluster, 4 stat bars (STR/DEX/INT/VIT) with the dot-cluster role indicator
-below, ability/stamina detail panel border on the right, HOME button
-top-right, and Active/Bench/Reserve role-label dot slots along the bottom row.
-`midslide_80x30` additionally shows the outgoing sprite/dot-cluster sliding
-off the right edge and the incoming creature's partially entering from the
-left, consistent with the mid-slide (~25% of `SLIDE_DUR`) transition frame.
-Confirmed correct; no divergence found before commit.
+below, HOME button top-right, and Active/Bench/Reserve role-label dot slots
+along the bottom row. The right-hand details panel (b1-b3 redesign) shows a
+"Stamina" label + banded bar, an "Abilities" header + underline + 2x2 ability
+grid, and an "Instructions" header + underline + "Edit" button + wrapped
+preview text — all inside the bordered right-third, none of it bleeding past
+its own row into a neighboring region. `rest_40x20`'s narrower terminal
+collapses the Instructions header/Edit button/preview bands entirely (no
+room); the panel border stays intact with no stray dots painted into it.
+`midslide_80x30` shows the outgoing sprite/dot-cluster sliding off the right
+edge and the incoming creature's partially entering from the left, with the
+entire details panel interior suppressed (no stamina/ability/instructions
+content, no bar, no edit button), consistent with the mid-slide (~25% of
+`SLIDE_DUR`) transition frame. Confirmed correct; no divergence found before
+commit.
