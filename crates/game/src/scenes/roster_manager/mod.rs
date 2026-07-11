@@ -419,6 +419,20 @@ impl Scene for RosterManager {
             home.set_dot_offset_down(home_dr.cell_remainder().1);
             home.render(frame.buffer_mut());
         }
+
+        // Ability hover tooltip (spec 49) — topmost overlay, hover-only.
+        // Suppressed while a modal is open or a slide is in flight (the details
+        // panel and its ability cells are not drawn during a slide, and the
+        // stale hovered index may point past the new creature's abilities).
+        if self.prompt_editor.is_none() && self.active_slide().is_none() {
+            if let Some(hi) = self.hovered_ability {
+                let abilities = self.creatures[self.current_index].abilities();
+                if hi < abilities.len() {
+                    let cell = Self::panel_interior_regions(area).ability_cells[hi];
+                    tooltip::render_tooltip(frame.buffer_mut(), &abilities[hi], cell);
+                }
+            }
+        }
     }
 
     fn handle_input(&mut self, ev: InputEvent) -> Option<Transition> {
@@ -503,3 +517,5 @@ mod instructions_cache_tests;
 mod edit_button_tests;
 #[cfg(test)]
 mod ability_hover_tests;
+#[cfg(test)]
+mod tooltip_integration_tests;
