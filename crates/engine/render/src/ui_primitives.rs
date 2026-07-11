@@ -42,32 +42,42 @@ pub fn rounded_rect(
             let d_top = row;
             let d_bottom = height_dots - 1 - row;
 
-            // 45° chamfer off each corner: a dot within `corner_radius` of two
-            // adjacent edges whose distance-sum clears the threshold is
-            // dropped, so the square corner reads as rounded. Same formula as
-            // Roster's private `draw_dot_box`, which this is meant to
-            // eventually replace.
-            let clipped = (d_left < corner_radius
-                && d_top < corner_radius
-                && d_left + d_top < corner_radius)
-                || (d_right < corner_radius
-                    && d_top < corner_radius
-                    && d_right + d_top < corner_radius)
-                || (d_left < corner_radius
-                    && d_bottom < corner_radius
-                    && d_left + d_bottom < corner_radius)
-                || (d_right < corner_radius
-                    && d_bottom < corner_radius
-                    && d_right + d_bottom < corner_radius);
-            if clipped {
+            // 45° chamfer off each corner. Within `corner_radius` of two
+            // adjacent edges the square corner is cut on the anti-diagonal:
+            //   - dots inside the diagonal (edge-distance `sum < radius`) are
+            //     dropped (left Transparent), so the corner reads as rounded;
+            //   - dots ON the diagonal band (`radius <= sum < radius+thickness`)
+            //     stay lit as border, so the two straight edges remain JOINED
+            //     across the cut. Without this band the corner loses its
+            //     connecting dot and the border reads as broken — e.g. at
+            //     thickness 1 / radius 2 the dot at (1,1) was left as interior
+            //     fill, leaving a diagonal gap between the edges.
+            let mut cut = false;
+            let mut chamfer_border = false;
+            for (a, b) in [
+                (d_left, d_top),
+                (d_right, d_top),
+                (d_left, d_bottom),
+                (d_right, d_bottom),
+            ] {
+                if a < corner_radius && b < corner_radius {
+                    let sum = a + b;
+                    if sum < corner_radius {
+                        cut = true;
+                    } else if sum < corner_radius + thickness {
+                        chamfer_border = true;
+                    }
+                }
+            }
+            if cut {
                 continue; // leave Transparent — the rounded corner reveals what's behind
             }
 
-            let on_border = d_left < thickness
+            let on_edge = d_left < thickness
                 || d_right < thickness
                 || d_top < thickness
                 || d_bottom < thickness;
-            buf.set(col, row, if on_border { Dot::Lit(border) } else { fill });
+            buf.set(col, row, if chamfer_border || on_edge { Dot::Lit(border) } else { fill });
         }
     }
 
@@ -162,6 +172,18 @@ mod tests {
         assert_eq!(buf.get(1, 0), Dot::Transparent, "adjacent corner dot must be chamfered off");
         assert_eq!(buf.get(0, 1), Dot::Transparent, "adjacent corner dot must be chamfered off");
         assert_eq!(buf.get(4, 0), Dot::Lit(BORDER), "mid top-edge dot must stay lit");
+    }
+
+    /// Regression: at thickness 1 / radius 2 the corner's connecting diagonal
+    /// dot (1,1) must be lit so the two straight edges stay JOINED across the
+    /// chamfer. Previously it was left as interior fill, breaking the border.
+    #[test]
+    fn chamfer_lights_the_corner_connecting_dot() {
+        let buf = rounded_rect(8, 8, 1, 2, BORDER, Dot::Occlude);
+        assert_eq!(buf.get(1, 1), Dot::Lit(BORDER), "diagonal connector dot must be lit");
+        assert_eq!(buf.get(0, 0), Dot::Transparent, "outer corner dot still chamfered");
+        assert_eq!(buf.get(1, 0), Dot::Transparent, "adjacent corner dot still chamfered");
+        assert_eq!(buf.get(0, 1), Dot::Transparent, "adjacent corner dot still chamfered");
     }
 
     /// `rect(..)` must equal `rounded_rect(.., corner_radius = 0, ..)`
