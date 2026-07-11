@@ -14,7 +14,7 @@ Player sketch (a large centered popup): a closable **X** top-right; a **"Prompt 
 
 ## Layout
 
-A **large centered popup** built on the `BattleMenu` overlay pattern: a chamfered frame via `ui_primitives::rounded_rect(..., Dot::Occlude)` centered on the screen (`POPUP_W_FRAC` × `POPUP_H_FRAC` of the screen, tunable), the `Dot::Occlude` fill covering the roster beneath. Everything inside is **centered horizontally**. Top-to-bottom:
+A **large centered popup** built on the `BattleMenu` overlay pattern: a chamfered frame via `ui_primitives::rounded_rect(..., Dot::Occlude)` centered on the screen (`POPUP_W_FRAC` × `POPUP_H_FRAC` of the screen, tunable), the `Dot::Occlude` fill covering the roster beneath. **The interior is laid out with the engine `flex` primitive (`40-flex-layout-primitive`) over `DotRect`: a Column `flex` (`Align::Center`) stacking the rows below, with the X positioned via flex against the top-right corner — never hand-computed offsets.** The popup itself is centered on screen via flex/`DotRect` math, and grows (see the agent input) by re-resolving the same flex, not by ad-hoc coordinate nudging. Top-to-bottom:
 
 1. **Close (X)** — a small hit-target in the **top-right** corner (an `engine_render::ButtonCore` or `Button`), clickable to close. Also closes on **Esc**.
 2. **Agent input** — a `TextEditor` in **`Grow` mode**, `submit_on_enter: true`, placeholder `"Prompt agent to update"`. It starts one row tall and **grows by wrapping** as the player types; when it grows, the **popup grows and re-centers** to fit it. `Enter` **submits** (fires the stubbed agent, below); `Shift+Enter` inserts a newline.
@@ -41,6 +41,7 @@ In `crates/game/src/scenes/roster_manager/`:
 
 ## Decisions (v1)
 
+- **Interior + popup positioning composed with the engine `flex` primitive over `DotRect`** (Column stack, centered); the grow re-resolves flex, no hand-rolled offsets.
 - Large centered modal via the `Dot::Occlude` overlay pattern; closes on **X and Esc**.
 - Agent input = `Grow` `TextEditor`, Enter=submit / Shift+Enter=newline; growing it grows/re-centers the popup.
 - Instructions editor = `Fixed` `TextEditor` with scrollbar; seeded from the file.
@@ -72,5 +73,6 @@ In `crates/game/src/scenes/roster_manager/`:
 
 - Needs `47-ability-and-instructions-data-model` (`read_/write_instructions`, `instructions_path`) and `50-engine-text-editing-primitives` (`TextEditor`).
 - Opened by `48-roster-detail-panel-redesign`.
+- Uses `flex` (`40-flex-layout-primitive` ✅) for the popup interior + positioning.
 - Reuses `ui_primitives::rounded_rect` + `Dot::Occlude`, `engine_render::Button`/`ButtonCore`, the `BattleMenu` modal pattern.
 - Followed by `needs-research/ai-prompt-rewrite-agent`.

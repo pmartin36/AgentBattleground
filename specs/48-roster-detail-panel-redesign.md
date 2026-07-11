@@ -20,7 +20,7 @@ Player sketch (top-to-bottom, inside the existing bordered right-third panel):
 
 ## Layout
 
-Reuse the existing panel geometry (`layout.rs::right_col_dots` / `details_panel_rects`) for the outer border and interior rect; re-carve the **interior** (inside the 1-cell inset already applied) into the regions below with a Column `flex` over `DotRect`. All chrome (bar, underlines, button panel, tooltip) goes through the dot pipeline per CLAUDE.md rule 4; text (labels, ability names, headers, instructions) stays plain terminal characters.
+Reuse the existing panel geometry (`layout.rs::right_col_dots` / `details_panel_rects`) for the outer border and interior rect; re-carve the **interior** (inside the 1-cell inset already applied) into the regions below with a Column `flex` over `DotRect`. **Every region, row, and sub-rect in this panel is derived by composing the engine `flex` primitive (`40-flex-layout-primitive`) over `DotRect` — nested Row/Column with `Justify`/`Align`/`gap` — never by hand-computed cell offsets or manual coordinate math. Widgets receive the `DotRect` (or its floored `Rect`) that flex produces.** All chrome (bar, underlines, button panel, tooltip) goes through the dot pipeline per CLAUDE.md rule 4; text (labels, ability names, headers, instructions) stays plain terminal characters.
 
 Top-to-bottom, with **1 cell of margin at the very top** of the interior:
 
@@ -34,7 +34,7 @@ Top-to-bottom, with **1 cell of margin at the very top** of the interior:
 
 ### 3. Abilities section
 - **Header:** the word **"Abilities"** as left-aligned text (`label` with `TextAlign::Left`, spec 52) at the interior's left edge, with a **braille underline** in the cell-row directly beneath it. The underline is a horizontal lit-dot run, `HEADER_UNDERLINE_THICKNESS_DOTS` (= 2) dot-rows tall, spanning the header text width (+ a small pad), drawn through the dot pipeline (`DotBuffer` → `draw_grid`). This is **bespoke game rendering**, not a reusable primitive.
-- **2×2 grid** below the header (a Row `flex` of 2 equal columns × 2 rows, or a 2×2 index map):
+- **2×2 grid** below the header, composed with `flex` (a Row `flex` of two equal-width columns, each a Column `flex` of two rows) — **not** hand-indexed coordinates:
   ```
   Ability 0        Ability 1
   Ability 2        Ability 3
@@ -61,6 +61,7 @@ In `crates/game/src/scenes/roster_manager/`:
 
 ## Decisions (v1)
 
+- **All layout is composed with the engine `flex` primitive over `DotRect`** (nested Row/Column, `Justify`/`Align`/`gap`); no hand-rolled coordinate math anywhere in the panel.
 - Stamina bar reuses the post-battle bar + its green/yellow/red banding; injured shows empty bar + days-until-return.
 - Abilities render in a fixed 2×2 grid, left-aligned, terminal-underlined; empty slots blank.
 - Ability hover is **mouse-only**; hovering an ability opens the tooltip (49).

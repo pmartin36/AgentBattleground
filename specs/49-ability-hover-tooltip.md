@@ -21,13 +21,14 @@ Player sketch (a small bordered card): centered **"Cost: x stamina"**, a row of 
 ## Rendering
 
 - The card is a **centered-content overlay** built on the `BattleMenu` pattern: a chamfered frame via `engine_render::ui_primitives::rounded_rect(w, h, thickness, corner_radius, BORDER_COLOR, Dot::Occlude)` — the `Dot::Occlude` fill **erases the panel content beneath** so text underneath doesn't bleed through. Drawn after the panel, before nothing else (topmost).
-- Card **width is fixed** (`TOOLTIP_WIDTH_CELLS`, tunable); **height = the sum of the present rows** (absent fields take no space).
-- Interior has a **1-cell padding**. Content rows top-to-bottom (each omitted entirely when its data is absent):
+- **The card interior is composed with the engine `flex` primitive (`40-flex-layout-primitive`) over `DotRect` — never hand-computed row offsets.** The rows below are the children of a **Column `flex`**; an absent field contributes **no child**, so the card auto-sizes to exactly the present rows.
+- Card **width is fixed** (`TOOLTIP_WIDTH_CELLS`, tunable); **height = the flex-resolved sum of the present rows** (absent fields take no space).
+- Interior has a **1-cell padding** (a `.inset` on the interior `DotRect`). Content rows are the Column `flex` children, top-to-bottom (each omitted — i.e. not added as a child — when its data is absent):
 
   1. **Cost** — `"Cost: {n} stamina"`, **centered**. Omitted if `cost` is `None`.
-  2. **Pill row** — the present pills among `ability_type`, `element`, `class`, laid **horizontally in a row**, the row centered. Each pill omitted if its field is `None`; if all three are `None` the row is skipped.
-  3. **Damage / Range line** — **two columns on one line**: `"Damage: {n}"` in the left column, `"Range: {n}"` in the right. Each half omitted if its field is `None` (if both `None`, the line is skipped; if one present, only that column shows).
-  4. **Status line(s)** — `"Status:"` followed by the effect names laid out in **two columns** (effect 0 | effect 1 / effect 2 | effect 3 …). Skipped if `status_effects` is empty.
+  2. **Pill row** — the present pills among `ability_type`, `element`, `class`, laid out as a **Row `flex`** (`Justify::Center`), one flex child per present pill. Each pill omitted (no child) if its field is `None`; if all three are `None` the whole row is skipped.
+  3. **Damage / Range line** — a **Row `flex`** of two equal columns: `"Damage: {n}"` in the left, `"Range: {n}"` in the right. Each half omitted (no child) if its field is `None` (both `None` ⇒ line skipped; one present ⇒ only that column).
+  4. **Status line(s)** — `"Status:"` then the effect names in a **two-column `flex`** (effect 0 | effect 1 / effect 2 | effect 3 …). Skipped if `status_effects` is empty.
   5. **1-cell gap.**
   6. **Flavor** — `flavor` text via the engine `wrapped_text` helper (spec 52), word-wrapped to the interior width and clipped to **2 rows** with a tail-ellipsis if longer. Skipped if `None`.
 
@@ -50,6 +51,7 @@ Player sketch (a small bordered card): centered **"Cost: x stamina"**, a row of 
 
 ## Decisions (v1)
 
+- **Card interior composed entirely with the engine `flex` primitive** (Column of rows; pill row + Damage/Range + Status as Row flexes); absent fields are omitted children so the card auto-sizes. No hand-rolled offsets.
 - Positioned up-left of the hovered ability, no clamping (abilities are center-right).
 - Fixed width, content-driven height; absent fields consume no space.
 - Row order: Cost → pills → Damage/Range (2-col) → Status (2-col) → gap → flavor (≤2 lines).
@@ -79,4 +81,5 @@ None outstanding. Palette + pill radius are explicitly iterate-later.
 
 - Needs `47-ability-and-instructions-data-model` (fields + `label()`) and `48-roster-detail-panel-redesign` (`hovered_ability`, ability rects).
 - Needs `52-engine-text-rendering` for the aligned/centered text rows and the wrapped flavor block.
+- Uses `flex` (`40-flex-layout-primitive` ✅) for all card-interior layout.
 - Reuses `ui_primitives::rounded_rect` + `Dot::Occlude` (`13-rendering` ✅, `22-braille-ui-chrome` ✅) and the `BattleMenu` overlay pattern.
