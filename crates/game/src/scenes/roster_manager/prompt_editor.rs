@@ -17,8 +17,9 @@ use engine_core::color::Rgba;
 use engine_core::scene::InputEvent;
 use engine_render::dots::{Dot, DotBuffer};
 use engine_render::{
-    draw_dots, flex, label, ui_primitives, Align, Basis, ButtonCore, Direction, DotRect,
-    EditorEvent, FlexChild, FlexStyle, Justify, Sizing, TextAlign, TextEditor, TextEditorConfig,
+    draw_dots, flex, label, ui_primitives, Align, Basis, ButtonCore, ButtonState, Direction,
+    DotRect, EditorEvent, FlexChild, FlexStyle, Justify, Sizing, TextAlign, TextEditor,
+    TextEditorConfig,
 };
 
 use super::RosterManager;
@@ -38,9 +39,10 @@ const AGENT_INPUT_MAX_ROWS: u16 = 6;
 const POPUP_PAD_X_CELLS: u16 = 1;
 /// Interior bottom padding, below the file-path row (b2-t1 layout).
 const POPUP_PAD_BOTTOM_CELLS: u16 = 1;
-/// Close (X) hit-target size, in cells (b2-t1 layout).
+/// Close (X) hit-target size, in cells (b2-t1 layout). 2 cells tall so the
+/// braille circle around the "X" is round, not squashed.
 const CLOSE_W_CELLS: u16 = 3;
-const CLOSE_H_CELLS: u16 = 1;
+const CLOSE_H_CELLS: u16 = 2;
 /// Reserves the X row (+ a 1-cell clearance) so the body clears it (b2-t1
 /// layout).
 const POPUP_TOP_BAND_CELLS: u16 = CLOSE_H_CELLS + 1;
@@ -55,10 +57,19 @@ const FILE_PATH_H_CELLS: u16 = 1;
 const POPUP_BORDER_COLOR: Rgba = Rgba::rgb(0xff, 0xbf, 0x00);
 /// Popup frame border thickness, in dots (b2-t2 render).
 const POPUP_BORDER_THICKNESS: usize = 1;
-/// Popup frame chamfered-corner radius, in dots (b2-t2 render).
-const POPUP_CORNER_RADIUS: usize = 2;
+/// Popup frame chamfered-corner radius, in dots (house-default chamfer 1).
+const POPUP_CORNER_RADIUS: usize = 1;
 /// File-path row text color (dim gray) (b2-t2 render).
 const POPUP_PATH_COLOR: Rgba = Rgba::rgb(0x88, 0x88, 0x88);
+/// Per-field braille box border color (gray).
+const FIELD_BORDER_COLOR: Rgba = Rgba::rgb(0x88, 0x88, 0x88);
+/// Per-field braille box border thickness, in cells (1 cell each side is
+/// reserved so the border never overlaps the editor's first/last text row/col).
+const FIELD_BORDER_CELLS: i32 = 1;
+/// Close (X) glyph colors by `ButtonCore` state — red, brightening on hover.
+const CLOSE_IDLE_COLOR: Rgba = Rgba::rgb(0xc0, 0x30, 0x30);
+const CLOSE_HOVER_COLOR: Rgba = Rgba::rgb(0xff, 0x55, 0x55);
+const CLOSE_PRESSED_COLOR: Rgba = Rgba::rgb(0x80, 0x20, 0x20);
 
 /// Which of the two editors currently receives keyboard input (b3-t1's
 /// Tab-cycle). Defaults to `Instructions` on open.
@@ -234,7 +245,12 @@ impl PromptEditor {
         );
 
         let body_children = [
-            FlexChild { basis: Basis::Fixed(agent_rows as i32 * 4), grow: 0.0, shrink: 0.0 },
+            // Agent input BOX: content rows + a 1-cell border top and bottom.
+            FlexChild {
+                basis: Basis::Fixed((agent_rows as i32 + 2 * FIELD_BORDER_CELLS) * 4),
+                grow: 0.0,
+                shrink: 0.0,
+            },
             FlexChild {
                 basis: Basis::Fixed(AGENT_MARGIN_CELLS as i32 * 4),
                 grow: 0.0,
@@ -292,7 +308,10 @@ impl PromptEditor {
     /// input's current `desired_rows` (width in cells) so `render` (b2-t2)
     /// and input hit-testing (b3-t1) never hand-compute it themselves.
     pub(super) fn layout(&self, area: Rect) -> PopupLayout {
-        let rows = self.agent_input.borrow().desired_rows(Self::interior_w_cells(area));
+        // Content width is the interior minus the field box's 1-cell border
+        // each side, so the agent input wraps to its true drawable width.
+        let content_w = Self::interior_w_cells(area).saturating_sub(2 * FIELD_BORDER_CELLS as u16);
+        let rows = self.agent_input.borrow().desired_rows(content_w);
         Self::compute_layout(area, rows)
     }
 
@@ -315,15 +334,24 @@ impl PromptEditor {
         );
         draw_dots(buf, layout.popup.to_cell_rect(), &ring);
 
-        // Close (X): refresh the hit-rect from layout, then draw the glyph.
+        // Close (X): refresh the hit-rect from layout, then draw the glyph in
+        // a red keyed to hover/press state.
         self.close_button.borrow_mut().set_rect(layout.close.to_cell_rect());
-        Self::draw_close_glyph(buf, layout.close, POPUP_BORDER_COLOR);
+        let close_color = match self.close_button.borrow().state() {
+            ButtonState::Idle => CLOSE_IDLE_COLOR,
+            ButtonState::Hover => CLOSE_HOVER_COLOR,
+            ButtonState::Pressed => CLOSE_PRESSED_COLOR,
+        };
+        Self::draw_close_glyph(buf, layout.close, close_color);
 
-        // Agent input (shows its placeholder when empty).
-        self.agent_input.borrow_mut().render(buf, layout.agent_input.to_cell_rect());
+        // Agent input: braille box + placeholder/text inset inside the border.
+        Self::draw_field_box(buf, layout.agent_input);
+        self.agent_input.borrow_mut().render(buf, Self::field_content(layout.agent_input));
 
-        // Instructions editor (seeded/edited text + its own scrollbar).
-        self.instructions.borrow_mut().render(buf, layout.instructions.to_cell_rect());
+        // Instructions editor: braille box + seeded/edited text (+ its own
+        // scrollbar thumb) inset inside the border.
+        Self::draw_field_box(buf, layout.instructions);
+        self.instructions.borrow_mut().render(buf, Self::field_content(layout.instructions));
 
         // File-path row: plain text, beneath the instructions editor. Long
         // paths (e.g. a deep base dir) are front-truncated, not tail-
@@ -358,22 +386,66 @@ impl PromptEditor {
         format!("…{tail}")
     }
 
-    /// Draws an X (both diagonals lit) into `close`'s dot-precise rect
-    /// through the dot pipeline (CLAUDE.md rule 4 — non-text UI chrome).
-    /// `close` is whole-cell (flex over the whole-cell popup body), so
-    /// `to_cell_rect` is lossless.
+    /// The editor content rect inside a field's braille box — the box rect
+    /// inset by `FIELD_BORDER_CELLS` on every side so text never overlaps the
+    /// border. `rect` is whole-cell, so `to_cell_rect` is lossless.
+    fn field_content(rect: DotRect) -> Rect {
+        rect.inset(
+            FIELD_BORDER_CELLS * 2,
+            FIELD_BORDER_CELLS * 2,
+            FIELD_BORDER_CELLS * 4,
+            FIELD_BORDER_CELLS * 4,
+        )
+        .to_cell_rect()
+    }
+
+    /// Draws a chamfer-1 hollow braille box around a field rect via the dot
+    /// pipeline (CLAUDE.md rule 4). `rect` is whole-cell, so `to_cell_rect` is
+    /// lossless.
+    fn draw_field_box(buf: &mut Buffer, rect: DotRect) {
+        let (w, h) = (rect.w as usize, rect.h as usize);
+        if w == 0 || h == 0 {
+            return;
+        }
+        let ring = ui_primitives::rounded_rect(w, h, 1, 1, FIELD_BORDER_COLOR, Dot::Transparent);
+        draw_dots(buf, rect.to_cell_rect(), &ring);
+    }
+
+    /// Draws the close control — a braille ring with an "X" through it — into
+    /// `close`'s dot-precise rect via the dot pipeline (CLAUDE.md rule 4 —
+    /// non-text UI chrome). `close` is whole-cell, so `to_cell_rect` is
+    /// lossless.
     fn draw_close_glyph(buf: &mut Buffer, close: DotRect, color: Rgba) {
         let (w, h) = (close.w as usize, close.h as usize);
         if w == 0 || h == 0 {
             return;
         }
         let mut dotbuf = DotBuffer::new(w, h);
-        let denom = w.saturating_sub(1).max(1);
-        for col in 0..w {
-            let row = col * h.saturating_sub(1) / denom;
-            dotbuf.set(col, row, Dot::Lit(color));
-            dotbuf.set(w - 1 - col, row, Dot::Lit(color));
+        let cx = (w as f32 - 1.0) / 2.0;
+        let cy = (h as f32 - 1.0) / 2.0;
+        let radius = cx.min(cy).max(1.0);
+
+        // Ring: dots within ~half a dot of the circle radius.
+        for row in 0..h {
+            for col in 0..w {
+                let (dx, dy) = (col as f32 - cx, row as f32 - cy);
+                if ((dx * dx + dy * dy).sqrt() - radius).abs() <= 0.6 {
+                    dotbuf.set(col, row, Dot::Lit(color));
+                }
+            }
         }
+
+        // X through the center: two short diagonals inside the ring.
+        let arm = (radius * 0.5).round().max(1.0) as i32;
+        for d in -arm..=arm {
+            for (px, py) in [(cx + d as f32, cy + d as f32), (cx + d as f32, cy - d as f32)] {
+                let (c, r) = (px.round() as i32, py.round() as i32);
+                if c >= 0 && (c as usize) < w && r >= 0 && (r as usize) < h {
+                    dotbuf.set(c as usize, r as usize, Dot::Lit(color));
+                }
+            }
+        }
+
         draw_dots(buf, close.to_cell_rect(), &dotbuf);
     }
 
@@ -538,8 +610,9 @@ mod tests {
         // cells (8 dots).
         assert_eq!(l3.popup.h, l1.popup.h + 2 * 4);
         assert_eq!(l3.agent_input.h, l1.agent_input.h + 2 * 4);
-        assert_eq!(l1.agent_input.h, 4);
-        assert_eq!(l3.agent_input.h, 3 * 4);
+        // Agent box height = content rows + a 1-cell border top and bottom.
+        assert_eq!(l1.agent_input.h, (1 + 2 * FIELD_BORDER_CELLS) * 4);
+        assert_eq!(l3.agent_input.h, (3 + 2 * FIELD_BORDER_CELLS) * 4);
 
         // Width/horizontal placement never changes with agent_rows.
         assert_eq!(l3.popup.x, l1.popup.x);
