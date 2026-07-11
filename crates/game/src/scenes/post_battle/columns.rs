@@ -278,7 +278,7 @@ pub(super) fn xp_fill_fraction(start: u32, gained: u32, elapsed: Duration) -> f3
 /// (green), `15..=50` -> `STAMINA_MID_COLOR` (yellow), `<15` ->
 /// `STAMINA_LOW_COLOR` (red). Sole source of the band decision for both
 /// render and tests — see research.md.
-pub(super) fn stamina_fill_color(percent: u8) -> Rgba {
+pub(crate) fn stamina_fill_color(percent: u8) -> Rgba {
     if percent > 50 {
         PostBattle::STAMINA_HIGH_COLOR
     } else if percent >= 15 {
