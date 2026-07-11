@@ -6,7 +6,7 @@
 
 use crate::ability::{Ability, AbilityType, DamageClass, Element, Modifier, StatusEffect};
 use crate::squad_role::{squad_role, SquadRole, ACTIVE_SLOTS, BENCH_SLOTS};
-use crate::stamina::Stamina;
+use crate::stamina::{Stamina, STAMINA_MAX_CAP};
 use crate::stats::Stats;
 use engine_render::AnimatedSprite;
 use std::collections::HashMap;
@@ -206,9 +206,10 @@ pub fn reassign_injured_to_reserve(roster: &mut [Creature], injured_index: usize
 }
 
 /// Wraps each of the 6 bundled creatures with illustrative, distinguishing
-/// placeholder `Stats`/`level`/`abilities` (default, full `Stamina`), in
-/// `all()`'s order. Values are non-canonical placeholders (spec
-/// `34-creature-attributes-data-model.md` `Decisions (v1)`).
+/// placeholder `Stats`/`level`/`abilities`/`Stamina` (varied `current`/`max`
+/// so the bar track and fill both differ per creature; `stone_golem`'s `max`
+/// sits near `STAMINA_MAX_CAP`), in `all()`'s order. Values are non-canonical
+/// placeholders (spec `34-creature-attributes-data-model.md` `Decisions (v1)`).
 pub fn demo_roster() -> Vec<Creature> {
     let entry = |creature: Creature, stats: Stats, level: u32, abilities: Vec<Ability>| -> Creature {
         creature.with_stats(stats).with_level(level).with_abilities(abilities)
@@ -236,7 +237,7 @@ pub fn demo_roster() -> Vec<Creature> {
             ],
         )
         .with_xp(65)
-        .with_stamina(Stamina::default().drain_from_damage(20)),
+        .with_stamina(Stamina::new(48, 60)),
         entry(
             frost_lizard(),
             Stats { strength: 14, dexterity: 18, intelligence: 26, vitality: 22 },
@@ -257,7 +258,7 @@ pub fn demo_roster() -> Vec<Creature> {
             ],
         )
         .with_xp(30)
-        .with_stamina(Stamina::default().drain_from_damage(55)),
+        .with_stamina(Stamina::new(18, 40)),
         entry(
             stone_golem(),
             Stats { strength: 22, dexterity: 8, intelligence: 10, vitality: 34 },
@@ -278,7 +279,7 @@ pub fn demo_roster() -> Vec<Creature> {
             ],
         )
         .with_xp(90)
-        .with_stamina(Stamina::default().drain_from_damage(40)),
+        .with_stamina(Stamina::new(57, STAMINA_MAX_CAP - 5)),
         entry(
             storm_hawk(),
             Stats { strength: 12, dexterity: 32, intelligence: 24, vitality: 12 },
@@ -304,7 +305,7 @@ pub fn demo_roster() -> Vec<Creature> {
             ],
         )
         .with_xp(15)
-        .with_stamina(Stamina::default().drain_from_damage(90)),
+        .with_stamina(Stamina::new(3, 30)),
         entry(
             verdant_treant(),
             Stats { strength: 20, dexterity: 10, intelligence: 22, vitality: 30 },
@@ -335,7 +336,8 @@ pub fn demo_roster() -> Vec<Creature> {
                     .with_cost(3)
                     .with_flavor("Knits wounds shut with rapid new growth."),
             ],
-        ),
+        )
+        .with_stamina(Stamina::new(60, 80)),
         entry(
             shadow_cat(),
             Stats { strength: 16, dexterity: 34, intelligence: 18, vitality: 12 },
@@ -355,7 +357,8 @@ pub fn demo_roster() -> Vec<Creature> {
                     .with_cost(3)
                     .with_flavor("Slips out of sight, evading the next attack."),
             ],
-        ),
+        )
+        .with_stamina(Stamina::new(18, 45)),
     ]
 }
 

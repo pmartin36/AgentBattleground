@@ -32,7 +32,7 @@ There is **no** persistent "gained this battle" field on `Creature`. The gained 
 The stored meter is renamed and its numeric sense inverted, so the value the code carries *is* stamina remaining (avoids a permanent "stamina = 100 − stored" trap and matches this screen's label).
 
 - `crates/game/src/exhaustion.rs` → `crates/game/src/stamina.rs`; type `Exhaustion` → `Stamina`; module decl in `lib.rs` updated.
-- Semantics flip: `percent: u8` now means **stamina remaining, 0..=100**. `Stamina::default()` is **100** (fully rested). The **injured** state is entered when `percent` reaches **0** (was: 100).
+- `Stamina` stores `current`/`max` stamina points; `percent()` is **derived** (`current`/`max`, rounded half-up, clamped `0..=100`; `max == 0` reads 0). `current()`/`max()` getters expose the raw points (the roster stamina-bar track scales with `max`). `Stamina::default()` is full (`current == max` at `STAMINA_MAX_CAP`). The **injured** state is entered when `current` reaches **0**.
 - Transitions become drains that **subtract**: `apply_damage_exhaustion` / `apply_ability_use_exhaustion` → `drain_from_damage(amount)` / `drain_from_ability_use(cost)` (subtract, clamp at 0, set `injured_until` when it hits 0). Recovery restores toward 100.
 - `Creature`: field/builder/getter `exhaustion`/`with_exhaustion`/`exhaustion()` → `stamina`/`with_stamina`/`stamina()`.
 - `crates/game/src/scenes/roster_manager/details_panel.rs`: `exhaustion_text`/`render_exhaustion`/`exhaustion_rect` and the `"Exhaustion: {percent}%"` string → `"Stamina: {percent}%"` (the injured "days remain" line is unchanged in wording). This also updates the roster preview golden fixtures under `crates/game/tests/fixtures/roster/` — regenerate them.
