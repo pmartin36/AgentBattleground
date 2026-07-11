@@ -21,6 +21,7 @@ pub mod flex;
 pub mod grid;
 pub mod screen_layout;
 pub mod shapes;
+pub mod text_editor;
 pub mod transform;
 pub mod tween;
 pub mod ui_primitives;
@@ -34,6 +35,7 @@ pub use dots::draw_dots;
 pub use grid::{draw_grid, Cell, Grid};
 pub use screen_layout::{anchor, anchor_with_margin, stack, Anchor, RectTween, StackAxis};
 pub use shapes::{rasterize_shape, ShapeKind};
+pub use text_editor::{EditorEvent, Sizing, TextEditor, TextEditorConfig};
 pub use ui_primitives::{rect, rounded_rect};
 
 use ratatui::buffer::Buffer;
