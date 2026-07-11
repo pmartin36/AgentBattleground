@@ -2,7 +2,7 @@
 
 ## Status
 
-Pending. Small follow-up to `50-engine-text-editing-primitives` and `51-prompt-editor-popup`. Carves three now-well-defined features out of the parked `needs-research/text-editor-v2` set into a buildable unit.
+Pending. Follow-up to `50-engine-text-editing-primitives` and `51-prompt-editor-popup`, covering three text-editor interaction features.
 
 ## Purpose
 
@@ -61,4 +61,4 @@ The v1 `TextEditor` has a static, always-on block cursor, switches focus only vi
 ## Dependencies
 
 - Extends `50-engine-text-editing-primitives` (the `TextEditor` widget) and `51-prompt-editor-popup` (the two-field popup + Tab focus + input routing).
-- Carved out of `needs-research/text-editor-v2`, which retains selection, copy/paste, drag, horizontal scroll, undo/redo, and `@` mentions.
+- `needs-research/text-editor-v2` covers the remaining editor features (selection, copy/paste, drag, horizontal scroll, undo/redo, `@` mentions).

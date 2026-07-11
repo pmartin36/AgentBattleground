@@ -16,8 +16,6 @@ Carried over from `50`'s deferred list:
 - **Horizontal scroll** (v1 soft-wraps and scrolls vertically only).
 - **Undo / redo.**
 
-> **Carved out:** click-to-place caret, focus-switching between editors, and the slow cursor blink are now specced as a buildable unit in `53-text-editor-cursor-placement-and-blink` — no longer parked here.
-
 ## `@` mention commands
 
 Typing `@` opens a small inline **autocomplete popup** anchored at the cursor, listing selectable options; picking one inserts a mention token (e.g. `@EmberWolf`).
