@@ -44,40 +44,54 @@ The threshold **coloring** below is scoped to this scene's stamina bar only; the
 
 Screen split top-to-bottom (all chrome via the dot pipeline per CLAUDE.md rule 4):
 
-1. **Title band** — height = the minimum to fit the braille glyphs (`braille_name::GLYPH_H` = 8 dots = 2 cells) **plus a 1-cell margin above and below** (≈ 4 cells). `braille_name::draw_name(buf, band, "VICTORY", TITLE_COLOR)` (auto-centers). A **Home button** (reuse `engine_render::Button` + `assets::ICON_HOME` + `assets::BUTTON_PANEL`, exactly as RosterManager) sits inset in the **top-right corner**, drawn over the band (the centered title leaves the corner free).
+1. **Title band** — height = the minimum to fit the braille glyphs (`braille_name::GLYPH_H` = 8 dots = 2 cells) **plus a 1-cell margin above and below** (≈ 4 cells). `braille_name::draw_name(buf, band, "VICTORY", TITLE_COLOR)` (auto-centers). A **Home button** (reuse `engine_render::Button` + `assets::ICON_HOME` + `assets::BUTTON_PANEL`, exactly as RosterManager) sits in the **top-right corner**, its **top edge cell-aligned to the top cell-row of the VICTORY glyphs** — it shares the title's top row, not floating below it.
 2. **Creature area** — the vertical space between the title and spoils bands.
-3. **Spoils band** — the bottom **25%** of the screen height.
+3. **Spoils band** — a **fixed 5 cells tall** at the bottom: 2 border rows (top + bottom) enclosing 3 content rows.
 
 ### Creature area
 
 4 columns evenly dividing the width (a Row `flex` over `DotRect` with a small inter-column gap). Reserve a **1-dot margin around every portrait** for the selection glow ring, so columns keep a consistent layout whether or not selected.
 
 Each column is a Column `flex`, top-to-bottom:
-- **Portrait** (grows to fill): a chamfered box frame (`ui_primitives::rounded_rect`, `thickness: 1`, `corner_radius: 2`, transparent fill) around the creature's **idle animation**. Render the sprite with the RosterManager idiom: `creature.animation(AnimationKind::Idle)` → aspect-fit within the dot-precise inner rect (bottom-pinned, horizontally centered) → `sprite.dots_at(self.elapsed, w, h)` → sub-cell placement. The loop advances because `update()` accumulates `dt` into `elapsed`.
+- **Portrait**: a chamfered box frame (`ui_primitives::rounded_rect`, `thickness: 1`, **`corner_radius: 1`** — a single-dot chamfer matching RosterManager, NOT the 3-dot cut a radius of 2 produces) around the creature's **idle animation**. Sized to **≈ 2/3** of the space the column could give it (deliberately compact — do **not** grow to fill), so vertical room opens up below the bars for progression UI coming later. Render the sprite with the RosterManager idiom: `creature.animation(AnimationKind::Idle)` → aspect-fit within the dot-precise inner rect (bottom-pinned, horizontally centered) → `sprite.dots_at(self.elapsed, w, h)` → sub-cell placement. The loop advances because `update()` accumulates `dt` into `elapsed`.
 - **Level line** (1 cell): plain text `"LVL {n}"` via `engine_render::label` (`n = creature.level()`).
-- **XP row**: a short `"XP"` label + a horizontal bar (label fixed-width, bar grows). See XP Bar.
-- **Stamina row**: a short `"STA"` label + a horizontal bar. See Stamina Bar.
+- **XP row** (**exactly 1 cell tall**): a short `"XP"` label + the thin bar (label fixed-width, bar grows). See Bars.
+- **Stamina row** (**exactly 1 cell tall**): a short `"STA"` label + the thin bar. See Bars.
+
+After the two 1-cell bar rows, **leave the rest of the column height empty** — reserved for progression UI coming under the bars. Do not stretch the portrait or the bars to fill it.
 
 Labels are plain terminal text (rule 4). In narrow columns they truncate via `label`.
 
 ### Spoils band
 
+The band is **5 cells tall** (2 border + 3 content).
+
 - Left: plain-text `"SPOILS"` label.
 - Right: a horizontal Row `flex` of the spoil items (this pass: **2**), with a gap.
-- Each spoil item: a chamfered bordered box (`ui_primitives::rounded_rect`, transparent fill) containing a **candy icon** on the left (`engine_render::draw_asset` with `assets::ICON_SPOIL_CANDY`) and a **description** on the right (plain text). Description format is per-spoil-type and **deferred** — use placeholder strings (`"Spoil 1"`, `"Spoil 2"`) for now.
+- Each spoil item: a chamfered bordered box (`ui_primitives::rounded_rect`, `thickness: 1`, **`corner_radius: 1`**, transparent fill), **5 cells tall** to match the band. Its 3-cell content interior holds, left-to-right:
+  - a **candy icon** filling a **square 12×12-dot region** (3 cells tall × 6 cells wide) via `engine_render::draw_asset` with `assets::ICON_SPOIL_CANDY`, then
+  - a **description** (plain text) to its right.
 
-## XP Bar
+  Description format is per-spoil-type and **deferred** — use placeholder strings (`"Spoil 1"`, `"Spoil 2"`) for now.
 
-Model on RosterManager's stat bar (fraction → lit dot-columns; border and fill in separate braille cells so the border stays crisp at any fill; `Tween` off `elapsed`). Fill color `XP_BAR_COLOR`.
+## Bars (XP + stamina)
 
-Animation, per column `i`:
+Both bars share one thin rendering, **exactly 1 cell (4 dots) tall — never taller**. This is NOT the multi-row bordered stat bar; it is a slim horizontal capsule:
+- **White rounded end-caps** mark the start and end of the track — a small chamfered cap at each end in white (`Rgba::rgb(0xff, 0xff, 0xff)`). There is **no top or bottom border**; the two caps are the only chrome.
+- Between the caps, the interior is a run of dots lit in the bar's color up to `fraction`, and blank (unlit) after it.
+- Rendered through the dot pipeline; the label (`"XP"` / `"STA"`) is plain text to the left.
+
+### XP bar (color `XP_BAR_COLOR`) — animates on entry
+
+Per column `i`:
 - `start = creature.xp()`, `gained = xp_gained[i]` (placeholder scene state), `end = start + gained`.
-- A value `v` eases `start → end` over `XP_ANIM_DUR` (≈ 1.2 s) via `Tween`, keyed off `elapsed`. It plays **once on entry** (because `enter` resets `elapsed` to 0) and rests at `end` afterward.
+- A value `v` **eases** `start → end` via `Tween`/`ease_in_out` (keep the easing — it is NOT linear). The animation's **duration is proportional to the fill amount**: `dur = (end − start) / XP_TO_NEXT_LEVEL × XP_FILL_SECONDS_PER_BAR`, where `XP_FILL_SECONDS_PER_BAR = 5s` — a *full* bar's worth of fill takes 5 s, so a column filling 30 % takes 1.5 s and one filling a full-bar-plus (rollover) takes proportionally longer. Every column still eases; a bigger gain just eases over a longer window.
+- **Start after the scene is on screen, not during load.** This is the actual bug the player hit: scene-load/transition time fast-forwarded the animation so only its tail was visible. The XP animation clock must measure time the scene is *actually displayed* — do **not** let the first post-`enter` `dt` (which absorbs scene-load/transition cost) fast-forward it: skip or clamp that first `dt`. In addition, hold the fill at `start` for `XP_ANIM_START_DELAY = 0.5s` before easing begins (the "if we can't cleanly detect *loaded*, just wait ~0.5 s" fallback). The bar visibly climbing from `start` after the screen appears is a **required, live-verified behavior**, not merely a property of a pure fraction function (see Testing Guidance).
 - Displayed fill fraction = `(v mod XP_TO_NEXT_LEVEL) / XP_TO_NEXT_LEVEL`. When `v` crosses a multiple of `XP_TO_NEXT_LEVEL` the bar **rolls over** (fills to full, wraps to empty, keeps filling). The displayed **level number is not incremented** this pass, and `XP_TO_NEXT_LEVEL` is not changed — the level-up moment ("extra UI work") is a separate future spec.
 
-## Stamina Bar
+### Stamina bar — static, color by band
 
-Same bar structure, **static** (no animation this pass — there is no live combat trigger). Fill fraction = `creature.stamina().percent() / 100`. Fill **color by remaining percent**:
+**Static** (no animation this pass — there is no live combat trigger). Fill fraction = `creature.stamina().percent() / 100`. Interior fill **color by remaining percent**:
 - `> 50` → green
 - `15..=50` → yellow
 - `< 15` → red
@@ -114,23 +128,25 @@ Trait impl:
 
 ## Assets
 
-- Bundle `crates/game/src/assets/icon_spoil_candy.png` (already created: 64×64, transparent background) as `pub const ICON_SPOIL_CANDY: &[u8]` in `crates/game/src/assets.rs`, following the existing `include_bytes!` + decode-test pattern.
+- **Regenerate** `crates/game/src/assets/icon_spoil_candy.png` as a **bolder, simpler, higher-contrast** candy with a clean silhouette that stays legible when shrunk (the first version read as an unrecognizable blob at small size). Transparent background, designed to read within a **12×12-dot** square. Keep it bundled as `pub const ICON_SPOIL_CANDY: &[u8]` in `crates/game/src/assets.rs` with the existing `include_bytes!` + decode-test pattern.
 
 ## Constants (placeholders — tunable)
 
-`XP_TO_NEXT_LEVEL = 100`, `XP_ANIM_DUR ≈ 1.2s`, spoils band `25%`, glow period `≈ 1.0s` / `~5` steps, title `TITLE_COLOR = 0xffbf00`, `DEFEAT_COLOR` TBD red, `XP_BAR_COLOR` TBD, stamina green/yellow/red TBD.
+`XP_TO_NEXT_LEVEL = 100`, `XP_FILL_SECONDS_PER_BAR = 5s` (duration scales with fill amount, eased), `XP_ANIM_START_DELAY = 0.5s`, portrait `≈ 2/3` of its available size, **bar height = 1 cell**, bar cap color white `0xffffff`, spoils band `5 cells` (2 border + 3 content), candy icon `12×12 dots`, box chamfer `corner_radius = 1` (portrait + spoil box), glow period `≈ 1.0s` / `~5` steps, title `TITLE_COLOR = 0xffbf00`, `DEFEAT_COLOR` TBD red, `XP_BAR_COLOR` TBD, stamina green/yellow/red TBD.
 
 ## Testing Guidance
 
 Verify **rendered behavior**, not just structure (CLAUDE.md). Where two dot elements' alignment matters, decode actual dots (`engine_render::decode_braille_cell`; reuse `scenes/test_util.rs` helpers) — never compare `Rect`/`DotRect` fields alone.
 
 - Title: `"VICTORY"` paints lit cells in the title band; switching `Outcome::Defeat` paints `"DEFEAT"`.
-- Each of the 4 columns renders a non-empty portrait, a `"LVL n"` line, an XP bar, and a stamina bar.
-- Stamina color: a creature at 80/45/10% yields the green/yellow/red fill respectively (decode the fill color).
+- Each of the 4 columns renders a non-empty portrait (compact, ≈ 2/3 — not filling the column), a `"LVL n"` line, an XP bar, and a stamina bar.
+- Bars: each bar occupies **exactly 1 cell of height**, with **white end-caps** and a **colored interior** whose lit length is proportional to `fraction` (decode caps → white, interior → the bar color; fraction 0 → interior all blank, fraction 1 → interior full between the caps).
+- **XP animates on entry** (behavioral, live-verified): driving the running scene with successive `update(dt)` calls — (a) the fill **holds at `start`** for the first ≈ `XP_ANIM_START_DELAY`, then (b) **eases upward** toward `end`, and (c) the animation **duration scales with fill amount** (a column with a larger `gained` reaches `end` later than one with a smaller `gained`). A large first `dt` (simulating scene-load) must **not** fast-forward past `start`. These prove the live clock drives it and the load-spike guard works — the pure fraction function alone can't. Confirm by observing the actual app.
+- Stamina color: a creature at 80/45/10% yields the green/yellow/red interior fill respectively (decode the fill color); stamina does **not** change across `update` calls (static).
 - XP rollover: for a column whose `start + gained > XP_TO_NEXT_LEVEL`, sampling the fill mid-animation shows it near full then reset toward empty, and at rest the fraction equals `(end mod XP_TO_NEXT_LEVEL)/XP_TO_NEXT_LEVEL`; the level number is unchanged.
 - Selection glow: the ring is present around column 0 and absent around the others; two `elapsed` samples a half-period apart give different ring colors (proves the pulse).
-- Spoils: exactly 2 boxes, each with candy-icon cells and a description string.
-- Home button click and `Esc` each return a `Transition` to `MainHub`.
+- Home button: its top edge occupies the same top cell-row as the VICTORY glyphs; a click and `Esc` each return a `Transition` to `MainHub`.
+- Spoils: the band is **5 cells tall**; exactly **2 boxes**; each box's candy icon fills a **12×12-dot square** and its description string renders.
 - Data model: `Stamina::default().percent() == 100`; a drained stamina reads the reduced value and hits injured at 0; roster details renders `"Stamina: {n}%"`; `Creature::xp()`/`with_xp` round-trip.
 
 ## Out of Scope / Open Questions (deferred)
@@ -148,4 +164,4 @@ Verify **rendered behavior**, not just structure (CLAUDE.md). Where two dot elem
 - `34-creature-attributes-data-model.md` — the `Creature` shape this extends (XP field, Stamina rename).
 - `completed/13-rendering.md`, `completed/22-braille-ui-chrome.md`, `completed/40-flex-layout-primitive.md` — dot pipeline, chrome primitives (`ui_primitives`), flex layout.
 - `completed/24-roster-carousel.md` / `35-roster-screen-stats-abilities-squad.md` — the portrait/idle, stat-bar, and Home-button patterns reused here.
-- `45-button-widget-unification.md` — if landed first, use the unified button; otherwise the existing `engine_render::Button`.
+- `completed/45-button-widget-unification.md` ✅ — use the unified `engine_render::Button` builder API (`Button::new(rect, panel).icon(ICON_HOME)`) for the Home button.
