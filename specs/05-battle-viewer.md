@@ -69,7 +69,7 @@ Resolved (moved out): terrain/cell rendering, idle-animation behavior → decide
 - `20-battle-viewer-event-playback` — the move/death event-playback slice of stage 2 (stage 2 also needs attack/take-damage events and a real replay file format, both still pending).
 - `36-battle-viewer-squad-layout` — supersedes `18`'s 6v6 layout with the 3v3 + 1-bench-per-side squad composition.
 - `37-battle-viewer-dynamic-camera` — supersedes `18`'s single fixed camera with three player-switchable views; also removes the global digit-key scene-switcher.
-- `34-creature-attributes-data-model` — stats/abilities/exhaustion/squad-role data that `36`'s layout and any future combat-facing turn content will draw on.
+- `34-creature-attributes-data-model` — stats/abilities/stamina/squad-role data that `36`'s layout and any future combat-facing turn content will draw on.
 - `10-battle-simulation-engine` — produces the turn sequence that the viewer consumes
 - `07-replay-browser` — launches viewer in replay mode
 - `04-matchmaking-battle-initiation` — launches viewer in live mode
