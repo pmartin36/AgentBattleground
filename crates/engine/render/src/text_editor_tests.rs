@@ -361,13 +361,22 @@ fn down_past_viewport_bottom_scrolls_offset_to_keep_caret_visible() {
 
 // --- b2-t3: explicit scroll input — wheel (handle_mouse) + PgUp/PgDn ---
 
-use ratatui::crossterm::event::{MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 fn mouse(kind: MouseEventKind) -> MouseEvent {
     MouseEvent {
         kind,
         column: 0,
         row: 0,
+        modifiers: KeyModifiers::empty(),
+    }
+}
+
+fn mouse_at(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+    MouseEvent {
+        kind,
+        column,
+        row,
         modifiers: KeyModifiers::empty(),
     }
 }
@@ -697,6 +706,81 @@ fn fixed_desired_rows_is_uncapped_natural_wrap_count() {
     assert_eq!(editor.desired_rows(6), 6, "Fixed reports the natural wrapped row count, no cap");
 }
 
+// --- b1-t1: slow cursor blink — accumulator, tick, focus flag, render gating ---
+
+#[test]
+fn caret_visible_at_phase_zero_when_focused_and_render_shows_reversed_cell() {
+    let mut editor = TextEditor::new(config());
+    editor.set_text("hi"); // caret lands at end (col 2)
+
+    assert!(editor.caret_visible(), "caret must be visible at phase 0 on a focused editor");
+
+    let rect = Rect::new(0, 0, 10, 3);
+    let mut buf = make_buf(10, 3);
+    editor.render(&mut buf, rect);
+    let caret = buf.cell((2, 0)).unwrap();
+    assert!(caret.modifier.contains(Modifier::REVERSED), "caret cell must be reverse-video at phase 0");
+}
+
+#[test]
+fn tick_half_period_hides_caret_and_render_omits_reversed_cell() {
+    let mut editor = TextEditor::new(config());
+    editor.set_text("hi");
+
+    editor.tick(BLINK_PERIOD);
+    assert!(!editor.caret_visible(), "caret must be hidden once accumulator reaches the second half");
+
+    let rect = Rect::new(0, 0, 10, 3);
+    let mut buf = make_buf(10, 3);
+    editor.render(&mut buf, rect);
+    let caret = buf.cell((2, 0)).unwrap();
+    assert!(
+        !caret.modifier.contains(Modifier::REVERSED),
+        "no reverse-video caret cell while hidden"
+    );
+}
+
+#[test]
+fn edit_during_hidden_phase_resets_caret_to_visible() {
+    let mut editor = TextEditor::new(config());
+    editor.set_text("hi");
+    editor.tick(BLINK_PERIOD);
+    assert!(!editor.caret_visible(), "precondition: caret is hidden before the edit");
+
+    editor.handle_key(key(KeyCode::Char('x')));
+
+    assert!(editor.caret_visible(), "any edit must reset the blink phase back to visible");
+}
+
+#[test]
+fn unfocused_editor_renders_no_caret_while_focused_one_does() {
+    let mut focused = TextEditor::new(config());
+    focused.set_text("hi");
+    let rect = Rect::new(0, 0, 10, 3);
+    let mut focused_buf = make_buf(10, 3);
+    focused.render(&mut focused_buf, rect);
+    assert!(
+        focused_buf.cell((2, 0)).unwrap().modifier.contains(Modifier::REVERSED),
+        "a focused editor at phase 0 must render a caret"
+    );
+
+    let mut unfocused = TextEditor::new(config());
+    unfocused.set_text("hi");
+    unfocused.set_focused(false);
+    assert!(!unfocused.caret_visible(), "an unfocused editor must never report the caret visible");
+
+    let mut unfocused_buf = make_buf(10, 3);
+    unfocused.render(&mut unfocused_buf, rect);
+    for x in rect.left()..rect.right() {
+        for y in rect.top()..rect.bottom() {
+            assert!(
+                !unfocused_buf.cell((x, y)).unwrap().modifier.contains(Modifier::REVERSED),
+                "an unfocused editor must render NO caret anywhere in its rect"
+            );
+        }
+    }
+}
+
 #[test]
 fn desired_rows_does_not_mutate_editor_state() {
     let mut editor = TextEditor::new(grow_config(3));
@@ -717,4 +801,125 @@ fn desired_rows_does_not_mutate_editor_state() {
     assert_eq!(editor.scroll_offset, before_scroll);
     assert_eq!(editor.viewport_width, before_vw);
     assert_eq!(editor.viewport_height, before_vh);
+}
+
+// --- b1-t2: click-to-place caret ---
+
+/// Multi-line wrapped content at a cached render origin away from (0,0), with
+/// a wrapped row shorter than `viewport_width` (`"ab "` at width 4) so a click
+/// past the row's own width exercises `set_from_display`'s wrap-boundary
+/// clamp. `wrap_rows(4)` on `"ab cd ef\nxy"` yields 4 display rows: "ab "
+/// (non-last), "cd " (non-last), "ef" (last of line 0), "xy" (last of line 1)
+/// — enough rows that `viewport_height` (10) exceeds them, for the
+/// clamp-to-last-row case.
+fn clickable_editor() -> TextEditor {
+    let mut editor = TextEditor::new(config());
+    editor.set_text("ab cd ef\nxy");
+    editor.viewport_width = 4;
+    editor.viewport_height = 10;
+    editor.viewport_x = 2;
+    editor.viewport_y = 1;
+    editor.scroll_offset = 0;
+    editor
+}
+
+#[test]
+fn click_places_caret_matching_wrap_rows_and_set_from_display() {
+    let mut editor = clickable_editor();
+    let width = editor.viewport_width;
+    let local_row = 0usize;
+    let local_col = 3usize; // at the row's own width -> exercises the wrap-boundary clamp rule
+
+    let rows = editor.wrap_rows(width);
+    let mut probe = clickable_editor();
+    let display_row = (editor.scroll_offset + local_row).min(rows.len() - 1);
+    probe.set_from_display(&rows, display_row, local_col);
+    let expected = (probe.cursor_line, probe.cursor_col);
+
+    let handled = editor.handle_mouse(&mouse_at(
+        MouseEventKind::Down(MouseButton::Left),
+        editor.viewport_x + local_col as u16,
+        editor.viewport_y + local_row as u16,
+    ));
+
+    assert!(handled, "an in-content click must report handled");
+    assert_eq!((editor.cursor_line, editor.cursor_col), expected);
+}
+
+#[test]
+fn click_row_past_content_clamps_to_last_wrapped_row() {
+    let mut editor = clickable_editor();
+    let width = editor.viewport_width;
+    let rows = editor.wrap_rows(width);
+    let local_row = editor.viewport_height - 1; // far past the 4 real wrapped rows, still inside the rect
+    let local_col = 0usize;
+
+    let mut probe = clickable_editor();
+    let display_row = rows.len() - 1;
+    probe.set_from_display(&rows, display_row, local_col);
+    let expected = (probe.cursor_line, probe.cursor_col);
+
+    let handled = editor.handle_mouse(&mouse_at(
+        MouseEventKind::Down(MouseButton::Left),
+        editor.viewport_x + local_col as u16,
+        editor.viewport_y + local_row as u16,
+    ));
+
+    assert!(handled, "a click below content but inside the rect must still report handled");
+    assert_eq!((editor.cursor_line, editor.cursor_col), expected);
+}
+
+#[test]
+fn click_outside_content_rect_is_ignored() {
+    let mut editor = clickable_editor();
+    let text_before = editor.text();
+    let cursor_before = (editor.cursor_line, editor.cursor_col);
+
+    // right of the content rect
+    assert!(!editor.handle_mouse(&mouse_at(
+        MouseEventKind::Down(MouseButton::Left),
+        editor.viewport_x + editor.viewport_width as u16,
+        editor.viewport_y,
+    )));
+    // below the content rect
+    assert!(!editor.handle_mouse(&mouse_at(
+        MouseEventKind::Down(MouseButton::Left),
+        editor.viewport_x,
+        editor.viewport_y + editor.viewport_height as u16,
+    )));
+    // above the content rect
+    assert!(!editor.handle_mouse(&mouse_at(
+        MouseEventKind::Down(MouseButton::Left),
+        editor.viewport_x,
+        editor.viewport_y - 1,
+    )));
+    // left of the content rect
+    assert!(!editor.handle_mouse(&mouse_at(
+        MouseEventKind::Down(MouseButton::Left),
+        editor.viewport_x - 1,
+        editor.viewport_y,
+    )));
+
+    assert_eq!(editor.text(), text_before, "an out-of-rect click must not mutate the buffer");
+    assert_eq!(
+        (editor.cursor_line, editor.cursor_col),
+        cursor_before,
+        "an out-of-rect click must not move the caret"
+    );
+}
+
+#[test]
+fn click_to_place_resets_blink_to_visible() {
+    let mut editor = clickable_editor();
+    editor.tick(BLINK_PERIOD);
+    assert!(!editor.caret_visible(), "precondition: caret hidden before click");
+
+    let handled = editor.handle_mouse(&mouse_at(
+        MouseEventKind::Down(MouseButton::Left),
+        editor.viewport_x,
+        editor.viewport_y,
+    ));
+
+    assert!(handled, "an in-content click must report handled");
+    assert!(editor.caret_visible(), "an in-content click must reset the blink phase to visible");
 }
