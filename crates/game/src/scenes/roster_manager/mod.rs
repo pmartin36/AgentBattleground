@@ -485,6 +485,7 @@ mod panel_layout;
 mod prompt_editor;
 mod sprite_name;
 mod stat_bar;
+mod tooltip;
 
 #[cfg(test)]
 mod regression_tests;
