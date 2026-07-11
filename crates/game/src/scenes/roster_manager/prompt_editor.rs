@@ -3,13 +3,13 @@
 //! and the write-debounce/dirty flag. Layout/render land in b2, input
 //! routing + write-through land in b3.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ratatui::buffer::Buffer;
-use ratatui::crossterm::event::KeyCode;
-use ratatui::layout::Rect;
+use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
+use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::Frame;
 
@@ -92,6 +92,14 @@ pub(super) struct PromptEditor {
     /// Time remaining until the pending edit flushes to disk — meaningful
     /// only while `dirty` (b3-t2).
     debounce: Duration,
+    /// The screen `area` last passed to `render` (b2-t1), cached so
+    /// `handle_input`'s mouse branch can recompute `layout` for click-to-
+    /// focus hit-testing without `Scene::handle_input`'s fixed signature
+    /// threading `area` through. Defaults to `Rect::default()` before the
+    /// first render, which is always ahead of the first possible click in
+    /// practice (input is only routed here while the popup, itself just
+    /// rendered, is open).
+    last_area: Cell<Rect>,
 }
 
 impl PromptEditor {
@@ -123,6 +131,7 @@ impl PromptEditor {
             focus: PopupFocus::Instructions,
             dirty: false,
             debounce: Duration::ZERO,
+            last_area: Cell::new(Rect::default()),
         }
     }
 
@@ -154,8 +163,26 @@ impl PromptEditor {
                 if self.close_button.get_mut().handle_mouse(me) {
                     return true;
                 }
-                self.agent_input.get_mut().handle_mouse(me);
-                self.instructions.get_mut().handle_mouse(me);
+                if me.kind == MouseEventKind::Down(MouseButton::Left) {
+                    // Click-to-focus (b2-t1): route the click to whichever
+                    // field's box it lands in and make that field the
+                    // keyboard focus, forwarding the click ONLY to that
+                    // editor so the other editor's caret does not move. A
+                    // click inside the popup but outside both field boxes
+                    // leaves focus unchanged and forwards nothing.
+                    let layout = self.layout(self.last_area.get());
+                    let pos = Position { x: me.column, y: me.row };
+                    if layout.agent_input.to_cell_rect().contains(pos) {
+                        self.focus = PopupFocus::AgentInput;
+                        self.agent_input.get_mut().handle_mouse(me);
+                    } else if layout.instructions.to_cell_rect().contains(pos) {
+                        self.focus = PopupFocus::Instructions;
+                        self.instructions.get_mut().handle_mouse(me);
+                    }
+                } else {
+                    self.agent_input.get_mut().handle_mouse(me);
+                    self.instructions.get_mut().handle_mouse(me);
+                }
             }
         }
         false
@@ -188,9 +215,14 @@ impl PromptEditor {
         self.debounce = WRITE_DEBOUNCE;
     }
 
-    /// Scene tick (b3-t2): advances the debounce while a pending edit
-    /// exists, flushing once it elapses. No-op while `dirty` is false.
+    /// Scene tick (b3-t2, b2-t2): advances both editors' blink accumulators
+    /// every frame, then — while a pending edit exists — advances the
+    /// debounce, flushing once it elapses. The debounce countdown stays
+    /// gated on `dirty`; only the blink tick runs unconditionally.
     pub(super) fn update(&mut self, dt: Duration) {
+        self.agent_input.get_mut().tick(dt);
+        self.instructions.get_mut().tick(dt);
+
         if !self.dirty {
             return;
         }
@@ -319,6 +351,7 @@ impl PromptEditor {
     /// editors, and the file-path row, all positioned from `self.layout(area)`
     /// (b2-t2). Order = z-order, topmost last, mirroring `BattleMenu::render`.
     pub(super) fn render(&self, frame: &mut Frame, area: Rect) {
+        self.last_area.set(area);
         let layout = self.layout(area);
         let buf = frame.buffer_mut();
 
@@ -346,11 +379,13 @@ impl PromptEditor {
 
         // Agent input: braille box + placeholder/text inset inside the border.
         Self::draw_field_box(buf, layout.agent_input);
+        self.agent_input.borrow_mut().set_focused(self.focus == PopupFocus::AgentInput);
         self.agent_input.borrow_mut().render(buf, Self::field_content(layout.agent_input));
 
         // Instructions editor: braille box + seeded/edited text (+ its own
         // scrollbar thumb) inset inside the border.
         Self::draw_field_box(buf, layout.instructions);
+        self.instructions.borrow_mut().set_focused(self.focus == PopupFocus::Instructions);
         self.instructions.borrow_mut().render(buf, Self::field_content(layout.instructions));
 
         // File-path row: plain text, beneath the instructions editor. Long

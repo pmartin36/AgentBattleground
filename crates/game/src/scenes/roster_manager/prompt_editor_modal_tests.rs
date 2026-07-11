@@ -10,9 +10,10 @@
 use super::*;
 use crate::ability::Ability;
 use crate::creatures::Creature;
-use crate::scenes::test_util::{key_event, mouse_event, render_to_buffer};
+use crate::scenes::test_util::{key_event, mouse_event, rect_text, render_to_buffer};
 use engine_core::scene::EngineCtx;
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
+use ratatui::style::Modifier;
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -281,6 +282,243 @@ fn agent_input_change_does_not_write_instructions() {
 
     let on_disk = crate::instructions::read_instructions_in(&base, name).expect("read should succeed");
     assert_eq!(on_disk, "seed", "typing into the agent input must not write the instructions file");
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// ── b2-t1: click-to-focus routing between the two editors ──────────────────
+// RED until the code-writer wires click-driven focus in
+// `PromptEditor::handle_input`'s mouse branch (research.md's blueprint):
+// today a `Down(Left)` inside a field box already relocates that editor's
+// OWN caret (b1-t2's `TextEditor::handle_mouse` guard), but never updates
+// `PromptEditor::focus`, so which editor actually RECEIVES subsequent
+// keystrokes is unaffected by where the user clicked — only `Tab` moves
+// keyboard focus. These tests type a marker character right after a click
+// and read back the two fields' rendered text (no accessor into
+// `PromptEditor`'s private `focus` field needed, mirroring how this sibling
+// test module already reads state — `scene.current_instructions`,
+// `scene.prompt_editor` — rather than reaching into `PromptEditor` itself).
+
+const AREA_W: u16 = 80;
+const AREA_H: u16 = 30;
+
+/// Center point, in cell space, of a field's actual editable content area —
+/// the field's braille-box rect inset by the 1-cell border every side
+/// (mirrors `PromptEditor::field_content`'s cell math), so the click lands
+/// inside the `TextEditor`'s own cached viewport, not on its border.
+fn field_content_center(field_box: Rect) -> (u16, u16) {
+    let inner = Rect::new(
+        field_box.x + 1,
+        field_box.y + 1,
+        field_box.width.saturating_sub(2),
+        field_box.height.saturating_sub(2),
+    );
+    (inner.x + inner.width / 2, inner.y + inner.height / 2)
+}
+
+/// Renders `scene`, types `ch` into whichever editor currently holds
+/// keyboard focus, then returns `(agent_input_text, instructions_text)` read
+/// back from a fresh render — a purely observable proxy for "which editor
+/// received the keystroke".
+fn type_and_read_fields(scene: &mut RosterManager, ch: char) -> (String, String) {
+    scene.handle_input(key_event(KeyCode::Char(ch)));
+
+    let buf = render_to_buffer(scene, AREA_W, AREA_H);
+    let layout =
+        prompt_editor::PromptEditor::compute_layout(Rect::new(0, 0, AREA_W, AREA_H), 1);
+    let agent_text = rect_text(&buf, layout.agent_input.to_cell_rect());
+    let instructions_text =
+        rect_text(&buf, layout.instructions.to_cell_rect());
+    (agent_text, instructions_text)
+}
+
+/// A `Down(Left)` inside the agent-input field must focus it (default focus
+/// on open is Instructions) — a keystroke right after the click must land in
+/// the agent input, not the instructions editor.
+#[test]
+fn click_in_agent_input_focuses_it() {
+    let base = temp_base_dir("click-focuses-agent");
+    let mut scene = RosterManager::new_with_instructions_base(base.clone());
+    open_popup(&mut scene, Some(&base));
+
+    let _ = render_to_buffer(&scene, AREA_W, AREA_H); // caches both editors' click viewports
+    let layout =
+        prompt_editor::PromptEditor::compute_layout(Rect::new(0, 0, AREA_W, AREA_H), 1);
+    let (cx, cy) = field_content_center(layout.agent_input.to_cell_rect());
+    scene.handle_input(mouse_event(MouseEventKind::Down(MouseButton::Left), cx, cy));
+
+    let (agent_text, instructions_text) = type_and_read_fields(&mut scene, 'z');
+    assert!(
+        agent_text.contains('z'),
+        "a click in the agent-input field must focus it so typing lands there, got {agent_text:?}"
+    );
+    assert!(
+        !instructions_text.contains('z'),
+        "a click in the agent-input field must not route typing to the instructions editor, got {instructions_text:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A `Down(Left)` inside the instructions field must (re-)focus it, moving
+/// keyboard focus away from a previously Tab-focused agent input.
+#[test]
+fn click_in_instructions_focuses_it() {
+    let base = temp_base_dir("click-focuses-instructions");
+    let mut scene = RosterManager::new_with_instructions_base(base.clone());
+    open_popup(&mut scene, Some(&base));
+    scene.handle_input(key_event(KeyCode::Tab)); // focus -> AgentInput
+
+    let _ = render_to_buffer(&scene, AREA_W, AREA_H);
+    let layout =
+        prompt_editor::PromptEditor::compute_layout(Rect::new(0, 0, AREA_W, AREA_H), 1);
+    let (cx, cy) = field_content_center(layout.instructions.to_cell_rect());
+    scene.handle_input(mouse_event(MouseEventKind::Down(MouseButton::Left), cx, cy));
+
+    let (agent_text, instructions_text) = type_and_read_fields(&mut scene, 'z');
+    assert!(
+        instructions_text.contains('z'),
+        "a click in the instructions field must focus it so typing lands there, got {instructions_text:?}"
+    );
+    assert!(
+        !agent_text.contains('z'),
+        "a click in the instructions field must not route typing to the agent input, got {agent_text:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A `Down(Left)` inside the popup but outside both field boxes (the
+/// file-path row) must leave keyboard focus unchanged — a keystroke right
+/// after still lands in whichever field was already focused.
+#[test]
+fn click_outside_both_fields_leaves_focus_unchanged() {
+    let base = temp_base_dir("click-outside-leaves-focus");
+    let mut scene = RosterManager::new_with_instructions_base(base.clone());
+    open_popup(&mut scene, Some(&base));
+    scene.handle_input(key_event(KeyCode::Tab)); // focus -> AgentInput
+
+    let _ = render_to_buffer(&scene, AREA_W, AREA_H);
+    let layout =
+        prompt_editor::PromptEditor::compute_layout(Rect::new(0, 0, AREA_W, AREA_H), 1);
+    let file_path = layout.file_path.to_cell_rect();
+    let (cx, cy) = (file_path.x + file_path.width / 2, file_path.y + file_path.height / 2);
+    scene.handle_input(mouse_event(MouseEventKind::Down(MouseButton::Left), cx, cy));
+
+    let (agent_text, instructions_text) = type_and_read_fields(&mut scene, 'z');
+    assert!(
+        agent_text.contains('z'),
+        "a click outside both fields must leave focus on the already-focused agent input, got {agent_text:?}"
+    );
+    assert!(
+        !instructions_text.contains('z'),
+        "a click outside both fields must not move focus to the instructions editor, got {instructions_text:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// ── b2-t2: dt forwarded to both editors' tick + focus drives caret ─────────
+// RED until the code-writer (1) un-gates `PromptEditor::update`'s early
+// return so `TextEditor::tick` reaches both editors every frame and (2)
+// `PromptEditor::render` calls `TextEditor::set_focused` per `self.focus`
+// (research.md's blueprint). Today `render` never calls `set_focused`, and
+// both `TextEditor`s default `focused: true`, so BOTH fields show a
+// reverse-video caret regardless of which one has keyboard focus.
+
+/// True iff any cell in `rect` carries `Modifier::REVERSED` — the caret
+/// block-cursor signal `TextEditor::render` draws (mirrors
+/// `text_editor_tests.rs`'s own REVERSED-cell assertions).
+fn rect_has_reversed(buf: &Buffer, rect: Rect) -> bool {
+    for y in rect.y..rect.y + rect.height {
+        for x in rect.x..rect.x + rect.width {
+            if buf.cell((x, y)).unwrap().modifier.contains(Modifier::REVERSED) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// A field's editable content rect inside its braille box — the box rect
+/// inset by the 1-cell border every side (mirrors
+/// `field_content_center`/`PromptEditor::field_content`'s cell math), so the
+/// scan covers only cells `TextEditor::render` actually draws into, never the
+/// border (which is never REVERSED).
+fn field_inner_rect(field_box: Rect) -> Rect {
+    Rect::new(
+        field_box.x + 1,
+        field_box.y + 1,
+        field_box.width.saturating_sub(2),
+        field_box.height.saturating_sub(2),
+    )
+}
+
+/// A freshly opened popup (default focus is Instructions) must show a caret
+/// in the instructions field only. Both fields are seeded with non-empty
+/// text first — `TextEditor::render` early-returns (no caret at all) while a
+/// field's text is empty, so an empty agent input could pass this check
+/// vacuously without the focus gate actually working; this seeds both so the
+/// assertion is meaningful for both fields.
+#[test]
+fn single_caret_shows_in_focused_editor_only() {
+    let base = temp_base_dir("single-caret");
+    let name = "Ember Wolf";
+    crate::instructions::write_instructions_in(&base, name, "seed text")
+        .expect("seed write should succeed");
+    let mut scene = RosterManager::new_with_instructions_base(base.clone());
+    open_popup(&mut scene, Some(&base));
+
+    scene.handle_input(key_event(KeyCode::Tab)); // focus -> AgentInput
+    scene.handle_input(key_event(KeyCode::Char('a'))); // give it non-empty text
+    scene.handle_input(key_event(KeyCode::Tab)); // focus back -> Instructions (default)
+
+    let buf = render_to_buffer(&scene, AREA_W, AREA_H);
+    let layout = prompt_editor::PromptEditor::compute_layout(Rect::new(0, 0, AREA_W, AREA_H), 1);
+    let instructions_inner = field_inner_rect(layout.instructions.to_cell_rect());
+    let agent_inner = field_inner_rect(layout.agent_input.to_cell_rect());
+
+    assert!(
+        rect_has_reversed(&buf, instructions_inner),
+        "focus is on Instructions; it must show a caret"
+    );
+    assert!(
+        !rect_has_reversed(&buf, agent_inner),
+        "the unfocused (but non-empty) agent input must show no caret"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// After `Tab` moves keyboard focus to the agent input, the caret must
+/// follow: agent input shows it, instructions no longer does (even though
+/// instructions still has seeded text) — guards the per-field `set_focused`
+/// wiring, not just "one of the two shows a caret".
+#[test]
+fn caret_follows_focus_after_tab() {
+    let base = temp_base_dir("caret-follows-tab");
+    let name = "Ember Wolf";
+    crate::instructions::write_instructions_in(&base, name, "seed text")
+        .expect("seed write should succeed");
+    let mut scene = RosterManager::new_with_instructions_base(base.clone());
+    open_popup(&mut scene, Some(&base));
+
+    scene.handle_input(key_event(KeyCode::Tab)); // focus -> AgentInput
+    scene.handle_input(key_event(KeyCode::Char('a'))); // give it non-empty text
+
+    let buf = render_to_buffer(&scene, AREA_W, AREA_H);
+    let layout = prompt_editor::PromptEditor::compute_layout(Rect::new(0, 0, AREA_W, AREA_H), 1);
+    let instructions_inner = field_inner_rect(layout.instructions.to_cell_rect());
+    let agent_inner = field_inner_rect(layout.agent_input.to_cell_rect());
+
+    assert!(
+        rect_has_reversed(&buf, agent_inner),
+        "after Tab, the agent input must show the caret"
+    );
+    assert!(
+        !rect_has_reversed(&buf, instructions_inner),
+        "after Tab, the instructions editor (though it has text) must show no caret"
+    );
 
     let _ = std::fs::remove_dir_all(&base);
 }
