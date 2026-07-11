@@ -8,15 +8,17 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ratatui::buffer::Buffer;
+use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::Frame;
 
 use engine_core::color::Rgba;
+use engine_core::scene::InputEvent;
 use engine_render::dots::{Dot, DotBuffer};
 use engine_render::{
     draw_dots, flex, label, ui_primitives, Align, Basis, ButtonCore, Direction, DotRect,
-    FlexChild, FlexStyle, Justify, Sizing, TextAlign, TextEditor, TextEditorConfig,
+    EditorEvent, FlexChild, FlexStyle, Justify, Sizing, TextAlign, TextEditor, TextEditorConfig,
 };
 
 use super::RosterManager;
@@ -28,7 +30,6 @@ const POPUP_H_FRAC: f32 = 0.8;
 const POPUP_MIN_H: u16 = 12;
 /// Idle time after the last instructions-editor edit before the pending
 /// write is flushed to disk (b3-t2).
-#[allow(dead_code)] // consumed by b3-t2's debounced write-through
 const WRITE_DEBOUNCE: Duration = Duration::from_millis(300);
 /// Cap on the agent input's grow-with-content row count (b3-t3).
 const AGENT_INPUT_MAX_ROWS: u16 = 6;
@@ -61,7 +62,6 @@ const POPUP_PATH_COLOR: Rgba = Rgba::rgb(0x88, 0x88, 0x88);
 
 /// Which of the two editors currently receives keyboard input (b3-t1's
 /// Tab-cycle). Defaults to `Instructions` on open.
-#[allow(dead_code)] // read by b3-t1's modal input routing
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PopupFocus {
     AgentInput,
@@ -76,11 +76,10 @@ pub(super) struct PromptEditor {
     agent_input: RefCell<TextEditor>,
     instructions: RefCell<TextEditor>,
     close_button: RefCell<ButtonCore>,
-    #[allow(dead_code)] // read by b3-t1's modal input routing
     focus: PopupFocus,
-    #[allow(dead_code)] // read/written by b3-t2's debounced write-through
     dirty: bool,
-    #[allow(dead_code)] // advanced by b3-t2's update tick
+    /// Time remaining until the pending edit flushes to disk — meaningful
+    /// only while `dirty` (b3-t2).
     debounce: Duration,
 }
 
@@ -114,6 +113,99 @@ impl PromptEditor {
             dirty: false,
             debounce: Duration::ZERO,
         }
+    }
+
+    /// Modal input router (b3-t1): the popup's sole entry point for both key
+    /// and mouse events while it is open. Returns `true` iff the popup
+    /// requests close (`Esc`, or a completed click on the close (X)) — the
+    /// scene's `handle_input` closes on `true` and refreshes its cached
+    /// instructions from disk. All other input is fully consumed here and
+    /// never falls through to the scene's normal roster bindings.
+    pub(super) fn handle_input(&mut self, ev: &InputEvent) -> bool {
+        match ev {
+            InputEvent::Key(key) => match key.code {
+                KeyCode::Esc => return true,
+                KeyCode::Tab => self.toggle_focus(),
+                _ => match self.focus {
+                    PopupFocus::AgentInput => {
+                        if self.agent_input.get_mut().handle_key(*key) == EditorEvent::Submit {
+                            self.submit_agent_input();
+                        }
+                    }
+                    PopupFocus::Instructions => {
+                        if self.instructions.get_mut().handle_key(*key) == EditorEvent::Changed {
+                            self.mark_dirty();
+                        }
+                    }
+                },
+            },
+            InputEvent::Mouse(me) => {
+                if self.close_button.get_mut().handle_mouse(me) {
+                    return true;
+                }
+                self.agent_input.get_mut().handle_mouse(me);
+                self.instructions.get_mut().handle_mouse(me);
+            }
+        }
+        false
+    }
+
+    /// Cycles keyboard focus between the two editors (b3-t1's `Tab`
+    /// handling).
+    fn toggle_focus(&mut self) {
+        self.focus = match self.focus {
+            PopupFocus::AgentInput => PopupFocus::Instructions,
+            PopupFocus::Instructions => PopupFocus::AgentInput,
+        };
+    }
+
+    /// Handles `EditorEvent::Submit` from the agent input (Enter, non-Shift).
+    /// v1 stub: no model call, no I/O, no close — clears the agent input so
+    /// the Submit path has a real, observable effect instead of being
+    /// silently swallowed. Future agent flow (`needs-research/ai-prompt-rewrite-agent`)
+    /// will capture the prompt text here before clearing.
+    fn submit_agent_input(&mut self) {
+        self.agent_input.get_mut().set_text("");
+    }
+
+    /// Marks the popup dirty and (re)starts the `WRITE_DEBOUNCE` countdown
+    /// (b3-t2). Called on the instructions editor's `EditorEvent::Changed`
+    /// only — every keystroke restarts the timer so a burst of edits
+    /// coalesces into a single trailing-idle write.
+    fn mark_dirty(&mut self) {
+        self.dirty = true;
+        self.debounce = WRITE_DEBOUNCE;
+    }
+
+    /// Scene tick (b3-t2): advances the debounce while a pending edit
+    /// exists, flushing once it elapses. No-op while `dirty` is false.
+    pub(super) fn update(&mut self, dt: Duration) {
+        if !self.dirty {
+            return;
+        }
+        self.debounce = self.debounce.saturating_sub(dt);
+        if self.debounce.is_zero() {
+            self.flush_pending();
+        }
+    }
+
+    /// Writes the instructions editor's current text to disk and clears the
+    /// pending-edit state (b3-t2). Called both on debounce elapse and, by
+    /// the scene's close path, before `reload_instructions` so the cached
+    /// preview never refreshes from stale disk. No-op while `dirty` is
+    /// false.
+    pub(super) fn flush_pending(&mut self) {
+        if !self.dirty {
+            return;
+        }
+        let text = self.instructions.borrow().text();
+        let _ = crate::instructions::write_instructions_maybe(
+            self.instructions_base.as_deref(),
+            &self.creature_name,
+            &text,
+        );
+        self.dirty = false;
+        self.debounce = Duration::ZERO;
     }
 
     /// Test-only accessor for the seeded instructions-editor text
@@ -621,5 +713,79 @@ mod tests {
 
         let expected = PromptEditor::compute_layout(Rect::new(0, 0, w, h), 1).close.to_cell_rect();
         assert_eq!(popup.close_button.borrow().rect(), expected);
+    }
+
+    // ── b3-t3: agent input submit stub + Shift+Enter grow ─────────────────
+
+    use ratatui::crossterm::event::{KeyEvent, KeyModifiers};
+
+    /// Focuses the agent input (default focus on open is Instructions).
+    fn focus_agent_input(popup: &mut PromptEditor) {
+        let tab = InputEvent::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(!popup.handle_input(&tab));
+        assert_eq!(popup.focus, PopupFocus::AgentInput);
+    }
+
+    /// Enter on a focused agent input must be a no-op stub: it does not
+    /// close the popup, does not mark the popup dirty (no instructions
+    /// write is scheduled), and clears the agent input's text — spec 51
+    /// Testing Guidance line 64.
+    #[test]
+    fn agent_submit_clears_input_and_stays_open() {
+        let mut popup = PromptEditor::new(0, "Test Creature", None);
+        focus_agent_input(&mut popup);
+
+        for c in ['h', 'i'] {
+            let key = InputEvent::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            popup.handle_input(&key);
+        }
+        assert_eq!(popup.agent_input.borrow().text(), "hi");
+
+        let enter = InputEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let closed = popup.handle_input(&enter);
+
+        assert!(!closed, "Enter on the agent input must not close the popup");
+        assert_eq!(
+            popup.agent_input.borrow().text(),
+            "",
+            "submit stub must clear the agent input"
+        );
+        assert!(!popup.dirty, "agent submit must never mark the instructions dirty");
+    }
+
+    /// Shift+Enter on a focused agent input inserts a newline and grows the
+    /// laid-out popup height by one cell (one more agent-input row) — spec
+    /// 51 Testing Guidance line 64.
+    #[test]
+    fn agent_shift_enter_grows_desired_rows() {
+        let mut popup = PromptEditor::new(0, "Test Creature", None);
+        focus_agent_input(&mut popup);
+
+        let area = Rect::new(0, 0, 80, 30);
+        let before = popup.layout(area).agent_input.h;
+
+        let shift_enter = InputEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        popup.handle_input(&shift_enter);
+
+        let after = popup.layout(area).agent_input.h;
+        assert_eq!(after, before + 4, "Shift+Enter must grow desired_rows by one cell");
+    }
+
+    /// The agent input's grow-with-content is capped at `AGENT_INPUT_MAX_ROWS`
+    /// — repeated Shift+Enter must stop growing the popup once the cap is
+    /// hit.
+    #[test]
+    fn agent_grow_caps_at_max_rows() {
+        let mut popup = PromptEditor::new(0, "Test Creature", None);
+        focus_agent_input(&mut popup);
+
+        let area = Rect::new(0, 0, 80, 30);
+        let shift_enter = InputEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        for _ in 0..8 {
+            popup.handle_input(&shift_enter);
+        }
+
+        let rows = popup.agent_input.borrow().desired_rows(PromptEditor::interior_w_cells(area));
+        assert_eq!(rows, AGENT_INPUT_MAX_ROWS, "agent input growth must clamp at the max-rows cap");
     }
 }

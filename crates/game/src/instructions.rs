@@ -103,6 +103,18 @@ pub fn read_instructions_maybe(base: Option<&Path>, name: &str) -> io::Result<St
     }
 }
 
+/// Writes `name`'s instructions via `write_instructions_in(base, name,
+/// contents)` when `base` is `Some`, else via the runtime resolver
+/// `write_instructions(name, contents)` — exact parallel of
+/// `read_instructions_maybe`, used by `PromptEditor::flush_pending` (b3-t2)
+/// so the base-dir-overridable fallback stays defined in exactly one place.
+pub fn write_instructions_maybe(base: Option<&Path>, name: &str, contents: &str) -> io::Result<()> {
+    match base {
+        Some(b) => write_instructions_in(b, name, contents),
+        None => write_instructions(name, contents),
+    }
+}
+
 /// `name`'s instructions path when `base` overrides the default resolver
 /// (`Some`) vs the runtime resolver (`None`) — exact parallel of
 /// `read_instructions_maybe`, used by `PromptEditor::render` (b2-t2) to show

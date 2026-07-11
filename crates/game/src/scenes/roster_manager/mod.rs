@@ -350,6 +350,9 @@ impl Scene for RosterManager {
                 self.reload_instructions();
             }
         }
+        if let Some(popup) = self.prompt_editor.as_mut() {
+            popup.update(dt);
+        }
         None
     }
 
@@ -443,6 +446,16 @@ impl Scene for RosterManager {
         use crossterm::event::{KeyCode, MouseEventKind};
         use ratatui::layout::Position;
 
+        if self.prompt_editor.is_some() {
+            let close = self.prompt_editor.as_mut().unwrap().handle_input(&ev);
+            if close {
+                self.prompt_editor.as_mut().unwrap().flush_pending();
+                self.prompt_editor = None;
+                self.reload_instructions();
+            }
+            return None;
+        }
+
         match ev {
             InputEvent::Key(key) => match key.code {
                 KeyCode::Left => self.navigate(Direction::Left),
@@ -529,3 +542,5 @@ mod edit_button_tests;
 mod ability_hover_tests;
 #[cfg(test)]
 mod tooltip_integration_tests;
+#[cfg(test)]
+mod prompt_editor_modal_tests;
