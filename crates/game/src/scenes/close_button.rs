@@ -1,7 +1,7 @@
 //! Shared close (X) button glyph for modal popups (prompt editor, battle
-//! menu). A braille ring around a centered red "X", tinted red and keyed to
-//! `ButtonState`. The caller owns the `ButtonCore`, its rect, and hit-testing,
-//! and passes a ~square-dot `region` (so the ring reads round); this only draws.
+//! menu). A braille ring around a centered white "X", keyed to `ButtonState`.
+//! The caller owns the `ButtonCore`, its rect, and hit-testing, and passes a
+//! ~square-dot `region` (so the ring reads round); this only draws.
 
 use engine_core::color::Rgba;
 use engine_render::dots::Dot;
@@ -9,11 +9,11 @@ use engine_render::{label, ui_primitives, ButtonState, DotRect, TextAlign};
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Style};
 
-/// Red X color by button state — dim idle, bright on hover, dark when pressed
-/// (mirrors the luma ordering of `ButtonState::tint_color`).
-const IDLE: Rgba = Rgba::rgb(0xc0, 0x30, 0x30);
-const HOVER: Rgba = Rgba::rgb(0xff, 0x55, 0x55);
-const PRESSED: Rgba = Rgba::rgb(0x80, 0x20, 0x20);
+/// White X color by button state — dim idle, bright on hover, gray when pressed
+/// (the standard `ButtonState::tint_color` luma ordering).
+const IDLE: Rgba = Rgba::rgb(0xc8, 0xc8, 0xc8);
+const HOVER: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
+const PRESSED: Rgba = Rgba::rgb(0x8c, 0x8c, 0x8c);
 
 /// Draws the close button into `region`: a **round** braille ring (diameter =
 /// the region's smaller dot dimension, so it stays a circle rather than an

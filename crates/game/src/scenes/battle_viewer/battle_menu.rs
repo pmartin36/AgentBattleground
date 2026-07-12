@@ -47,8 +47,8 @@ impl BattleMenu {
         }
     }
 
-    const CLOSE_W: u16 = 3; // cells — 3×3 hit-area; draw_close_button centers a
-    const CLOSE_H: u16 = 3; // round 6×6-dot circle + "X" inside it
+    const CLOSE_W: u16 = 4; // cells — 4×2 = 8×8 dots, a square dot region the
+    const CLOSE_H: u16 = 2; // round circle fills, so top/right insets read even
     /// Inset of the close button from the panel's top and right. 1 cell top /
     /// 2 cells right — equal in dots (4 vs 4), so the gap reads evenly.
     const CLOSE_TOP_INSET: u16 = 1;
