@@ -113,6 +113,15 @@ pub(super) fn pill(buf: &mut Buffer, rect: DotRect, text: &str, color: Rgba) {
             dots.set(col, row, Dot::Transparent);
         }
     }
+    // Clip the outermost dot column of each cap — its 2-dot flat vertical edge
+    // reads angular; dropping it tapers the cap to the chamfered diagonal so it
+    // reads rounder.
+    if w_dots > 0 {
+        for row in 0..box_h {
+            dots.set(0, row, Dot::Transparent);
+            dots.set(w_dots - 1, row, Dot::Transparent);
+        }
+    }
     crate::scenes::post_battle::columns::blit_dots(
         buf,
         DotRect { x: cr.x as i32 * 2, y: cr.y as i32 * 4 + 3, w: w_dots as i32, h: box_h as i32 },

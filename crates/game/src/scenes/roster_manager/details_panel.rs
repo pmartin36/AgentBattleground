@@ -150,12 +150,10 @@ impl RosterManager {
         let top_row = engine_render::DotRect { h: 4, ..region };
         // 1-cell L/R margin, then [label | bar-area]; the bar area grows to
         // absorb all remaining width of the line.
-        let inner = top_row.inset(
-            Self::STAMINA_EDGE_MARGIN_DOTS,
-            Self::STAMINA_EDGE_MARGIN_DOTS,
-            0,
-            0,
-        );
+        // No LEFT inset — "Stamina" sits flush with the Abilities/Instructions
+        // headers at the interior's left edge; keep the RIGHT inset so the bar
+        // keeps its margin off the panel frame.
+        let inner = top_row.inset(0, Self::STAMINA_EDGE_MARGIN_DOTS, 0, 0);
         let label_w = ((label.chars().count() as i32) * 2).min(inner.w.max(0));
 
         let style = engine_render::FlexStyle {
