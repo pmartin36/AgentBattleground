@@ -47,12 +47,16 @@ pub(crate) fn draw_bar(buf: &mut Buffer, target: DotRect, fraction: f32, fill_co
         }
     }
 
-    // Interior fill between the caps: cols `[1, w-1)`, full height, lit
-    // `fill_color` for the leftmost `fraction`-proportion of the interior.
-    if w >= 3 {
-        let interior_w = w - 2;
+    // Interior fill between the caps: cols `[2, w-2)`, full height, lit
+    // `fill_color` for the leftmost `fraction`-proportion of the interior. The
+    // fill starts one full braille CELL in from each cap (col 2, not col 1) so
+    // it never shares a cell with a cap — otherwise the luma-tint pipeline
+    // blends the cap's cell toward the fill color and the end dot appears to
+    // change color with the bar.
+    if w >= 5 {
+        let interior_w = w - 4;
         let lit = (fraction.clamp(0.0, 1.0) * interior_w as f32).round() as usize;
-        for col in 1..1 + lit.min(interior_w) {
+        for col in 2..2 + lit.min(interior_w) {
             for row in 0..h {
                 local.set(col, row, Dot::Lit(fill_color));
             }
@@ -236,6 +240,27 @@ mod tests {
                     assert_eq!(c, FILL, "interior dot ({x},{y}) must be FILL, not cap color");
                 }
             }
+        }
+    }
+
+    /// The caps stay their neutral white even when the bar is FILLED — the fill
+    /// starts a full braille cell in from each cap, so a cap's cell is never
+    /// tinted toward the fill color (the "first dot changes color" bug).
+    #[test]
+    fn caps_stay_white_when_filled() {
+        let buf = render_bar(1.0);
+        let target = bar_target();
+        for &row in &[1i32, 2] {
+            assert_eq!(
+                lit_dot_color(&buf, 0, row),
+                Some(CAP_COLOR),
+                "left cap must stay white when the bar is filled"
+            );
+            assert_eq!(
+                lit_dot_color(&buf, target.w - 1, row),
+                Some(CAP_COLOR),
+                "right cap must stay white when the bar is filled"
+            );
         }
     }
 

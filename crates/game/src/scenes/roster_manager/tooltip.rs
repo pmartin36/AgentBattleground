@@ -78,33 +78,44 @@ pub(super) fn class_color(class: DamageClass) -> Rgba {
     }
 }
 
-/// A rounded capsule ("pill") drawn as a tinted OUTLINE hugging its centered
-/// `text`: a 6-dot-tall ring centered in the 3-cell `rect` so its top edge is
-/// the OVERLINE (bottom dot-row of the cell above the text) and its bottom edge
-/// the UNDERLINE (top dot-row of the cell below), with radius-2 ends rounding
-/// onto those rows. The interior is `Transparent` so the label stays legible.
-/// `rect` is dot-precise; the label is placed at the floored cell rect (plain
-/// terminal text is cell-quantized). A zero-area `rect` draws nothing and does
-/// not panic.
+/// A rounded capsule ("pill") hugging its centered `text`: a 6-dot-tall
+/// capsule centered in the 3-cell `rect` with solid tinted, rounded END CAPS
+/// on the left and right, an OVERLINE (top row) and UNDERLINE (bottom row)
+/// across the full width, and a `Transparent` centre so the (white) label
+/// stays legible. Built by filling the capsule and clearing the central
+/// interior, leaving the caps and top/bottom rows lit. `rect` is dot-precise;
+/// the label is placed at the floored cell rect (plain terminal text is
+/// cell-quantized). A zero-area `rect` draws nothing and does not panic.
 pub(super) fn pill(buf: &mut Buffer, rect: DotRect, text: &str, color: Rgba) {
     let cr = rect.to_cell_rect();
     if cr.width == 0 || cr.height == 0 {
         return;
     }
 
-    let w_dots = cr.width as i32 * 2;
-    let box_h: i32 = 6;
-    let dots = ui_primitives::rounded_rect(
-        w_dots as usize,
-        box_h as usize,
+    let w_dots = cr.width as usize * 2;
+    let box_h: usize = 6;
+    let mut dots = ui_primitives::rounded_rect(
+        w_dots,
+        box_h,
         PILL_BORDER_THICKNESS_DOTS,
         PILL_CORNER_RADIUS_DOTS,
         color,
-        Dot::Transparent,
+        Dot::Lit(color),
     );
+    // Clear the central interior (between the end caps, below the overline and
+    // above the underline) so the caps stay solid, the top/bottom rows stay as
+    // the over/underline, and the middle is transparent behind the label.
+    let cap_w = (PILL_H_PAD_CELLS as usize * 2).min(w_dots / 2);
+    let inner_top = PILL_BORDER_THICKNESS_DOTS;
+    let inner_bot = box_h.saturating_sub(PILL_BORDER_THICKNESS_DOTS);
+    for row in inner_top..inner_bot {
+        for col in cap_w..w_dots.saturating_sub(cap_w) {
+            dots.set(col, row, Dot::Transparent);
+        }
+    }
     crate::scenes::post_battle::columns::blit_dots(
         buf,
-        DotRect { x: cr.x as i32 * 2, y: cr.y as i32 * 4 + 3, w: w_dots, h: box_h },
+        DotRect { x: cr.x as i32 * 2, y: cr.y as i32 * 4 + 3, w: w_dots as i32, h: box_h as i32 },
         &dots,
     );
 
@@ -146,9 +157,6 @@ pub(super) const CARD_TEXT_COLOR: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
 pub(super) const FIELD_LABEL_COLOR: Rgba = Rgba::rgb(0x8f, 0xa8, 0xc8);
 /// Flavor-text color — gray, de-emphasized under the field rows.
 pub(super) const FLAVOR_TEXT_COLOR: Rgba = Rgba::rgb(0x9e, 0x9e, 0x9e);
-/// Blank spacer (cells) inserted before the Pills row when a row precedes it,
-/// separating the pills from the Cost line above.
-pub(super) const PRE_PILLS_GAP_CELLS: u16 = 1;
 /// Horizontal padding (cells) each side of a pill label, inside the pill.
 /// 2 cells (not 1) so at least one dot column of the tinted border/fill
 /// clears `PILL_CORNER_RADIUS_DOTS`'s chamfer and survives outside the
@@ -227,24 +235,21 @@ pub(super) fn layout_tooltip(ability: &Ability, hovered_cell: DotRect) -> Toolti
     // Flavor is always the last present row (fixed order); the gap only
     // applies when at least one row precedes it.
     let pre_flavor_gap = rows.len() > 1 && matches!(rows.last(), Some(TooltipRow::Flavor));
-    // A blank row before Pills when a row (Cost) precedes it, separating the
-    // pills from the Cost line above.
-    let pre_pills_gap = rows
-        .iter()
-        .position(|&r| r == TooltipRow::Pills)
-        .is_some_and(|i| i > 0);
-
     let content_dots: i32 = rows.iter().map(|&r| row_height_cells(r, ability) as i32 * 4).sum::<i32>()
-        + if pre_flavor_gap { PRE_FLAVOR_GAP_CELLS as i32 * 4 } else { 0 }
-        + if pre_pills_gap { PRE_PILLS_GAP_CELLS as i32 * 4 } else { 0 };
+        + if pre_flavor_gap { PRE_FLAVOR_GAP_CELLS as i32 * 4 } else { 0 };
 
     let card_w = TOOLTIP_WIDTH_CELLS as i32 * 2;
     let card_h = content_dots + 2 * INTERIOR_PADDING_CELLS as i32 * 4;
     let dx = ANCHOR_GAP_CELLS as i32 * 2;
     let dy = ANCHOR_GAP_CELLS as i32 * 4;
 
+    // Anchor the card's bottom-right to the hovered cell's horizontal CENTER
+    // (the ability name is centered in its cell), so the card hugs the visible
+    // text rather than the cell's far-left edge. Vertical is unchanged.
+    let anchor_x = hovered_cell.x + hovered_cell.w / 2;
+
     let card = DotRect {
-        x: hovered_cell.x - dx - card_w,
+        x: anchor_x - dx - card_w,
         y: hovered_cell.y - dy - card_h,
         w: card_w,
         h: card_h,
@@ -263,14 +268,6 @@ pub(super) fn layout_tooltip(ability: &Ability, hovered_cell: DotRect) -> Toolti
     let mut markers: Vec<Option<TooltipRow>> = Vec::with_capacity(rows.len() + 1);
     let mut children: Vec<FlexChild> = Vec::with_capacity(rows.len() + 1);
     for &row in &rows {
-        if pre_pills_gap && row == TooltipRow::Pills {
-            children.push(FlexChild {
-                basis: Basis::Fixed(PRE_PILLS_GAP_CELLS as i32 * 4),
-                grow: 0.0,
-                shrink: 0.0,
-            });
-            markers.push(None);
-        }
         if pre_flavor_gap && row == TooltipRow::Flavor {
             children.push(FlexChild {
                 basis: Basis::Fixed(PRE_FLAVOR_GAP_CELLS as i32 * 4),
@@ -762,11 +759,10 @@ mod tests {
 
         assert_eq!(layout.card.w, TOOLTIP_WIDTH_CELLS as i32 * 2);
 
-        // Cost(1) + pre-pills gap + Pills(PILL_HEIGHT_CELLS) + DamageRange(1) +
+        // Cost(1) + Pills(PILL_HEIGHT_CELLS) + DamageRange(1) +
         // Status(1 + ceil(1/2)) + pre-flavor gap + Flavor(FLAVOR_MAX_LINES),
         // all in cells, plus 2x interior padding.
         let content_cells = 1
-            + PRE_PILLS_GAP_CELLS as i32
             + PILL_HEIGHT_CELLS as i32
             + 1
             + (1 + 1)
@@ -797,8 +793,8 @@ mod tests {
 
         assert_eq!(
             layout.card.x + layout.card.w,
-            hovered.x - ANCHOR_GAP_CELLS as i32 * 2,
-            "card's right edge must sit ANCHOR_GAP_CELLS cells left of hovered's left edge"
+            hovered.x + hovered.w / 2 - ANCHOR_GAP_CELLS as i32 * 2,
+            "card's right edge must sit ANCHOR_GAP_CELLS cells left of the hovered cell's center"
         );
         assert_eq!(
             layout.card.y + layout.card.h,
@@ -821,12 +817,6 @@ mod tests {
                     gap,
                     PRE_FLAVOR_GAP_CELLS as i32 * 4,
                     "the single pre-flavor spacer must separate Status and Flavor"
-                );
-            } else if prev_row == TooltipRow::Cost && next_row == TooltipRow::Pills {
-                assert_eq!(
-                    gap,
-                    PRE_PILLS_GAP_CELLS as i32 * 4,
-                    "the single pre-pills spacer must separate Cost and Pills"
                 );
             } else {
                 assert_eq!(

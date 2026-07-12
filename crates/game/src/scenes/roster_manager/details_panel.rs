@@ -143,9 +143,14 @@ impl RosterManager {
         let fraction = percent as f32 / 100.0;
         let fill = crate::scenes::post_battle::columns::stamina_fill_color(percent);
 
+        // The stamina band is 2 cells tall: label + bar on the top cell-row,
+        // and a braille header underline on the row beneath the "Stamina" label
+        // (matching the Abilities/Instructions headers). Constrain the label+bar
+        // to the top 4-dot row; the underline draws into the row below.
+        let top_row = engine_render::DotRect { h: 4, ..region };
         // 1-cell L/R margin, then [label | bar-area]; the bar area grows to
         // absorb all remaining width of the line.
-        let inner = region.inset(
+        let inner = top_row.inset(
             Self::STAMINA_EDGE_MARGIN_DOTS,
             Self::STAMINA_EDGE_MARGIN_DOTS,
             0,
@@ -179,6 +184,10 @@ impl RosterManager {
                 Self::STAMINA_COLOR.b,
             )),
         );
+
+        // Header-style braille underline beneath the "Stamina" label, in the
+        // second cell-row of the band.
+        Self::draw_header_underline(buf, parts[0], &label);
 
         // Track scales with max stamina, left-aligned in the bar area (all bars
         // start at the same x). Floor to the cell grid so the bar shares the
@@ -319,9 +328,18 @@ impl RosterManager {
             engine_render::DotRect { x: cr.x as i32 * 2, y: cr.y as i32 * 4 + 3, w: w_dots, h: box_h },
             &dots,
         );
+        // Center the label within the INTERIOR (inset 1 cell each side for the
+        // border columns) so "Edit" is centered between the borders, not within
+        // the full region (which would count the border cells and read off-center).
+        let label_rect = ratatui::layout::Rect {
+            x: cr.x + 1,
+            y: cr.y,
+            width: cr.width.saturating_sub(2),
+            height: cr.height,
+        };
         engine_render::label(
             buf,
-            cr,
+            label_rect,
             "Edit",
             engine_render::TextAlign::Center,
             ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(

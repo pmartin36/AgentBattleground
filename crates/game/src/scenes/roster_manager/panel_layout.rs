@@ -9,10 +9,12 @@ impl RosterManager {
     /// the panel interior's top edge (`details_panel_rects` border inset 1
     /// cell).
     pub(super) const PANEL_TOP_MARGIN_CELLS: i32 = 1;
-    /// b1-t3: stamina row height — pinned to exactly 4 dots so
-    /// `bars::draw_bar`/`draw_labeled_bar` (b1-t2) get an exact-height
-    /// target.
-    pub(super) const STAMINA_ROW_H_CELLS: i32 = 1;
+    /// Stamina band height — 2 cells: the "Stamina" label + bar on the top
+    /// cell-row, and the braille header underline on the row beneath (like the
+    /// Abilities/Instructions header bands). `render_stamina_row` constrains the
+    /// label+bar to the top 4-dot row so `bars::draw_bar` still gets an
+    /// exact-height target.
+    pub(super) const STAMINA_ROW_H_CELLS: i32 = 2;
     /// b1-t3: gap between the stamina row and the abilities header band.
     pub(super) const STAMINA_ABILITIES_GAP_CELLS: i32 = 2;
     /// b1-t3: header band height — row 0 is the header text, row 1 is the
@@ -31,10 +33,14 @@ impl RosterManager {
     /// b1-t3: gap between the ability grid band and the instructions header
     /// band.
     pub(super) const ABILITIES_INSTRUCTIONS_GAP_CELLS: i32 = 2;
-    /// b1-t3: pinned Edit button width. 7 cells fits "Edit" (4) centered with
-    /// 1 cell of left padding and 2 of right padding (integer-centered), giving
-    /// the extra right breathing room.
-    pub(super) const EDIT_BUTTON_W_CELLS: i32 = 7;
+    /// Width (cells) of the Edit-button SLOT in the instructions header row.
+    /// The button itself is this minus `EDIT_BUTTON_RIGHT_MARGIN_CELLS` = 8
+    /// cells (an even width, so "Edit" centers symmetrically between the borders)
+    /// with a 1-cell gap to the panel's right edge.
+    pub(super) const EDIT_BUTTON_W_CELLS: i32 = 9;
+    /// Gap (cells) between the Edit button's right border and the panel's right
+    /// edge, so the button isn't crammed against the frame.
+    pub(super) const EDIT_BUTTON_RIGHT_MARGIN_CELLS: i32 = 1;
     /// Edit-button height (cells). The button is a rounded-rect OUTLINE around
     /// its "Edit" label; braille border dots and the terminal label can't
     /// share a cell, so it needs a top-border row, a text row, and a
@@ -200,6 +206,9 @@ impl RosterManager {
         let edit_button = engine_render::DotRect {
             y: edit_button_band.y + edit_button_band.h - Self::EDIT_BUTTON_H_CELLS * 4,
             h: Self::EDIT_BUTTON_H_CELLS * 4,
+            // Shrink the width off the RIGHT so a 1-cell gap sits between the
+            // button and the panel's right edge (the slot's right edge).
+            w: edit_button_band.w - Self::EDIT_BUTTON_RIGHT_MARGIN_CELLS * 2,
             ..edit_button_band
         };
 
@@ -353,13 +362,13 @@ mod panel_layout_tests {
         );
         assert_eq!(
             r.edit_button.w,
-            RosterManager::EDIT_BUTTON_W_CELLS * 2,
-            "edit button width must be pinned"
+            (RosterManager::EDIT_BUTTON_W_CELLS - RosterManager::EDIT_BUTTON_RIGHT_MARGIN_CELLS) * 2,
+            "edit button width must be the slot minus the right margin"
         );
         assert_eq!(
             r.edit_button.x + r.edit_button.w,
-            interior.x + interior.w,
-            "edit button must be flush to the interior's right edge"
+            interior.x + interior.w - RosterManager::EDIT_BUTTON_RIGHT_MARGIN_CELLS * 2,
+            "edit button must sit a 1-cell margin off the interior's right edge"
         );
     }
 

@@ -53,10 +53,14 @@ fn hovered_ability_draws_card_above_left_and_occludes_panel() {
     let card = card_cell_rect(area, 1);
     let ability_cell = RosterManager::panel_interior_regions(area).ability_cells[1].to_cell_rect();
 
+    // The card is anchored to the hovered cell's horizontal CENTER (the ability
+    // name is centered in its cell), so its bottom-right sits above-left of that
+    // center, not the cell's far-left edge.
+    let center_x = ability_cell.x + ability_cell.width / 2;
     assert!(
-        card.x + card.width <= ability_cell.x && card.y + card.height <= ability_cell.y,
-        "the card's bottom-right corner must sit above-left of the hovered ability cell's top-left \
-         (card {card:?}, ability cell {ability_cell:?})"
+        card.x + card.width <= center_x && card.y + card.height <= ability_cell.y,
+        "the card's bottom-right corner must sit above-left of the hovered ability cell's center-top \
+         (card {card:?}, ability cell {ability_cell:?}, center_x {center_x})"
     );
     assert!(
         rect_text(&hovered_buf, card).contains(COST_TEXT),
