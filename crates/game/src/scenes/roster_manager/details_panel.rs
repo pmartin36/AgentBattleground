@@ -112,7 +112,7 @@ impl RosterManager {
     }
 
     /// Dot gap between the stamina label slot and its bar slot.
-    pub(super) const STAMINA_LABEL_BAR_GAP_DOTS: i32 = 2;
+    pub(super) const STAMINA_LABEL_BAR_GAP_DOTS: i32 = 4;
     /// 1-cell (2-dot) left/right margin the stamina row keeps off the panel
     /// interior edges.
     pub(super) const STAMINA_EDGE_MARGIN_DOTS: i32 = 2;
