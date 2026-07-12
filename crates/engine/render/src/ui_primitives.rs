@@ -141,6 +141,26 @@ pub fn ring(
     buf
 }
 
+/// Rasterize a solid filled disc of `diameter_dots` into a fresh square
+/// [`DotBuffer`]: every dot whose distance from the centre is within the radius
+/// is `Lit(color)`; corners outside the circle stay `Transparent`. Takes a
+/// single diameter (not w×h), so a `circle` is ALWAYS round — an ellipse is
+/// `ring` with a non-square box. Because braille dots are ~square, this reads
+/// round on screen.
+pub fn circle(diameter_dots: usize, color: Rgba) -> DotBuffer {
+    // thickness == diameter collapses `ring`'s inner ellipse, so every in-circle
+    // dot falls to `Lit(border)`: a gap-free solid disc that does not depend on
+    // the fill arg. (`ring`'s `outer <= 1` test on a square box is exactly
+    // `distance <= radius`.)
+    ring(diameter_dots, diameter_dots, diameter_dots, color, Dot::Lit(color))
+}
+
+/// A `thickness`-dot-thick round outline (hollow interior) of `diameter_dots` —
+/// `circle` with only its rim lit. Always round (single diameter).
+pub fn circle_outline(diameter_dots: usize, thickness: usize, color: Rgba) -> DotBuffer {
+    ring(diameter_dots, diameter_dots, thickness, color, Dot::Transparent)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -283,5 +303,52 @@ mod tests {
         let buf = ring(0, 6, 1, BORDER, Dot::Occlude);
         assert_eq!(buf.cols(), 0);
         assert_eq!(buf.rows(), 6);
+    }
+
+    /// `circle` is a gap-free solid disc: EVERY dot within the radius is
+    /// `Lit(color)` (no `Transparent` interior gaps), and the corners outside
+    /// the circle are `Transparent`.
+    #[test]
+    fn circle_is_a_gap_free_solid_disc() {
+        let d = 8usize;
+        let buf = circle(d, BORDER);
+        assert_eq!(buf.cols(), d);
+        assert_eq!(buf.rows(), d);
+        assert_eq!(buf.get(0, 0), Dot::Transparent, "corner outside the circle");
+        assert_eq!(buf.get(7, 7), Dot::Transparent, "corner outside the circle");
+        // Mirror `ring`'s own `outer <= 1` test: every in-circle dot must be lit
+        // (no gaps), every out-of-circle dot Transparent.
+        let c = (d as f32 - 1.0) / 2.0;
+        let a = d as f32 / 2.0;
+        for row in 0..d {
+            for col in 0..d {
+                let inside = ((col as f32 - c) / a).powi(2) + ((row as f32 - c) / a).powi(2) <= 1.0;
+                let expected = if inside { Dot::Lit(BORDER) } else { Dot::Transparent };
+                assert_eq!(buf.get(col, row), expected, "circle dot ({col},{row})");
+            }
+        }
+    }
+
+    /// `circle` is symmetric under horizontal and vertical reflection — round.
+    #[test]
+    fn circle_is_symmetric() {
+        let buf = circle(8, BORDER);
+        for row in 0..8 {
+            for col in 0..8 {
+                assert_eq!(buf.get(col, row), buf.get(7 - col, row), "h-symmetry ({col},{row})");
+                assert_eq!(buf.get(col, row), buf.get(col, 7 - row), "v-symmetry ({col},{row})");
+            }
+        }
+    }
+
+    /// `circle_outline` lights only the rim; the interior is hollow.
+    #[test]
+    fn circle_outline_rim_lit_interior_hollow() {
+        let buf = circle_outline(8, 1, BORDER);
+        assert_eq!(buf.get(0, 3), Dot::Lit(BORDER), "left rim lit");
+        assert_eq!(buf.get(3, 0), Dot::Lit(BORDER), "top rim lit");
+        assert_eq!(buf.get(3, 3), Dot::Transparent, "interior hollow");
+        assert_eq!(buf.get(4, 4), Dot::Transparent, "interior hollow");
+        assert_eq!(buf.get(0, 0), Dot::Transparent, "corner outside the circle");
     }
 }

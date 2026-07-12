@@ -36,7 +36,7 @@ pub use grid::{draw_grid, Cell, Grid};
 pub use screen_layout::{anchor, anchor_with_margin, stack, Anchor, RectTween, StackAxis};
 pub use shapes::{rasterize_shape, ShapeKind};
 pub use text_editor::{EditorEvent, Sizing, TextEditor, TextEditorConfig};
-pub use ui_primitives::{rect, ring, rounded_rect};
+pub use ui_primitives::{circle, circle_outline, rect, ring, rounded_rect};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
