@@ -481,6 +481,13 @@ impl TextEditor {
         if self.text().is_empty() {
             let style = Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM);
             crate::wrapped_text(buf, rect, &self.config.placeholder, crate::TextAlign::Left, style, false);
+            // Caret at position 0 for an empty buffer — otherwise clicking into
+            // an empty box would leave the caret invisible.
+            if self.caret_visible() {
+                if let Some(cell) = buf.cell_mut((rect.x, rect.y)) {
+                    cell.set_style(Style::default().add_modifier(Modifier::REVERSED));
+                }
+            }
             return;
         }
 

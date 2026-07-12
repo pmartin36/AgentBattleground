@@ -529,7 +529,7 @@ fn long_line_occupies_expected_display_rows() {
 }
 
 #[test]
-fn empty_editor_renders_dim_placeholder_with_no_reverse_video() {
+fn empty_focused_editor_renders_placeholder_and_caret_at_origin() {
     let mut editor = TextEditor::new(placeholder_config("type here"));
     let rect = Rect::new(0, 0, 20, 3);
     let mut buf = make_buf(20, 3);
@@ -537,17 +537,43 @@ fn empty_editor_renders_dim_placeholder_with_no_reverse_video() {
     editor.render(&mut buf, rect);
 
     assert_eq!(row_text(&buf, rect, 0), "type here");
-    let first = buf.cell((0, 0)).unwrap();
     assert!(
-        first.modifier.contains(Modifier::DIM),
+        buf.cell((0, 0)).unwrap().modifier.contains(Modifier::DIM),
         "placeholder text must render dimmed"
+    );
+    // A focused empty editor draws the caret at position 0 — so clicking into
+    // an empty box shows a visible cursor rather than nothing.
+    assert!(
+        buf.cell((0, 0)).unwrap().modifier.contains(Modifier::REVERSED),
+        "a focused empty editor must draw the caret at the origin"
     );
     for x in rect.left()..rect.right() {
         for y in rect.top()..rect.bottom() {
-            let cell = buf.cell((x, y)).unwrap();
+            if (x, y) == (0, 0) {
+                continue;
+            }
             assert!(
-                !cell.modifier.contains(Modifier::REVERSED),
-                "an empty editor must not draw a block cursor"
+                !buf.cell((x, y)).unwrap().modifier.contains(Modifier::REVERSED),
+                "the caret must only appear at the origin"
+            );
+        }
+    }
+}
+
+#[test]
+fn empty_unfocused_editor_draws_no_caret() {
+    let mut editor = TextEditor::new(placeholder_config("type here"));
+    editor.set_focused(false);
+    let rect = Rect::new(0, 0, 20, 3);
+    let mut buf = make_buf(20, 3);
+
+    editor.render(&mut buf, rect);
+
+    for x in rect.left()..rect.right() {
+        for y in rect.top()..rect.bottom() {
+            assert!(
+                !buf.cell((x, y)).unwrap().modifier.contains(Modifier::REVERSED),
+                "an unfocused empty editor must not draw a caret"
             );
         }
     }

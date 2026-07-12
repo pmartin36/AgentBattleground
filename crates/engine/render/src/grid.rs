@@ -1,6 +1,6 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier, Style};
 use engine_core::color::Rgba;
 
 /// One braille cell.
@@ -115,6 +115,11 @@ pub fn draw_grid(buf: &mut Buffer, area: Rect, grid: &Grid) {
                 Cell::Blank => {
                     cell.set_char(BRAILLE_BLANK);
                     cell.set_fg(Color::Reset);
+                    // A covering blank must erase the destination's STYLE too,
+                    // not just its glyph/fg — otherwise a modifier (e.g. an
+                    // UNDERLINE from a widget beneath an occluding overlay)
+                    // bleeds through the blank.
+                    cell.set_style(Style::default().remove_modifier(Modifier::all()));
                 }
                 Cell::Glyph { ch, color } => {
                     cell.set_char(ch);
@@ -391,6 +396,31 @@ mod tests {
             "Blank must overwrite the prior glyph with the braille blank, covering it"
         );
         assert_eq!(cell.fg, Color::Reset, "Blank must reset the destination fg");
+    }
+
+    /// A covering Blank must also erase the destination's STYLE (modifiers),
+    /// not just its glyph/fg — otherwise a modifier such as UNDERLINE beneath
+    /// an occluding overlay bleeds through the blank (this shipped as a real
+    /// bug: an editor's first line showed stale underlines from the panel it
+    /// covered).
+    #[test]
+    fn draw_grid_blank_clears_underlying_modifier() {
+        use ratatui::style::Modifier;
+        let mut grid = Grid::new(1, 1);
+        grid.set(0, 0, Cell::Blank);
+
+        let mut buf = make_buf(1, 1);
+        if let Some(c) = buf.cell_mut((0u16, 0u16)) {
+            c.set_char('X');
+            c.modifier.insert(Modifier::UNDERLINED);
+        }
+
+        draw_grid(&mut buf, Rect::new(0, 0, 1, 1), &grid);
+
+        assert!(
+            !buf.cell((0u16, 0u16)).unwrap().modifier.contains(Modifier::UNDERLINED),
+            "Blank must clear the destination's UNDERLINE modifier"
+        );
     }
 
     /// Blank vs Transparent at the blit layer, same seeded destination, opposite
