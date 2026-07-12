@@ -96,6 +96,51 @@ pub fn rect(
     rounded_rect(width_dots, height_dots, thickness, 0, border, fill)
 }
 
+/// Rasterize a `thickness`-dot-thick ellipse RING inscribed in a
+/// `width_dots × height_dots` box into a fresh [`DotBuffer`]. A dot is lit
+/// `border` when it lies inside the outer ellipse (which touches the box's
+/// mid-edges) but outside the inner ellipse `thickness` dots smaller; interior
+/// dots take `fill`; dots outside the outer ellipse — the corners — are left
+/// `Transparent`. A SQUARE dot box yields a round circle; a non-square box an
+/// ellipse fitting the box. Because braille dots are ~square, a round on-screen
+/// circle needs a roughly square DOT region (equal width/height in dots), not
+/// equal cells. Same `border`/`fill` semantics as [`rounded_rect`].
+pub fn ring(
+    width_dots: usize,
+    height_dots: usize,
+    thickness: usize,
+    border: Rgba,
+    fill: Dot,
+) -> DotBuffer {
+    let mut buf = DotBuffer::new(width_dots, height_dots);
+    if width_dots == 0 || height_dots == 0 {
+        return buf;
+    }
+    let cx = (width_dots as f32 - 1.0) / 2.0;
+    let cy = (height_dots as f32 - 1.0) / 2.0;
+    let ax = width_dots as f32 / 2.0;
+    let ay = height_dots as f32 / 2.0;
+    let t = thickness as f32;
+    // Inner semi-axes; when the ring is as thick as the box it collapses to a
+    // filled disc (inner ellipse vanishes) rather than going negative.
+    let ix = ax - t;
+    let iy = ay - t;
+    for row in 0..height_dots {
+        for col in 0..width_dots {
+            let dx = col as f32 - cx;
+            let dy = row as f32 - cy;
+            let outer = (dx / ax).powi(2) + (dy / ay).powi(2);
+            if outer > 1.0 {
+                continue; // outside the ellipse — a corner; leave Transparent
+            }
+            let inside_inner =
+                ix > 0.0 && iy > 0.0 && (dx / ix).powi(2) + (dy / iy).powi(2) <= 1.0;
+            buf.set(col, row, if inside_inner { fill } else { Dot::Lit(border) });
+        }
+    }
+    buf
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -202,5 +247,41 @@ mod tests {
         let buf = rounded_rect(0, 5, 1, 2, BORDER, Dot::Occlude);
         assert_eq!(buf.cols(), 0);
         assert_eq!(buf.rows(), 5);
+    }
+
+    /// A ring on a square box lights every mid-edge, fills the centre, and
+    /// leaves the corners (outside the ellipse) unlit.
+    #[test]
+    fn ring_lights_mid_edges_fills_centre_clears_corners() {
+        let buf = ring(8, 8, 1, BORDER, Dot::Occlude);
+        assert_eq!(buf.get(0, 3), Dot::Lit(BORDER), "left mid-edge lit");
+        assert_eq!(buf.get(7, 4), Dot::Lit(BORDER), "right mid-edge lit");
+        assert_eq!(buf.get(3, 0), Dot::Lit(BORDER), "top mid-edge lit");
+        assert_eq!(buf.get(4, 7), Dot::Lit(BORDER), "bottom mid-edge lit");
+        assert_eq!(buf.get(3, 3), Dot::Occlude, "centre is fill");
+        assert_eq!(buf.get(4, 4), Dot::Occlude, "centre is fill");
+        assert_eq!(buf.get(0, 0), Dot::Transparent, "corner outside the ellipse is unlit");
+        assert_eq!(buf.get(7, 7), Dot::Transparent, "corner outside the ellipse is unlit");
+    }
+
+    /// On a square box the ring is symmetric under horizontal and vertical
+    /// reflection — i.e. it reads as a round circle, not a lopsided blob.
+    #[test]
+    fn ring_is_symmetric_on_a_square_box() {
+        let buf = ring(8, 8, 1, BORDER, Dot::Transparent);
+        for row in 0..8 {
+            for col in 0..8 {
+                assert_eq!(buf.get(col, row), buf.get(7 - col, row), "h-symmetry ({col},{row})");
+                assert_eq!(buf.get(col, row), buf.get(col, 7 - row), "v-symmetry ({col},{row})");
+            }
+        }
+    }
+
+    /// Zero-dimension ring returns an empty buffer rather than panicking.
+    #[test]
+    fn ring_zero_dimension_returns_empty_without_panic() {
+        let buf = ring(0, 6, 1, BORDER, Dot::Occlude);
+        assert_eq!(buf.cols(), 0);
+        assert_eq!(buf.rows(), 6);
     }
 }
