@@ -43,11 +43,11 @@ const POPUP_PAD_BOTTOM_CELLS: u16 = 1;
 /// 6×6-dot circle centered inside this 3×3 area with the "X" centered.
 const CLOSE_W_CELLS: u16 = 3;
 const CLOSE_H_CELLS: u16 = 3;
-/// Inset of the close button from the popup's top and right. 1 cell top / 2
-/// cells right — equal in dots (4 vs 4), so the gap reads evenly on both sides
-/// (a cell is 2 dots wide but 4 dots tall).
+/// Inset of the close button from the popup's top and right. The 6×6-dot circle
+/// floats ~3 dots down inside the 3-cell box, so the top gap runs large; a wider
+/// (3-cell) right inset balances it against the 1-cell top inset.
 const CLOSE_TOP_INSET_CELLS: u16 = 1;
-const CLOSE_RIGHT_INSET_CELLS: u16 = 2;
+const CLOSE_RIGHT_INSET_CELLS: u16 = 3;
 /// Reserves the close button's rows (inset + button) so the body clears them.
 const POPUP_TOP_BAND_CELLS: u16 = CLOSE_TOP_INSET_CELLS + CLOSE_H_CELLS;
 /// Spec's explicit 1-cell margin between the agent input and the

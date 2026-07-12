@@ -49,10 +49,10 @@ impl BattleMenu {
 
     const CLOSE_W: u16 = 3; // cells — 3×3 hit-area; draw_close_button centers a
     const CLOSE_H: u16 = 3; // round 6×6-dot circle + "X" inside it
-    /// Inset of the close button from the panel's top and right. 1 cell top /
-    /// 2 cells right — equal in dots (4 vs 4), so the gap reads evenly.
+    /// Inset of the close button from the panel's top and right — 1 cell down
+    /// (clear of the top border) and 3 cells in from the right.
     const CLOSE_TOP_INSET: u16 = 1;
-    const CLOSE_RIGHT_INSET: u16 = 2;
+    const CLOSE_RIGHT_INSET: u16 = 3;
     /// Rows reserved at the panel top for the close button, so the centered
     /// "Finish Battle" button below it never collides with the corner X.
     const TOP_BAND: u16 = Self::CLOSE_TOP_INSET + Self::CLOSE_H;
