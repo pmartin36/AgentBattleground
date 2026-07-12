@@ -81,15 +81,15 @@ fn render_to_buffer(scene: &dyn Scene, w: u16, h: u16) -> Buffer {
 }
 
 /// A single cold `RosterManager` render (fresh scene, fresh process — no
-/// prior renders in this binary) must perform EXACTLY 8 rasterizations:
+/// prior renders in this binary) must perform EXACTLY 7 rasterizations:
 /// creature idle sprite (1) + `DOT_FILLED` (1) + `DOT_UNFILLED` (1) +
-/// `BUTTON_PANEL` at arrow dims (1) + `BUTTON_PANEL` at home dims (1, distinct
-/// since spec 38 shrank the arrows to `(4, 2)` != home `(6, 3)`) +
-/// `ICON_ARROW_LEFT` (1) + `ICON_ARROW_RIGHT` (1) + `ICON_HOME` (1), each a
-/// first-ever miss. A delta of 6 means the dots never touched the shared
-/// cache (`RosterManager` still routes them through its own decoded field
-/// instead of `engine_render::asset_cache`) — a clean, deterministic RED
-/// against that code.
+/// `BUTTON_PANEL` at arrow dims (1) + `ICON_ARROW_LEFT` (1) +
+/// `ICON_ARROW_RIGHT` (1) + `ICON_HOME` (1), each a first-ever miss. The home
+/// button draws a procedural gold `circle` (no `BUTTON_PANEL` rasterization),
+/// but still rasterizes `ICON_HOME` for its icon. A delta of 5 means the two
+/// dot sprites never touched the shared cache (`RosterManager` still routes
+/// them through its own decoded field instead of `engine_render::asset_cache`)
+/// — a clean, deterministic RED against that code.
 #[test]
 fn roster_manager_render_routes_dots_through_shared_cache() {
     let _guard = test_lock();
@@ -101,14 +101,14 @@ fn roster_manager_render_routes_dots_through_shared_cache() {
 
     assert_eq!(
         after - before,
-        8,
-        "a single cold RosterManager render must perform exactly 8 \
+        7,
+        "a single cold RosterManager render must perform exactly 7 \
          rasterizations (creature sprite + DOT_FILLED + DOT_UNFILLED + \
-         BUTTON_PANEL at arrow dims + BUTTON_PANEL at home dims (distinct \
-         since spec 38 shrank the arrows to dims != home) + 3 distinct icon \
-         entries, each once) — a delta of 6 means the dots never touched the \
-         shared cache (RosterManager still routes them through its own \
-         decoded field instead of engine_render::asset_cache); \
+         BUTTON_PANEL at arrow dims + 3 distinct icon entries, each once — the \
+         home button draws a procedural gold circle, not BUTTON_PANEL, but \
+         still rasterizes ICON_HOME) — a delta of 5 means the dots never \
+         touched the shared cache (RosterManager still routes them through its \
+         own decoded field instead of engine_render::asset_cache); \
          before={before}, after={after}"
     );
 }

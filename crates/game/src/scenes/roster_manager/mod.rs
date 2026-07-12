@@ -32,7 +32,7 @@ pub struct RosterManager {
     /// for the same immutable-render-mutates-button-state reason as the
     /// arrows.
     #[inspect(hidden)]
-    home_button: RefCell<engine_render::Button>,
+    home_button: RefCell<engine_render::ButtonCore>,
     /// Edit button in the details panel's Instructions header (b3-t1),
     /// opens `prompt_editor` on a completed click. `RefCell` for the same
     /// immutable-render-mutates-button-state reason as the other buttons.
@@ -205,10 +205,7 @@ impl RosterManager {
                 engine_render::Button::new(Rect::default(), crate::assets::BUTTON_PANEL)
                     .icon(crate::assets::ICON_ARROW_RIGHT),
             ),
-            home_button: RefCell::new(
-                engine_render::Button::new(Rect::default(), crate::assets::BUTTON_PANEL)
-                    .icon(crate::assets::ICON_HOME),
-            ),
+            home_button: RefCell::new(engine_render::ButtonCore::new(Rect::default())),
             edit_button: RefCell::new(engine_render::ButtonCore::new(Rect::default())),
             slide: None,
             selected_index: None,
@@ -416,8 +413,7 @@ impl Scene for RosterManager {
         {
             let mut home = self.home_button.borrow_mut();
             home.set_rect(home_dr.to_cell_rect());
-            home.set_dot_offset_down(home_dr.cell_remainder().1);
-            home.render(frame.buffer_mut());
+            crate::scenes::home_button::draw_home_button(frame.buffer_mut(), home_dr, home.state());
         }
 
         // Ability hover tooltip (spec 49) — topmost overlay, hover-only.

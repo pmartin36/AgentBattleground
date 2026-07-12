@@ -14,6 +14,7 @@ pub mod post_battle;
 
 pub(crate) mod bars;
 pub(crate) mod close_button;
+pub(crate) mod home_button;
 
 #[cfg(test)]
 mod test_util;

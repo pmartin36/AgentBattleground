@@ -50,7 +50,7 @@ pub struct PostBattle {
     /// because `render(&self, ..)` must mutate its rect/state from an
     /// immutable receiver (mirrors `RosterManager::home_button`).
     #[inspect(hidden)]
-    home_button: RefCell<engine_render::Button>,
+    home_button: RefCell<engine_render::ButtonCore>,
 }
 
 impl PostBattle {
@@ -135,10 +135,7 @@ impl PostBattle {
             elapsed: Duration::ZERO,
             selected_index: 0,
             spoils,
-            home_button: RefCell::new(
-                engine_render::Button::new(Rect::default(), crate::assets::BUTTON_PANEL)
-                    .icon(crate::assets::ICON_HOME),
-            ),
+            home_button: RefCell::new(engine_render::ButtonCore::new(Rect::default())),
         }
     }
 
@@ -258,8 +255,7 @@ impl Scene for PostBattle {
         let dr = self.home_dot_rect(area);
         let mut b = self.home_button.borrow_mut();
         b.set_rect(dr.to_cell_rect());
-        b.set_dot_offset_down(dr.cell_remainder().1);
-        b.render(frame.buffer_mut());
+        crate::scenes::home_button::draw_home_button(frame.buffer_mut(), dr, b.state());
 
         columns::render(self, frame.buffer_mut(), creature_area);
         spoils::render(self, frame.buffer_mut(), spoils);
