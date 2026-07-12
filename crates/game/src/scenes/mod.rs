@@ -13,6 +13,7 @@ pub mod roster_manager;
 pub mod post_battle;
 
 pub(crate) mod bars;
+pub(crate) mod close_button;
 
 #[cfg(test)]
 mod test_util;

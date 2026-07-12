@@ -15,9 +15,9 @@ use ratatui::Frame;
 
 use engine_core::color::Rgba;
 use engine_core::scene::InputEvent;
-use engine_render::dots::{Dot, DotBuffer};
+use engine_render::dots::Dot;
 use engine_render::{
-    draw_dots, flex, label, ui_primitives, Align, Basis, ButtonCore, ButtonState, Direction,
+    draw_dots, flex, label, ui_primitives, Align, Basis, ButtonCore, Direction,
     DotRect, EditorEvent, FlexChild, FlexStyle, Justify, Sizing, TextAlign, TextEditor,
     TextEditorConfig,
 };
@@ -42,7 +42,9 @@ const POPUP_PAD_BOTTOM_CELLS: u16 = 1;
 /// Close (X) hit-target size, in cells (b2-t1 layout). 2 cells tall so the
 /// braille circle around the "X" is round, not squashed.
 const CLOSE_W_CELLS: u16 = 3;
-const CLOSE_H_CELLS: u16 = 2;
+// 3 cells tall so the button's border rows hug the "X" (overline / text /
+// underline) without a border dot sharing the label cell.
+const CLOSE_H_CELLS: u16 = 3;
 /// Reserves the X row (+ a 1-cell clearance) so the body clears it (b2-t1
 /// layout).
 const POPUP_TOP_BAND_CELLS: u16 = CLOSE_H_CELLS + 1;
@@ -66,10 +68,6 @@ const FIELD_BORDER_COLOR: Rgba = Rgba::rgb(0x88, 0x88, 0x88);
 /// Per-field braille box border thickness, in cells (1 cell each side is
 /// reserved so the border never overlaps the editor's first/last text row/col).
 const FIELD_BORDER_CELLS: i32 = 1;
-/// Close (X) glyph colors by `ButtonCore` state — red, brightening on hover.
-const CLOSE_IDLE_COLOR: Rgba = Rgba::rgb(0xc0, 0x30, 0x30);
-const CLOSE_HOVER_COLOR: Rgba = Rgba::rgb(0xff, 0x55, 0x55);
-const CLOSE_PRESSED_COLOR: Rgba = Rgba::rgb(0x80, 0x20, 0x20);
 
 /// Which of the two editors currently receives keyboard input (b3-t1's
 /// Tab-cycle). Defaults to `Instructions` on open.
@@ -367,15 +365,11 @@ impl PromptEditor {
         );
         draw_dots(buf, layout.popup.to_cell_rect(), &ring);
 
-        // Close (X): refresh the hit-rect from layout, then draw the glyph in
-        // a red keyed to hover/press state.
+        // Close (X): refresh the hit-rect from layout, then draw the shared
+        // red rounded-rect close button keyed to hover/press state.
         self.close_button.borrow_mut().set_rect(layout.close.to_cell_rect());
-        let close_color = match self.close_button.borrow().state() {
-            ButtonState::Idle => CLOSE_IDLE_COLOR,
-            ButtonState::Hover => CLOSE_HOVER_COLOR,
-            ButtonState::Pressed => CLOSE_PRESSED_COLOR,
-        };
-        Self::draw_close_glyph(buf, layout.close, close_color);
+        let close_state = self.close_button.borrow().state();
+        crate::scenes::close_button::draw_close_button(buf, layout.close, close_state);
 
         // Agent input: braille box + placeholder/text inset inside the border.
         Self::draw_field_box(buf, layout.agent_input);
@@ -446,43 +440,6 @@ impl PromptEditor {
         draw_dots(buf, rect.to_cell_rect(), &ring);
     }
 
-    /// Draws the close control — a braille ring with an "X" through it — into
-    /// `close`'s dot-precise rect via the dot pipeline (CLAUDE.md rule 4 —
-    /// non-text UI chrome). `close` is whole-cell, so `to_cell_rect` is
-    /// lossless.
-    fn draw_close_glyph(buf: &mut Buffer, close: DotRect, color: Rgba) {
-        let (w, h) = (close.w as usize, close.h as usize);
-        if w == 0 || h == 0 {
-            return;
-        }
-        let mut dotbuf = DotBuffer::new(w, h);
-        let cx = (w as f32 - 1.0) / 2.0;
-        let cy = (h as f32 - 1.0) / 2.0;
-        let radius = cx.min(cy).max(1.0);
-
-        // Ring: dots within ~half a dot of the circle radius.
-        for row in 0..h {
-            for col in 0..w {
-                let (dx, dy) = (col as f32 - cx, row as f32 - cy);
-                if ((dx * dx + dy * dy).sqrt() - radius).abs() <= 0.6 {
-                    dotbuf.set(col, row, Dot::Lit(color));
-                }
-            }
-        }
-
-        // X through the center: two short diagonals inside the ring.
-        let arm = (radius * 0.5).round().max(1.0) as i32;
-        for d in -arm..=arm {
-            for (px, py) in [(cx + d as f32, cy + d as f32), (cx + d as f32, cy - d as f32)] {
-                let (c, r) = (px.round() as i32, py.round() as i32);
-                if c >= 0 && (c as usize) < w && r >= 0 && (r as usize) < h {
-                    dotbuf.set(c as usize, r as usize, Dot::Lit(color));
-                }
-            }
-        }
-
-        draw_dots(buf, close.to_cell_rect(), &dotbuf);
-    }
 
     /// The instructions path actually in use for this popup — the temp base
     /// dir in tests, the runtime resolver in prod — honest with where writes

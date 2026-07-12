@@ -3,13 +3,16 @@ use std::cell::RefCell;
 use crossterm::event::MouseEvent;
 use engine_core::color::Rgba;
 use engine_render::dots::Dot;
-use engine_render::{draw_dots, ui_primitives, Button, ButtonColors, DotRect, StateColors};
+use engine_render::{draw_dots, ui_primitives, Button, ButtonColors, ButtonCore, DotRect, StateColors};
 use ratatui::layout::Rect;
 use ratatui::Frame;
 
 pub struct BattleMenu {
     showing: bool,
     finish_button: RefCell<Button>,
+    /// Top-right close (X) button — shares the `close_button` glyph with the
+    /// prompt-editor popup for consistency.
+    close_button: RefCell<ButtonCore>,
 }
 
 impl BattleMenu {
@@ -24,6 +27,11 @@ impl BattleMenu {
         if !self.showing {
             return false;
         }
+        // A completed click on the close (X) dismisses the menu.
+        if self.close_button.get_mut().handle_mouse(ev) {
+            self.showing = false;
+            return false;
+        }
         self.finish_button.get_mut().handle_mouse(ev)
     }
 
@@ -35,8 +43,15 @@ impl BattleMenu {
                     .label("Finish Battle")
                     .colors(Self::FINISH_SCHEME),
             ),
+            close_button: RefCell::new(ButtonCore::new(Rect::default())),
         }
     }
+
+    const CLOSE_W: u16 = 3; // cells
+    const CLOSE_H: u16 = 3; // cells (border-hug: overline / "X" / underline)
+    /// Rows reserved at the panel top for the close button, so the centered
+    /// "Finish Battle" button below it never collides with the corner X.
+    const TOP_BAND: u16 = Self::CLOSE_H + 1;
 
     const BORDER_COLOR: Rgba = Rgba::rgb(0xff, 0xbf, 0x00);
     const BORDER_THICKNESS: usize = 1; // dots
@@ -85,10 +100,36 @@ impl BattleMenu {
         );
         draw_dots(frame.buffer_mut(), panel.to_cell_rect(), &buf);
 
-        // "Finish Battle" button: a fixed size (capped to the panel), centered.
+        // "Finish Battle" button: a fixed size (capped to the panel), centered
+        // in the area below the close band.
         let mut button = self.finish_button.borrow_mut();
         button.set_rect(Self::button_rect(panel));
         button.render(frame.buffer_mut());
+        drop(button);
+
+        // Close (X): top-right corner, shared red glyph keyed to hover/press.
+        let close_rect = Self::close_rect(panel);
+        self.close_button.borrow_mut().set_rect(close_rect);
+        let close_state = self.close_button.borrow().state();
+        let close_dots = DotRect {
+            x: close_rect.x as i32 * 2,
+            y: close_rect.y as i32 * 4,
+            w: close_rect.width as i32 * 2,
+            h: close_rect.height as i32 * 4,
+        };
+        crate::scenes::close_button::draw_close_button(frame.buffer_mut(), close_dots, close_state);
+    }
+
+    /// The close (X) button rect: a `CLOSE_W × CLOSE_H` cell box in the panel's
+    /// top-right corner, inset 1 cell from the top and right borders. Single
+    /// source of truth for the close hit-test + render.
+    fn close_rect(panel: DotRect) -> Rect {
+        let p = panel.to_cell_rect();
+        let w = Self::CLOSE_W.min(p.width);
+        let h = Self::CLOSE_H.min(p.height);
+        let x = p.x + p.width.saturating_sub(w).saturating_sub(1);
+        let y = p.y + 1;
+        Rect::new(x, y, w, h)
     }
 
     fn get_dot_rect(area: Rect) -> DotRect {
@@ -100,7 +141,7 @@ impl BattleMenu {
         };
 
         let w = screen.w * 40 / 100;
-        let h = screen.h * 20 / 100;
+        let h = screen.h * 30 / 100;
 
         // Round to whole cells (2 dots wide, 4 tall) so the dot buffer maps 1:1
         // onto braille cells — otherwise `dots_to_grid` yields a trailing
@@ -122,8 +163,12 @@ impl BattleMenu {
         let p = panel.to_cell_rect();
         let bw = Self::BUTTON_W.min(p.width);
         let bh = Self::BUTTON_H.min(p.height);
+        // Center within the area BELOW the close band so the two never collide.
+        let band = Self::TOP_BAND.min(p.height);
+        let region_y = p.y + band;
+        let region_h = p.height.saturating_sub(band);
         let bx = p.x + p.width.saturating_sub(bw) / 2;
-        let by = p.y + p.height.saturating_sub(bh) / 2;
+        let by = region_y + region_h.saturating_sub(bh) / 2;
         Rect::new(bx, by, bw, bh)
     }
 }
@@ -219,6 +264,24 @@ mod tests {
             menu.handle_mouse(&mouse(MouseEventKind::Up(MouseButton::Left), cx, cy)),
             "down+up on the button centre ({cx},{cy}) must report a completed click"
         );
+    }
+
+    /// A completed left-click on the close (X) dismisses the menu.
+    #[test]
+    fn click_on_close_dismisses_menu() {
+        let mut menu = BattleMenu::new();
+        menu.toggle();
+        assert!(menu.is_open());
+        let _ = render(&menu, 80, 24); // sets the close button's rect
+
+        let panel = BattleMenu::get_dot_rect(Rect::new(0, 0, 80, 24));
+        let close = BattleMenu::close_rect(panel);
+        let cx = close.x + close.width / 2;
+        let cy = close.y + close.height / 2;
+
+        menu.handle_mouse(&mouse(MouseEventKind::Down(MouseButton::Left), cx, cy));
+        menu.handle_mouse(&mouse(MouseEventKind::Up(MouseButton::Left), cx, cy));
+        assert!(!menu.is_open(), "clicking the close (X) must dismiss the menu");
     }
 
     /// A click while the menu is closed is a no-op (never reports a finish).
