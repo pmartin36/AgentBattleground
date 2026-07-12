@@ -39,11 +39,10 @@ const AGENT_INPUT_MAX_ROWS: u16 = 6;
 const POPUP_PAD_X_CELLS: u16 = 1;
 /// Interior bottom padding, below the file-path row (b2-t1 layout).
 const POPUP_PAD_BOTTOM_CELLS: u16 = 1;
-/// Close (X) button size, in cells. 4×2 cells = 8×8 dots — a square dot region
-/// the round circle FILLS (no vertical float), so the button's even top/right
-/// insets show as even gaps around the visible circle.
-const CLOSE_W_CELLS: u16 = 4;
-const CLOSE_H_CELLS: u16 = 2;
+/// Close (X) button hit-area, in cells. `draw_close_button` draws a round
+/// 6×6-dot circle centered inside this 3×3 area with the "X" centered.
+const CLOSE_W_CELLS: u16 = 3;
+const CLOSE_H_CELLS: u16 = 3;
 /// Inset of the close button from the popup's top and right. 1 cell top / 2
 /// cells right — equal in dots (4 vs 4), so the gap reads evenly on both sides
 /// (a cell is 2 dots wide but 4 dots tall).
