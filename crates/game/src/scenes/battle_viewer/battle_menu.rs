@@ -47,11 +47,15 @@ impl BattleMenu {
         }
     }
 
-    const CLOSE_W: u16 = 3; // cells
-    const CLOSE_H: u16 = 3; // cells (border-hug: overline / "X" / underline)
+    const CLOSE_W: u16 = 3; // cells — 3×3 hit-area; draw_close_button centers a
+    const CLOSE_H: u16 = 3; // round 6×6-dot circle + "X" inside it
+    /// Inset of the close button from the panel's top and right. 1 cell top /
+    /// 2 cells right — equal in dots (4 vs 4), so the gap reads evenly.
+    const CLOSE_TOP_INSET: u16 = 1;
+    const CLOSE_RIGHT_INSET: u16 = 2;
     /// Rows reserved at the panel top for the close button, so the centered
     /// "Finish Battle" button below it never collides with the corner X.
-    const TOP_BAND: u16 = Self::CLOSE_H + 1;
+    const TOP_BAND: u16 = Self::CLOSE_TOP_INSET + Self::CLOSE_H;
 
     const BORDER_COLOR: Rgba = Rgba::rgb(0xff, 0xbf, 0x00);
     const BORDER_THICKNESS: usize = 1; // dots
@@ -121,14 +125,14 @@ impl BattleMenu {
     }
 
     /// The close (X) button rect: a `CLOSE_W × CLOSE_H` cell box in the panel's
-    /// top-right corner, inset 1 cell from the top and right borders. Single
-    /// source of truth for the close hit-test + render.
+    /// top-right corner, inset `CLOSE_TOP_INSET`/`CLOSE_RIGHT_INSET` from the
+    /// top/right borders. Single source of truth for the close hit-test + render.
     fn close_rect(panel: DotRect) -> Rect {
         let p = panel.to_cell_rect();
         let w = Self::CLOSE_W.min(p.width);
         let h = Self::CLOSE_H.min(p.height);
-        let x = p.x + p.width.saturating_sub(w).saturating_sub(1);
-        let y = p.y + 1;
+        let x = p.x + p.width.saturating_sub(w).saturating_sub(Self::CLOSE_RIGHT_INSET);
+        let y = p.y + Self::CLOSE_TOP_INSET;
         Rect::new(x, y, w, h)
     }
 

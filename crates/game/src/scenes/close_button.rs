@@ -1,8 +1,7 @@
 //! Shared close (X) button glyph for modal popups (prompt editor, battle
-//! menu). A rounded-rect OUTLINE that hugs a centered red "X" — the same
-//! border-hug idiom as the roster Edit button, tinted red and keyed to
-//! `ButtonState`. The caller owns the `ButtonCore`, its rect, and hit-testing;
-//! this only draws.
+//! menu). A braille ring around a centered red "X", tinted red and keyed to
+//! `ButtonState`. The caller owns the `ButtonCore`, its rect, and hit-testing,
+//! and passes a ~square-dot `region` (so the ring reads round); this only draws.
 
 use engine_core::color::Rgba;
 use engine_render::dots::Dot;
@@ -16,14 +15,11 @@ const IDLE: Rgba = Rgba::rgb(0xc0, 0x30, 0x30);
 const HOVER: Rgba = Rgba::rgb(0xff, 0x55, 0x55);
 const PRESSED: Rgba = Rgba::rgb(0x80, 0x20, 0x20);
 
-/// Border-hug box height in dots (an overline row, the text row, an underline
-/// row — same 6-dot box the Edit button uses).
-const BOX_H_DOTS: i32 = 6;
-
-/// Draws the close button into `region` (expected ~3 cells tall so the border
-/// rows hug the "X" without sharing its cell): a chamfer-1 rounded-rect
-/// outline centered vertically in the region + a centered "X", tinted red per
-/// `state`. Zero-area `region` draws nothing and does not panic.
+/// Draws the close button into `region`: a **round** braille ring (diameter =
+/// the region's smaller dot dimension, so it stays a circle rather than an
+/// ellipse for any region aspect) centered in `region`, with a centered "X"
+/// text glyph, tinted red per `state`. Zero-area `region` draws nothing and
+/// does not panic.
 pub(crate) fn draw_close_button(buf: &mut Buffer, region: DotRect, state: ButtonState) {
     let cr = region.to_cell_rect();
     if cr.width == 0 || cr.height == 0 {
@@ -35,15 +31,20 @@ pub(crate) fn draw_close_button(buf: &mut Buffer, region: DotRect, state: Button
         ButtonState::Pressed => PRESSED,
     };
 
-    // Outline that HUGS the "X": a 6-dot-tall rounded box centered in the
-    // region, so its top/bottom edges land on the dot-rows adjacent to the
-    // label cell rather than the region's far top/bottom rows.
+    // Circle diameter = the smaller dot dimension → a square (round) ring box,
+    // centered in the region.
     let w_dots = cr.width as i32 * 2;
-    let y_off = (cr.height as i32 * 4 - BOX_H_DOTS) / 2;
-    let dots = ui_primitives::rounded_rect(w_dots as usize, BOX_H_DOTS as usize, 1, 1, color, Dot::Transparent);
+    let h_dots = cr.height as i32 * 4;
+    let d = w_dots.min(h_dots);
+    let dots = ui_primitives::ring(d as usize, d as usize, 1, color, Dot::Transparent);
     crate::scenes::post_battle::columns::blit_dots(
         buf,
-        DotRect { x: cr.x as i32 * 2, y: cr.y as i32 * 4 + y_off, w: w_dots, h: BOX_H_DOTS },
+        DotRect {
+            x: cr.x as i32 * 2 + (w_dots - d) / 2,
+            y: cr.y as i32 * 4 + (h_dots - d) / 2,
+            w: d,
+            h: d,
+        },
         &dots,
     );
 

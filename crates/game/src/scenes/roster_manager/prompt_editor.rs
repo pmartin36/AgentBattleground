@@ -39,15 +39,17 @@ const AGENT_INPUT_MAX_ROWS: u16 = 6;
 const POPUP_PAD_X_CELLS: u16 = 1;
 /// Interior bottom padding, below the file-path row (b2-t1 layout).
 const POPUP_PAD_BOTTOM_CELLS: u16 = 1;
-/// Close (X) hit-target size, in cells (b2-t1 layout). 2 cells tall so the
-/// braille circle around the "X" is round, not squashed.
+/// Close (X) button hit-area, in cells. `draw_close_button` draws a round
+/// 6×6-dot circle centered inside this 3×3 area with the "X" centered.
 const CLOSE_W_CELLS: u16 = 3;
-// 3 cells tall so the button's border rows hug the "X" (overline / text /
-// underline) without a border dot sharing the label cell.
 const CLOSE_H_CELLS: u16 = 3;
-/// Reserves the X row (+ a 1-cell clearance) so the body clears it (b2-t1
-/// layout).
-const POPUP_TOP_BAND_CELLS: u16 = CLOSE_H_CELLS + 1;
+/// Inset of the close button from the popup's top and right. 1 cell top / 2
+/// cells right — equal in dots (4 vs 4), so the gap reads evenly on both sides
+/// (a cell is 2 dots wide but 4 dots tall).
+const CLOSE_TOP_INSET_CELLS: u16 = 1;
+const CLOSE_RIGHT_INSET_CELLS: u16 = 2;
+/// Reserves the close button's rows (inset + button) so the body clears them.
+const POPUP_TOP_BAND_CELLS: u16 = CLOSE_TOP_INSET_CELLS + CLOSE_H_CELLS;
 /// Spec's explicit 1-cell margin between the agent input and the
 /// instructions editor (b2-t1 layout).
 const AGENT_MARGIN_CELLS: u16 = 1;
@@ -304,32 +306,16 @@ impl PromptEditor {
         let instructions = body_out[2];
         let file_path = body_out[3];
 
-        // Top band: the X row, inset from the popup's top-left border by the
-        // same 1-cell pad as the body's sides.
-        let close_band = DotRect {
-            x: popup.x,
-            y: popup.y,
-            w: popup.w,
-            h: POPUP_TOP_BAND_CELLS as i32 * 4,
-        }
-        .inset(
-            POPUP_PAD_X_CELLS as i32 * 2,
-            POPUP_PAD_X_CELLS as i32 * 2,
-            POPUP_PAD_X_CELLS as i32 * 4,
-            0,
-        );
-        let close_children = [FlexChild {
-            basis: Basis::Fixed(CLOSE_W_CELLS as i32 * 2),
-            grow: 0.0,
-            shrink: 0.0,
-        }];
-        let close_style = FlexStyle {
-            direction: Direction::Row,
-            justify_content: Justify::End,
-            align_items: Align::Start,
-            gap: 0,
+        // Close button: a fixed 4×2-cell box in the popup's top-right corner,
+        // inset evenly (in dots) from the top and right edges.
+        let close_w = CLOSE_W_CELLS as i32 * 2;
+        let close_h = CLOSE_H_CELLS as i32 * 4;
+        let close = DotRect {
+            x: popup.x + popup.w - CLOSE_RIGHT_INSET_CELLS as i32 * 2 - close_w,
+            y: popup.y + CLOSE_TOP_INSET_CELLS as i32 * 4,
+            w: close_w,
+            h: close_h,
         };
-        let close = flex(close_band, close_style, &close_children)[0];
 
         PopupLayout { popup, close, agent_input, instructions, file_path }
     }
