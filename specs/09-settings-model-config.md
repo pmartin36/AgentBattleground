@@ -31,6 +31,7 @@ The model the player chooses runs their battle simulation locally. This is a mea
 - Account deletion (TBD)
 
 ### Game Preferences
+- **Audio**: master volume, per-bus volume (Music, SFX), and mute. These map directly onto the `engine-audio` subsystem's API (`engine_audio::set_master_volume`, `set_bus_volume(Bus::{Music, Sfx}, ..)`, `set_muted`) from `57-engine-audio-api`. That spec holds these values **in memory only** (runtime state on the audio backend); this settings screen owns the **persisted, user-facing** control — it reads the saved levels on startup and pushes them into `engine-audio`, and writes them back when the player changes them. Persistence needs a config-file layer, which does not exist in the codebase yet (only `logging.rs` uses the OS data dir today) — establishing that layer is part of this spec's scope.
 - TBD: display preferences, playback speed defaults, notification settings, etc.
 
 ## Open Questions / TBDs
@@ -38,7 +39,9 @@ The model the player chooses runs their battle simulation locally. This is a mea
 - How is the model used at runtime — does the game shell out to a local binary, use an API interface, or something else?
 - Are online model API keys stored locally only, or synced to server?
 - Can different pieces use different models? (probably not in v1)
+- Config-file persistence format/location for game preferences (incl. audio levels) — reuse the `directories`-resolved OS data dir that logging already uses?
 
 ## Dependencies
 - `01-onboarding-first-run` — initial model setup shares this logic
 - `10-battle-simulation-engine` — model config is consumed here at battle time
+- `57-engine-audio-api` — supplies the audio subsystem whose volume/mute this screen persists and drives (v1 keeps those values in memory only; persistence lives here)

@@ -1,0 +1,653 @@
+#[cfg(test)]
+mod render_tests {
+    use super::super::*;
+    use crate::scenes::test_util::render_to_buffer;
+
+    /// b5-t2 deliverable: the title box paints real content (frame + logo,
+    /// non-space cells) and the bare display-name text "Main Hub" appears
+    /// nowhere in the rendered buffer — the logo is the title, not a label.
+    #[test]
+    fn main_hub_title_box_paints_and_has_no_text() {
+        let (w, h) = (120u16, 50u16);
+        let area = Rect::new(0, 0, w, h);
+        let buf = render_to_buffer(&MainHub::default(), w, h);
+        let title = MainHub::title_rect(area);
+
+        let painted = (title.top()..title.bottom()).any(|y| {
+            (title.left()..title.right())
+                .any(|x| buf.cell((x, y)).unwrap().symbol() != " ")
+        });
+        assert!(
+            painted,
+            "title rect {title:?} must contain at least one non-space painted cell"
+        );
+
+        let full_text: String = (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf.cell((x, y)).unwrap().symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !full_text.contains("Main Hub"),
+            "rendered buffer must not contain the bare display-name text \"Main Hub\", got:\n{full_text}"
+        );
+    }
+
+    /// b5-t3 deliverable: the 3 menu buttons render their exact label text
+    /// on the center row of their respective `button_rects`, top-to-bottom
+    /// in order Roster, Battle, Exit.
+    #[test]
+    fn main_hub_renders_three_menu_button_labels() {
+        let (w, h) = (120u16, 50u16);
+        let area = Rect::new(0, 0, w, h);
+        let buf = render_to_buffer(&MainHub::default(), w, h);
+        let rects = MainHub::button_rects(area);
+        let labels = ["Roster", "Battle", "Exit"];
+
+        for (rect, label) in rects.iter().zip(labels.iter()) {
+            let y = rect.y + rect.height / 2;
+            let row_text: String = (rect.left()..rect.right())
+                .map(|x| buf.cell((x, y)).unwrap().symbol().to_string())
+                .collect();
+            assert!(
+                row_text.contains(label),
+                "button rect {rect:?} center row must contain label {label:?}, got {row_text:?}"
+            );
+        }
+
+        assert!(
+            rects[0].y < rects[1].y && rects[1].y < rects[2].y,
+            "button rects must be strictly ordered top-to-bottom Roster, Battle, Exit"
+        );
+    }
+
+    /// b5-t4 deliverable: with `cursor_index = 1`, the selection-cursor arrow
+    /// paints in the column band immediately left of the Battle button's
+    /// rect, and that same band is untouched (all spaces) to the left of the
+    /// Roster and Exit rects.
+    #[test]
+    fn cursor_appears_left_of_focused_button() {
+        let scene = MainHub {
+            cursor_index: 1,
+            ..Default::default()
+        };
+        let (w, h) = (120u16, 50u16);
+        let area = Rect::new(0, 0, w, h);
+        let buf = render_to_buffer(&scene, w, h);
+
+        let rects = MainHub::button_rects(area);
+        let cursor_w: u16 = 2;
+        let cursor_gap: u16 = 1;
+        let band_painted = |rect: Rect| -> bool {
+            let x0 = rect.x.saturating_sub(cursor_gap + cursor_w);
+            let x1 = rect.x.saturating_sub(cursor_gap);
+            (rect.top()..rect.bottom())
+                .any(|y| (x0..x1).any(|x| buf.cell((x, y)).unwrap().symbol() != " "))
+        };
+
+        assert!(
+            band_painted(rects[1]),
+            "left-of-Battle band must contain a painted cursor cell when cursor_index == 1"
+        );
+        assert!(
+            !band_painted(rects[0]),
+            "left-of-Roster band must be empty when cursor_index == 1"
+        );
+        assert!(
+            !band_painted(rects[2]),
+            "left-of-Exit band must be empty when cursor_index == 1"
+        );
+    }
+}
+
+#[cfg(test)]
+mod keyboard_input_tests {
+    use super::super::*;
+    use crate::scenes::test_util::key_event;
+    use crossterm::event::KeyCode;
+
+    fn hub_at(cursor_index: usize) -> MainHub {
+        MainHub {
+            cursor_index,
+            ..Default::default()
+        }
+    }
+
+    /// Up at index 0 wraps to 2.
+    #[test]
+    fn up_wraps_from_zero_to_two() {
+        let mut scene = hub_at(0);
+        let transition = scene.handle_input(key_event(KeyCode::Up));
+        assert_eq!(scene.cursor_index, 2, "Up at index 0 must wrap to 2");
+        assert!(transition.is_none(), "arrow-key navigation must not transition");
+    }
+
+    /// Down at index 2 wraps to 0.
+    #[test]
+    fn down_wraps_from_two_to_zero() {
+        let mut scene = hub_at(2);
+        let transition = scene.handle_input(key_event(KeyCode::Down));
+        assert_eq!(scene.cursor_index, 0, "Down at index 2 must wrap to 0");
+        assert!(transition.is_none(), "arrow-key navigation must not transition");
+    }
+
+    /// Mid-range steps do not wrap: Down 0->1, Up 1->0.
+    #[test]
+    fn mid_range_steps_do_not_wrap() {
+        let mut scene = hub_at(0);
+        scene.handle_input(key_event(KeyCode::Down));
+        assert_eq!(scene.cursor_index, 1, "Down at index 0 must step to 1");
+
+        scene.handle_input(key_event(KeyCode::Up));
+        assert_eq!(scene.cursor_index, 0, "Up at index 1 must step to 0");
+    }
+
+    /// Enter at cursor_index 0 (Roster) transitions to SceneId::RosterManager.
+    #[test]
+    fn enter_on_roster_transitions_to_roster_manager() {
+        let mut scene = hub_at(0);
+        let transition = scene
+            .handle_input(key_event(KeyCode::Enter))
+            .expect("Enter on Roster must return a Transition");
+        assert_eq!(transition.target, SceneKey::from(SceneId::RosterManager));
+        assert!(!scene.quit_requested(), "Roster activation must not request quit");
+    }
+
+    /// Enter at cursor_index 1 (Battle) transitions to SceneId::BattleViewer.
+    #[test]
+    fn enter_on_battle_transitions_to_battle_viewer() {
+        let mut scene = hub_at(1);
+        let transition = scene
+            .handle_input(key_event(KeyCode::Enter))
+            .expect("Enter on Battle must return a Transition");
+        assert_eq!(transition.target, SceneKey::from(SceneId::BattleViewer));
+        assert!(!scene.quit_requested(), "Battle activation must not request quit");
+    }
+
+    /// Enter at cursor_index 2 (Exit) requests quit and returns no Transition.
+    #[test]
+    fn enter_on_exit_sets_quit_requested_and_no_transition() {
+        let mut scene = hub_at(2);
+        let transition = scene.handle_input(key_event(KeyCode::Enter));
+        assert!(transition.is_none(), "Exit activation must not return a Transition");
+        assert!(scene.quit_requested(), "Exit activation must set quit_requested");
+    }
+
+    /// Space activates the cursored item identically to Enter.
+    #[test]
+    fn space_on_roster_transitions_to_roster_manager() {
+        let mut scene = hub_at(0);
+        let transition = scene
+            .handle_input(key_event(KeyCode::Char(' ')))
+            .expect("Space on Roster must return a Transition");
+        assert_eq!(transition.target, SceneKey::from(SceneId::RosterManager));
+        assert!(!scene.quit_requested(), "Roster activation must not request quit");
+    }
+
+    /// An unrelated key changes nothing and requests nothing.
+    #[test]
+    fn unrelated_key_is_noop() {
+        let mut scene = hub_at(0);
+        let transition = scene.handle_input(key_event(KeyCode::Char('x')));
+        assert_eq!(scene.cursor_index, 0, "unrelated key must not move the cursor");
+        assert!(transition.is_none(), "unrelated key must not transition");
+        assert!(!scene.quit_requested(), "unrelated key must not request quit");
+    }
+}
+
+#[cfg(test)]
+mod mouse_input_tests {
+    use super::super::*;
+    use crate::scenes::test_util::{mouse_event, render_to_buffer};
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    use engine_render::ButtonState;
+
+    const W: u16 = 120;
+    const H: u16 = 50;
+
+    /// Renders `scene` once (populating each `Button`'s rect via
+    /// `set_rect`, per b5-t6 research's "render before dispatch" note) and
+    /// returns the fixed `area` used by `button_rects`.
+    fn render_once(scene: &MainHub) -> Rect {
+        render_to_buffer(scene, W, H);
+        Rect::new(0, 0, W, H)
+    }
+
+    fn center(rect: Rect) -> (u16, u16) {
+        (rect.x + rect.width / 2, rect.y + rect.height / 2)
+    }
+
+    /// A `Moved` landing inside the Battle button's rect (index 1) sets
+    /// `cursor_index` to 1 and produces no transition.
+    #[test]
+    fn moved_inside_battle_sets_cursor_index_without_transition() {
+        let mut scene = MainHub::default();
+        let area = render_once(&scene);
+        let rects = MainHub::button_rects(area);
+        let (cx, cy) = center(rects[1]);
+
+        let transition = scene.handle_input(mouse_event(MouseEventKind::Moved, cx, cy));
+
+        assert_eq!(
+            scene.cursor_index, 1,
+            "Moved inside the Battle button's rect must set cursor_index to 1"
+        );
+        assert!(transition.is_none(), "hover must not produce a Transition");
+        assert_eq!(
+            scene.buttons[1].borrow().state(),
+            ButtonState::Hover,
+            "the Battle button itself must report Hover state after the Moved event"
+        );
+    }
+
+    /// A completed click (Moved+Down+Up, all inside the Exit button's rect)
+    /// fires the quit signal via `activate`, with no transition.
+    #[test]
+    fn click_on_exit_requests_quit() {
+        let mut scene = MainHub::default();
+        let area = render_once(&scene);
+        let rects = MainHub::button_rects(area);
+        let (cx, cy) = center(rects[2]);
+
+        scene.handle_input(mouse_event(MouseEventKind::Moved, cx, cy));
+        scene.handle_input(mouse_event(
+            MouseEventKind::Down(MouseButton::Left),
+            cx,
+            cy,
+        ));
+        let transition = scene.handle_input(mouse_event(
+            MouseEventKind::Up(MouseButton::Left),
+            cx,
+            cy,
+        ));
+
+        assert!(
+            transition.is_none(),
+            "a completed click on Exit must not return a Transition"
+        );
+        assert!(
+            scene.quit_requested(),
+            "a completed click on Exit must set quit_requested"
+        );
+    }
+
+    /// A completed click on the Roster button returns the same Transition
+    /// Enter produces at cursor_index 0 — the shared `activate` dispatch.
+    #[test]
+    fn click_on_roster_transitions_to_roster_manager() {
+        let mut scene = MainHub::default();
+        let area = render_once(&scene);
+        let rects = MainHub::button_rects(area);
+        let (cx, cy) = center(rects[0]);
+
+        scene.handle_input(mouse_event(MouseEventKind::Moved, cx, cy));
+        scene.handle_input(mouse_event(
+            MouseEventKind::Down(MouseButton::Left),
+            cx,
+            cy,
+        ));
+        let transition = scene
+            .handle_input(mouse_event(MouseEventKind::Up(MouseButton::Left), cx, cy))
+            .expect("a completed click on Roster must return a Transition");
+
+        assert_eq!(transition.target, SceneKey::from(SceneId::RosterManager));
+        assert!(!scene.quit_requested(), "Roster activation must not request quit");
+    }
+
+    /// A completed click on the Battle button returns the same Transition
+    /// Enter produces at cursor_index 1.
+    #[test]
+    fn click_on_battle_transitions_to_battle_viewer() {
+        let mut scene = MainHub::default();
+        let area = render_once(&scene);
+        let rects = MainHub::button_rects(area);
+        let (cx, cy) = center(rects[1]);
+
+        scene.handle_input(mouse_event(MouseEventKind::Moved, cx, cy));
+        scene.handle_input(mouse_event(
+            MouseEventKind::Down(MouseButton::Left),
+            cx,
+            cy,
+        ));
+        let transition = scene
+            .handle_input(mouse_event(MouseEventKind::Up(MouseButton::Left), cx, cy))
+            .expect("a completed click on Battle must return a Transition");
+
+        assert_eq!(transition.target, SceneKey::from(SceneId::BattleViewer));
+        assert!(!scene.quit_requested(), "Battle activation must not request quit");
+    }
+
+    /// A click sequence completed at a point outside all 3 button rects is a
+    /// no-op: cursor_index unchanged, no transition, no quit.
+    #[test]
+    fn click_outside_all_buttons_is_noop() {
+        let mut scene = MainHub {
+            cursor_index: 0,
+            ..Default::default()
+        };
+        let _area = render_once(&scene);
+        // Top-left corner of the screen — outside the centered title/menu.
+        let (ox, oy) = (0u16, 0u16);
+
+        scene.handle_input(mouse_event(MouseEventKind::Moved, ox, oy));
+        scene.handle_input(mouse_event(
+            MouseEventKind::Down(MouseButton::Left),
+            ox,
+            oy,
+        ));
+        let transition = scene.handle_input(mouse_event(
+            MouseEventKind::Up(MouseButton::Left),
+            ox,
+            oy,
+        ));
+
+        assert_eq!(
+            scene.cursor_index, 0,
+            "a click sequence outside all button rects must not move cursor_index"
+        );
+        assert!(transition.is_none(), "a click outside all buttons must not transition");
+        assert!(
+            !scene.quit_requested(),
+            "a click outside all buttons must not request quit"
+        );
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::super::*;
+    use engine_render::{flex, Align, Basis, Direction, FlexChild, FlexStyle, Justify};
+
+    /// Fixed screen area used by every case in this module.
+    fn area() -> Rect {
+        Rect::new(0, 0, 120, 50)
+    }
+
+    /// `title_rect` is exactly a single-child `flex()` Row (Justify::Center,
+    /// Align::Start) over `cell_rect_to_dots(area)` inset by 1 cell (4 dots)
+    /// off the top edge, `.to_cell_rect()`'d — the mechanism, not
+    /// hand-derived arithmetic.
+    #[test]
+    fn title_rect_is_top_center_anchor() {
+        let a = area();
+        let (w, h) = MainHub::title_size(a);
+        let child = FlexChild {
+            basis: Basis::Intrinsic(Box::new(move |_main| (w as i32 * 2, h as i32 * 4))),
+            grow: 0.0,
+            shrink: 0.0,
+        };
+        let style = FlexStyle {
+            direction: Direction::Row,
+            justify_content: Justify::Center,
+            align_items: Align::Start,
+            gap: 0,
+        };
+        let container = MainHub::cell_rect_to_dots(a).inset(0, 0, 4, 0);
+        let expected = flex(container, style, std::slice::from_ref(&child))[0].to_cell_rect();
+        assert_eq!(MainHub::title_rect(a), expected);
+    }
+
+    /// The title box's top edge sits exactly 1 whole text cell below the
+    /// top of `area` (the new top margin), not flush against it.
+    #[test]
+    fn title_rect_has_one_cell_top_margin() {
+        let a = area();
+        let title = MainHub::title_rect(a);
+        assert_eq!(
+            title.y,
+            a.y + 1,
+            "title box top edge must sit exactly 1 cell below the top of area"
+        );
+    }
+
+    /// The title box is unmistakably large relative to the screen — a
+    /// regression guard for the "logo renders illegibly tiny" bug: at a
+    /// realistic terminal size, width must be a large majority of the
+    /// screen width, not a small fixed box.
+    #[test]
+    fn title_is_a_large_fraction_of_the_screen() {
+        let a = area();
+        let (w, h) = MainHub::title_size(a);
+        assert!(
+            w as f32 >= a.width as f32 * 0.6,
+            "title width {w} must be a large fraction of screen width {}",
+            a.width
+        );
+        assert!(h >= 10, "title height {h} must be tall enough to read a wordmark logo");
+    }
+
+    /// `menu_container`'s output for the two b1 fixture geometries (120x50
+    /// and 40x20, covering both x-parity paths) — a direct value assertion
+    /// beyond the two existing property-only tests below, which would not
+    /// catch an off-by-margin/axis slip in the inset/Justify::End formula.
+    #[test]
+    fn menu_container_matches_pre_migration_rect() {
+        assert_eq!(MainHub::menu_container(Rect::new(0, 0, 120, 50)), Rect::new(50, 37, 20, 11));
+        assert_eq!(MainHub::menu_container(Rect::new(0, 0, 40, 20)), Rect::new(10, 7, 20, 11));
+    }
+
+    /// The menu sits near the BOTTOM of the screen (Exit close to the
+    /// bottom edge), not dead-center — the fix for the "menu floats in the
+    /// middle with a huge empty gap above the tiny title" complaint.
+    #[test]
+    fn menu_container_is_anchored_near_the_bottom() {
+        let a = area();
+        let container = MainHub::menu_container(a);
+        let title = MainHub::title_rect(a);
+        assert!(
+            container.bottom() > a.bottom() * 3 / 4,
+            "menu container bottom {} must be in the bottom quarter of the screen (bottom={})",
+            container.bottom(),
+            a.bottom()
+        );
+        assert!(
+            container.y > title.bottom(),
+            "menu container must sit below the title box, with the freed vertical space between them"
+        );
+    }
+
+    /// `button_rects` is exactly a `flex()` mechanism (Column, 3 Intrinsic
+    /// children, `gap: MENU_GAP*4`, Justify::Start, Align::Start) applied
+    /// over `cell_rect_to_dots(menu_container(area))` — proves the 3 button
+    /// rects come from the flex mechanism applied to `menu_container`'s own
+    /// output, not independently derived (research.md b3-t2 blueprint).
+    #[test]
+    fn button_rects_match_stack_of_menu_container() {
+        let a = area();
+        let container = MainHub::cell_rect_to_dots(MainHub::menu_container(a));
+        let child = || FlexChild {
+            basis: Basis::Intrinsic(Box::new(|_main| {
+                (MainHub::BUTTON_H as i32 * 4, MainHub::BUTTON_W as i32 * 2)
+            })),
+            grow: 0.0,
+            shrink: 0.0,
+        };
+        let children = [child(), child(), child()];
+        let style = FlexStyle {
+            direction: Direction::Column,
+            justify_content: Justify::Start,
+            align_items: Align::Start,
+            gap: MainHub::MENU_GAP as i32 * 4,
+        };
+        let expected: Vec<Rect> =
+            flex(container, style, &children).iter().map(|r| r.to_cell_rect()).collect();
+        assert_eq!(MainHub::button_rects(a).as_slice(), expected.as_slice());
+    }
+
+    /// The 3 button rects are strictly ordered top-to-bottom (index 0
+    /// Roster, 1 Battle, 2 Exit) and non-overlapping.
+    #[test]
+    fn button_rects_are_ordered_and_non_overlapping() {
+        let rects = MainHub::button_rects(area());
+
+        assert!(rects[0].y < rects[1].y, "rect 0 must be above rect 1");
+        assert!(rects[1].y < rects[2].y, "rect 1 must be above rect 2");
+        assert!(
+            rects[0].bottom() <= rects[1].y,
+            "rect 0 must not overlap rect 1"
+        );
+        assert!(
+            rects[1].bottom() <= rects[2].y,
+            "rect 1 must not overlap rect 2"
+        );
+    }
+
+    /// `menu_container`'s height must be at least the stacked group's total
+    /// height (3 buttons + 2 gaps) — guards against the container being too
+    /// short for the button column.
+    #[test]
+    fn menu_container_height_fits_three_buttons() {
+        let container = MainHub::menu_container(area());
+        assert!(
+            container.height >= 3 * MainHub::BUTTON_H + 2 * MainHub::MENU_GAP,
+            "menu_container height {} must fit 3 buttons + 2 gaps",
+            container.height
+        );
+    }
+}
+
+#[cfg(test)]
+mod render_timing_tests {
+    use super::super::*;
+    use crate::scenes::test_util::render_to_buffer;
+    use std::time::Instant;
+
+    /// Spec 30 done-criterion, closed by spec 32: re-measure `MainHub::render()`
+    /// after the rasterize-cache fix (b3-t1/b4-t1/b6-t1) and confirm it is a
+    /// small fraction of the 33ms (30fps) frame budget, in BOTH profiles.
+    /// Ignored by default (it is a measurement, run explicitly and recorded as
+    /// evidence; it also keeps the debug gate fast).
+    ///
+    /// Measured (2026-07-04, this machine): release avg ~0.26-2.5ms, debug avg
+    /// ~4.0ms — both a small fraction of the budget. Pre-spec-32, debug avg was
+    /// ~161ms (`engine_render::convert()` re-rasterizing `logo.png` every
+    /// frame); spec 32's shared rasterize cache (`asset_cache`) closed that
+    /// gap, so the debug bound is now asserted too.
+    #[test]
+    #[ignore = "timing measurement; run explicitly (see spec 30/32 done-criterion)"]
+    fn main_hub_render_is_a_small_fraction_of_frame_budget() {
+        const N: u32 = 50;
+        /// Flake-resistant ceiling well under 33ms; measured release avg ~2.5ms.
+        const RELEASE_BUDGET_MS: f64 = 10.0;
+        /// Full 30fps frame budget; ~8x headroom over the measured ~4ms debug
+        /// avg, but still catches a regression back toward the pre-spec-32
+        /// ~161ms (uncached re-rasterization).
+        const DEBUG_BUDGET_MS: f64 = 33.0;
+
+        let scene = MainHub::default();
+        for _ in 0..3 {
+            let _ = render_to_buffer(&scene, 120, 50);
+        } // warmup
+        let t = Instant::now();
+        for _ in 0..N {
+            let _ = render_to_buffer(&scene, 120, 50);
+        }
+        let avg_ms = t.elapsed().as_secs_f64() * 1000.0 / f64::from(N);
+
+        let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+        println!("MainHub::render() avg = {avg_ms:.3} ms over {N} ({profile})");
+
+        if cfg!(debug_assertions) {
+            assert!(
+                avg_ms < DEBUG_BUDGET_MS,
+                "debug MainHub::render() avg {avg_ms:.3}ms must be a small fraction \
+                 of the 33ms frame budget (ceiling {DEBUG_BUDGET_MS}ms; pre-spec-32 \
+                 this was ~161ms uncached)"
+            );
+        } else {
+            assert!(
+                avg_ms < RELEASE_BUDGET_MS,
+                "release MainHub::render() avg {avg_ms:.3}ms must be a small fraction \
+                 of the 33ms frame budget (ceiling {RELEASE_BUDGET_MS}ms)"
+            );
+        }
+    }
+}
+
+/// Golden-fixture gate. Freezes the reference `MainHub` render at 3
+/// deterministic scenarios into committed fixtures under
+/// `crates/game/tests/fixtures/main_hub/`, decoded through the exact
+/// `decode_braille_cell`/`diff_dots` channel live code must match
+/// dot-for-dot. Mirrors `roster_manager.rs`'s `golden_fixture_tests`
+/// precedent.
+#[cfg(test)]
+mod golden_fixture_tests {
+    use super::super::*;
+    use crate::scenes::test_util::{
+        buffer_to_art, load_main_hub_fixture, render_to_buffer, serialize_braille_buffer,
+    };
+    use engine_render::diff_dots;
+
+    /// (fixture name, render width, render height, scene-mutation fn).
+    type Scenario = (&'static str, u16, u16, fn(&mut MainHub));
+
+    /// The 3 deterministic scenarios: fixture name, render dims, and the
+    /// mutation applied to a fresh `MainHub::default()` before render.
+    fn scenarios() -> Vec<Scenario> {
+        fn rest(_scene: &mut MainHub) {}
+        fn cursor_exit(scene: &mut MainHub) {
+            scene.cursor_index = 2;
+        }
+
+        vec![
+            ("rest_120x50", 120, 50, rest as fn(&mut MainHub)),
+            ("narrow_40x20", 40, 20, rest as fn(&mut MainHub)),
+            ("cursor_exit_120x50", 120, 50, cursor_exit as fn(&mut MainHub)),
+        ]
+    }
+
+    /// For each of the 3 scenarios, the CURRENT render must dot-for-dot
+    /// match its committed fixture (`diff_dots(&fixture, &actual).is_match()`).
+    /// Pre-migration this is a freeze (green by construction once the
+    /// fixtures are generated); b2/b3 re-run this SAME assertion against the
+    /// `flex()`-migrated code, so this test is the enforced acceptance
+    /// oracle for the whole migration.
+    ///
+    /// Run with `UPDATE_MAIN_HUB_FIXTURES=1` to (re)generate the 3
+    /// `*.fixture` + `*.preview.txt` files from the current render — do the
+    /// manual visual pass over the previews (recorded in
+    /// `crates/game/tests/fixtures/main_hub/README.md`) BEFORE committing
+    /// regenerated fixtures.
+    #[test]
+    fn main_hub_golden_fixtures_match_pre_migration_baseline() {
+        let generate = std::env::var("UPDATE_MAIN_HUB_FIXTURES").is_ok();
+
+        for (name, w, h, build) in scenarios() {
+            let mut scene = MainHub::default();
+            build(&mut scene);
+            let actual = render_to_buffer(&scene, w, h);
+
+            if generate {
+                let fixture_path = format!(
+                    "{}/tests/fixtures/main_hub/{name}.fixture",
+                    env!("CARGO_MANIFEST_DIR")
+                );
+                let preview_path = format!(
+                    "{}/tests/fixtures/main_hub/{name}.preview.txt",
+                    env!("CARGO_MANIFEST_DIR")
+                );
+                std::fs::write(&fixture_path, serialize_braille_buffer(&actual))
+                    .unwrap_or_else(|e| panic!("failed to write {fixture_path}: {e}"));
+                std::fs::write(&preview_path, buffer_to_art(&actual))
+                    .unwrap_or_else(|e| panic!("failed to write {preview_path}: {e}"));
+                continue;
+            }
+
+            let fixture = load_main_hub_fixture(name);
+            let diff = diff_dots(&fixture, &actual);
+            assert!(
+                diff.is_match(),
+                "scenario {name:?}: current render diverges from the committed \
+                 pre-migration fixture ({} dot mismatch(es) of {} compared); \
+                 regenerate with UPDATE_MAIN_HUB_FIXTURES=1 only if the divergence \
+                 is intentional (re-run the manual visual pass first)",
+                diff.mismatches.len(),
+                diff.dots_compared
+            );
+        }
+    }
+}
+
