@@ -18,8 +18,10 @@ const SCROLLBAR_COLOR: Rgba = Rgba::rgb(0x5a, 0x5a, 0x5a);
 /// stay visually distinguishable where they overlap.
 pub(super) const SELECTION_BG: Color = Color::Rgb(0x2f, 0x4f, 0x6f);
 
-/// Mention-popup panel border ink (dot pipeline). b1-t3.
-pub(super) const MENTION_BORDER: Rgba = Rgba::rgb(0x8a, 0x8a, 0x8a);
+/// Mention-popup panel border ink (dot pipeline). A light green,
+/// deliberately DISTINCT from the grey field-box border so the popup reads as
+/// its own element rather than blending into the text box.
+pub(super) const MENTION_BORDER: Rgba = Rgba::rgb(0x66, 0xcc, 0x88);
 
 /// Mention-popup highlighted-row background tint; distinct from
 /// `SELECTION_BG`. b1-t3.

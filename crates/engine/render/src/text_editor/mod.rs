@@ -494,6 +494,9 @@ impl TextEditor {
                     self.end_drag_selection()
                 }
             }
+            // Hovering the cursor over a mention-popup row moves the
+            // highlight to it (preview; a click accepts).
+            MouseEventKind::Moved => self.mention_mouse_hover(ev.column, ev.row),
             _ => false,
         }
     }

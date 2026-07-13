@@ -443,6 +443,75 @@ fn mouse_click_outside_popup_does_not_accept() {
 }
 
 #[test]
+fn mouse_hover_over_row_moves_highlight_without_accepting() {
+    let (mut editor, _log) = editor_with_provider();
+    editor.handle_key(char_key('@')); // candidates [enemy, self], highlight 0
+
+    let rect = popup_test_rect();
+    let mut buf = Buffer::empty(rect);
+    editor.render(&mut buf, rect);
+    let (cx, cy) = find_candidate_row(&buf, rect, "self").expect("candidate 'self' must be drawn");
+
+    let handled = editor.handle_mouse(&mouse_at(MouseEventKind::Moved, cx, cy));
+
+    assert!(handled, "hover over a candidate row must be handled");
+    assert_eq!(
+        editor.mention_popup.as_ref().unwrap().highlight,
+        1,
+        "hover must move the highlight to the hovered row ('self')"
+    );
+    assert_eq!(editor.text(), "@", "hover must NOT accept — buffer unchanged");
+    assert!(
+        editor.mention_popup.is_some(),
+        "hover must NOT close the popup"
+    );
+}
+
+#[test]
+fn mouse_hover_outside_popup_leaves_highlight_unchanged() {
+    let (mut editor, _log) = editor_with_provider();
+    editor.handle_key(char_key('@')); // highlight 0
+
+    let rect = popup_test_rect();
+    let mut buf = Buffer::empty(rect);
+    editor.render(&mut buf, rect);
+
+    let handled =
+        editor.handle_mouse(&mouse_at(MouseEventKind::Moved, rect.right() - 1, rect.bottom() - 1));
+
+    assert!(!handled, "a hover outside the popup list is not handled");
+    assert_eq!(
+        editor.mention_popup.as_ref().unwrap().highlight,
+        0,
+        "highlight unchanged by an outside hover"
+    );
+}
+
+#[test]
+fn popup_border_renders_in_distinct_color() {
+    let (mut editor, _log) = editor_with_provider();
+    editor.handle_key(char_key('@'));
+
+    let rect = popup_test_rect();
+    let mut buf = Buffer::empty(rect);
+    editor.render(&mut buf, rect);
+
+    // The popup border must render in MENTION_BORDER (a light green),
+    // distinct from the grey field-box border, so the popup reads as its own
+    // element.
+    let c = super::render::MENTION_BORDER;
+    let want = ratatui::style::Color::Rgb(c.r, c.g, c.b);
+    let found = (0..rect.height)
+        .any(|y| (0..rect.width).any(|x| buf.cell((x, y)).unwrap().fg == want));
+    assert!(found, "popup border must render in the distinct MENTION_BORDER color");
+    assert_ne!(
+        want,
+        ratatui::style::Color::Rgb(0x8a, 0x8a, 0x8a),
+        "popup border color must differ from the grey field-box border"
+    );
+}
+
+#[test]
 fn no_popup_render_and_mouse_click_are_unaffected() {
     let mut editor = TextEditor::new(config());
     editor.set_text("hello world");

@@ -174,7 +174,20 @@ impl PromptEditor {
                         return true;
                     }
                 }
-                KeyCode::Tab => self.toggle_focus(),
+                KeyCode::Tab => {
+                    // Spec 56: while the focused editor has an open @-mention
+                    // popup, Tab accepts the highlighted candidate (like
+                    // Enter) instead of switching editor focus.
+                    let editor = match self.focus {
+                        PopupFocus::AgentInput => self.agent_input.get_mut(),
+                        PopupFocus::Instructions => self.instructions.get_mut(),
+                    };
+                    if editor.mention_active() {
+                        editor.handle_key(*key);
+                    } else {
+                        self.toggle_focus();
+                    }
+                }
                 _ => match self.focus {
                     PopupFocus::AgentInput => {
                         if self.agent_input.get_mut().handle_key(*key) == EditorEvent::Submit {
@@ -921,6 +934,49 @@ mod tests {
         press_enter(&mut popup);
 
         assert_eq!(popup.instructions_text(), "@enemy:least-hp");
+    }
+
+    /// Spec 56 feedback: Tab with an open `@`-mention popup ACCEPTS the
+    /// highlighted candidate (like Enter) and must NOT switch editor focus.
+    #[test]
+    fn tab_accepts_mention_when_popup_open_without_switching_focus() {
+        let roster = wired_roster();
+        let mut popup = hermetic_popup("Ember Wolf", &roster);
+
+        // Instructions field focused by default; '@enemy' opens the popup
+        // with the `continues` target 'enemy' highlighted.
+        type_str(&mut popup, "@enemy");
+
+        let tab = InputEvent::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        let closed = popup.handle_input(&tab);
+
+        assert!(!closed, "Tab must not close the modal");
+        assert_eq!(
+            popup.focus,
+            PopupFocus::Instructions,
+            "Tab with an open popup accepts the candidate — it must NOT switch focus"
+        );
+        assert_eq!(
+            popup.instructions_text(),
+            "@enemy:",
+            "Tab must accept the highlighted mention like Enter (two-stage target)"
+        );
+    }
+
+    /// With no popup open, Tab keeps its normal behavior: switch editor focus.
+    #[test]
+    fn tab_switches_focus_when_no_mention_popup() {
+        let roster = wired_roster();
+        let mut popup = hermetic_popup("Ember Wolf", &roster);
+
+        let tab = InputEvent::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        popup.handle_input(&tab);
+
+        assert_eq!(
+            popup.focus,
+            PopupFocus::AgentInput,
+            "Tab toggles focus when no mention popup is open"
+        );
     }
 
     /// The edited creature's own abilities and the roster's other creature

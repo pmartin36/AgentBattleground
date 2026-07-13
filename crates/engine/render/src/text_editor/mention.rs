@@ -267,4 +267,35 @@ impl TextEditor {
         self.mention_accept();
         true
     }
+
+    /// Hit-test a `Moved` mouse cell against the popup's last-rendered
+    /// candidate-list rect and, on a hit, move `highlight` to the hovered row
+    /// (no accept — that's a click). Returns `true` iff it moved the
+    /// highlight. A move outside the list (or before the popup has rendered)
+    /// leaves the highlight unchanged. Mirrors `mention_mouse_accept`'s
+    /// hit-test; the `is_none` guard keeps popup-less editors unaffected.
+    pub(super) fn mention_mouse_hover(&mut self, column: u16, row: u16) -> bool {
+        if self.mention_popup.is_none() {
+            return false;
+        }
+        let Some(list_rect) = self.mention_popup.as_ref().and_then(|p| p.list_rect) else {
+            return false;
+        };
+        if column < list_rect.x
+            || column >= list_rect.x + list_rect.width
+            || row < list_rect.y
+            || row >= list_rect.y + list_rect.height
+        {
+            return false;
+        }
+        let idx = (row - list_rect.y) as usize;
+        let Some(popup) = self.mention_popup.as_mut() else {
+            return false;
+        };
+        if idx >= popup.candidates.len() {
+            return false;
+        }
+        popup.highlight = idx;
+        true
+    }
 }
