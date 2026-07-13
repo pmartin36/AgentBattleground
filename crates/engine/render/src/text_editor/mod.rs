@@ -8,11 +8,13 @@ use ratatui::crossterm::event::{
 };
 
 mod clipboard;
+mod history;
 mod render;
 mod selection;
 mod wrap;
 
 use clipboard::{Clipboard, SystemClipboard};
+use history::{EditKind, Snapshot};
 
 /// Logical `(line, col)` position, char-indexed into `lines[line]` — the
 /// same convention as `cursor_line`/`cursor_col`. b1-t1.
@@ -93,6 +95,16 @@ pub struct TextEditor {
     /// System clipboard backend (real backend by default; a fake in tests
     /// via `set_clipboard`). Read by Ctrl+C/X/V (b2-t2). b2-t1.
     clipboard: Box<dyn Clipboard>,
+    /// Bounded undo stack of pre-edit snapshots, oldest-first; capped at
+    /// `history::UNDO_STACK_DEPTH`. b4-t1.
+    undo_stack: std::collections::VecDeque<Snapshot>,
+    /// Redo stack of undone snapshots, most-recently-undone-last; cleared on
+    /// any new edit. b4-t1.
+    redo_stack: Vec<Snapshot>,
+    /// Coalescing kind of the most recently recorded edit; `None` after a
+    /// caret move or a non-coalescing edit, so the next edit starts a new
+    /// undo step. b4-t1.
+    last_edit_kind: Option<EditKind>,
 }
 
 /// One display row produced by wrapping a logical line: `[start, end)` are
@@ -125,6 +137,9 @@ impl TextEditor {
             drag_anchor: None,
             scrollbar_drag: false,
             clipboard: Box::new(SystemClipboard::new()),
+            undo_stack: std::collections::VecDeque::new(),
+            redo_stack: Vec::new(),
+            last_edit_kind: None,
         }
     }
 
@@ -185,6 +200,33 @@ impl TextEditor {
     /// PageUp/PageDown scroll the viewport by one page without moving the
     /// caret or mutating the buffer.
     pub fn handle_key(&mut self, key: KeyEvent) -> EditorEvent {
+        let kind = Self::classify_key(&key);
+        let pre = kind.map(|_| self.snapshot());
+
+        let event = self.dispatch_key(key);
+
+        if let Some(kind) = kind {
+            if event == EditorEvent::Changed {
+                self.commit_edit(pre.expect("snapshot taken whenever kind is Some"), kind);
+            }
+        }
+        if matches!(
+            key.code,
+            KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::Home
+                | KeyCode::End
+        ) {
+            self.break_coalescing();
+        }
+        event
+    }
+
+    /// The original `handle_key` match body, unchanged — dispatched to from
+    /// `handle_key`'s snapshot/commit wrapper (b4-t1). b4-t1.
+    fn dispatch_key(&mut self, key: KeyEvent) -> EditorEvent {
         match key.code {
             KeyCode::Char(c)
                 if key.modifiers.contains(KeyModifiers::CONTROL)
@@ -209,6 +251,18 @@ impl TextEditor {
                             EditorEvent::None
                         }
                     }
+                }
+            }
+            KeyCode::Char(c)
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && matches!(c, 'z' | 'Z' | 'y' | 'Y') =>
+            {
+                let redo = matches!(c, 'y' | 'Y') || key.modifiers.contains(KeyModifiers::SHIFT);
+                let changed = if redo { self.redo() } else { self.undo() };
+                if changed {
+                    EditorEvent::Changed
+                } else {
+                    EditorEvent::None
                 }
             }
             KeyCode::Char(c) => {
@@ -448,6 +502,13 @@ impl TextEditor {
         let width = self.viewport_width.max(1);
         let rows = self.wrap_rows(width);
         let display_row = (self.scroll_offset + local_row).min(rows.len() - 1);
+        // A mouse caret move (click-to-place or drag-select) is a caret move
+        // and must start a new undo step, exactly like keyboard movement
+        // (which breaks coalescing in `handle_key`). Both mouse entry paths —
+        // click and drag-select — route through here, so breaking coalescing
+        // at this shared choke point makes every mouse caret-move inherit it
+        // by default rather than each caller opting in.
+        self.break_coalescing();
         self.set_from_display(&rows, display_row, local_col);
         true
     }
