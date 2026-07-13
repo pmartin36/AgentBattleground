@@ -300,17 +300,17 @@ impl SceneManager {
         Some(id)
     }
 
-    /// Route one key event. Returns `true` if the app should quit (`q` or
-    /// Ctrl-C). Digit-key ('1'-'9') scene switching is REMOVED here (b3-t1)
+    /// Route one key event. Returns `true` if the app should quit (Ctrl-C).
+    /// Digit-key ('1'-'9') scene switching is REMOVED here (b3-t1)
     /// — it moves to `game::app`'s own dispatch table (b3-t2). All other
     /// keys forward to the active scene via `handle_input`.
     pub fn route_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
         use crossterm::event::{KeyCode, KeyModifiers};
 
-        // Quit keys checked first; active scene is left unchanged.
-        if key.code == KeyCode::Char('q') {
-            return true;
-        }
+        // Quit on Ctrl-C only (raw mode delivers it as a key event, not
+        // SIGINT). A bare `q` is NOT a quit — it forwards to the active scene
+        // like any other char, so text fields (the prompt editor, @-mentions)
+        // can type it.
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return true;
         }
@@ -695,11 +695,20 @@ mod tests {
     // ------------------------------------------------------------------------ route_key
 
     #[test]
-    fn route_key_q_returns_quit_active_unchanged() {
-        let mut mgr = SceneManager::new(SceneKey::new("A"), Box::new(MockCatalog));
-        let quit = mgr.route_key(key('q', KeyModifiers::NONE));
-        assert!(quit, "route_key('q') must return true (quit signal)");
-        assert_eq!(mgr.active_id(), SceneKey::new("A"));
+    fn route_key_q_is_forwarded_not_quit() {
+        // A bare `q` must NOT quit (that made typing `q` in text fields
+        // impossible); it forwards to the active scene like any other char.
+        let scene = crate::test_support::MockScene::new(SceneKey::new("A"));
+        let rec = scene.recorder();
+        let mut mgr = SceneManager::with_scene(Box::new(scene), Box::new(MockCatalog));
+        let ke = key('q', KeyModifiers::NONE);
+        let quit = mgr.route_key(ke);
+        assert!(!quit, "bare 'q' must NOT be a quit signal");
+        assert_eq!(
+            rec.lock().unwrap().last_key,
+            Some(ke),
+            "'q' must forward to the active scene"
+        );
     }
 
     #[test]

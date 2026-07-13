@@ -127,7 +127,7 @@ pub fn run_with_params(
         //    across multiple frames, each event only advancing 33ms of
         //    apparent lag per frame; the debug command channel above already
         //    drains fully with `while let Ok(..) = try_recv()`, this matches
-        //    that pattern. Every key (q / Ctrl-C / gameplay input, including
+        //    that pattern. Every key (Ctrl-C / gameplay input, including
         //    digits) is handled by route_key.
         let mut should_quit = false;
         while event::poll(Duration::ZERO)? {
@@ -150,7 +150,7 @@ pub fn run_with_params(
             break;
         }
 
-        // 2b. A scene may itself request the same exit `q`/Ctrl-C produce
+        // 2b. A scene may itself request the same exit Ctrl-C produces
         //     (b4-t1), reachable from inside `handle_input` on either the
         //     keyboard or mouse path above.
         if mgr.active_quit_requested() {
