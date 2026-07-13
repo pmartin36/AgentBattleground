@@ -46,6 +46,7 @@ The token is readable `@`-prefixed text stored verbatim in the Markdown. Categor
 2. **Qualified targets** — `@<target>:<selector>` (one token). **`@self` takes only a status** (self is a single creature, so `most-hp`/`least-hp`/`highest-damage` are meaningless for it); **`@ally`/`@enemy` take any selector** (they pick one out of a group). Selectors (v1, hyphenated):
    - `most-hp`, `least-hp` — **ally/enemy only**
    - `highest-damage` (highest attack damage) — **ally/enemy only**
+   - `any-status` — a catch-all matching a target afflicted with ANY status effect — **ally/enemy only**
    - a **status** from `55`: `burn`, `frozen`, `shocked`, `rooted` — **any target**, e.g. `@self:frozen` ("am I frozen"), `@enemy:frozen` ("an enemy that is frozen").
 3. **Own abilities** — the current creature's abilities by name: `@Douse`, `@Kick`.
 4. **Specific creatures** — a roster creature by name (spaces→underscores, matching the instructions filename convention): `@Ember_Wolf`.
@@ -55,7 +56,7 @@ Grammar summary (what `10` will parse; defined here so authoring emits it consis
 mention   := "@" ( "self" (":" status)?
                  | ("ally" | "enemy") (":" selector)?
                  | name )
-selector  := "most-hp" | "least-hp" | "highest-damage" | status
+selector  := "most-hp" | "least-hp" | "highest-damage" | "any-status" | status
 status    := "burn" | "frozen" | "shocked" | "rooted"
 name      := an ability name (own) or a creature name (roster), underscored
 ```

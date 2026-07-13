@@ -18,6 +18,10 @@ const STATUSES: [StatusKind; 4] =
 /// Ranking selectors valid for `ally`/`enemy` targets only (not `self`).
 const RANKING_SELECTORS: [&str; 3] = ["most-hp", "least-hp", "highest-damage"];
 
+/// Catch-all selector for `ally`/`enemy` (not `self`): matches a target
+/// afflicted with ANY status effect, as opposed to a specific one.
+const ANY_STATUS_SELECTOR: &str = "any-status";
+
 /// Target keywords, in emit order.
 const TARGETS: [&str; 3] = ["self", "ally", "enemy"];
 
@@ -108,6 +112,14 @@ impl GameMentionProvider {
                     });
                 }
             }
+            if matches(ANY_STATUS_SELECTOR, sel_query) {
+                out.push(MentionCandidate {
+                    display: ANY_STATUS_SELECTOR.to_string(),
+                    insert_text: format!("@{}:{}", target, ANY_STATUS_SELECTOR),
+                    category: "selector",
+                    continues: false,
+                });
+            }
         }
 
         for status in STATUSES {
@@ -156,9 +168,10 @@ fn is_status(s: &str) -> bool {
     STATUSES.iter().any(|k| k.label().to_ascii_lowercase() == s)
 }
 
-/// `s` is a valid `ally`/`enemy` selector: a ranking selector or a status.
+/// `s` is a valid `ally`/`enemy` selector: a ranking selector, the
+/// `any-status` catch-all, or a specific status.
 fn is_selector(s: &str) -> bool {
-    RANKING_SELECTORS.contains(&s) || is_status(s)
+    s == ANY_STATUS_SELECTOR || RANKING_SELECTORS.contains(&s) || is_status(s)
 }
 
 /// `s` is a valid underscored ability/creature name: non-empty, no
@@ -211,6 +224,7 @@ mod tests {
         assert!(!texts.iter().any(|t| t.contains("most-hp")));
         assert!(!texts.iter().any(|t| t.contains("least-hp")));
         assert!(!texts.iter().any(|t| t.contains("highest-damage")));
+        assert!(!texts.iter().any(|t| t.contains("any-status")));
     }
 
     #[test]
@@ -218,14 +232,32 @@ mod tests {
         let p = provider();
         let cands = p.candidates("enemy:");
         let texts = insert_texts(&cands);
-        assert_eq!(texts.len(), 7);
+        assert_eq!(texts.len(), 8);
         assert!(texts.contains(&"@enemy:most-hp"));
         assert!(texts.contains(&"@enemy:least-hp"));
         assert!(texts.contains(&"@enemy:highest-damage"));
+        assert!(texts.contains(&"@enemy:any-status"));
         assert!(texts.contains(&"@enemy:burn"));
         assert!(texts.contains(&"@enemy:frozen"));
         assert!(texts.contains(&"@enemy:shocked"));
         assert!(texts.contains(&"@enemy:rooted"));
+    }
+
+    #[test]
+    fn any_status_selector_offered_for_ally_enemy_not_self() {
+        let p = provider();
+        assert!(insert_texts(&p.candidates("enemy:")).contains(&"@enemy:any-status"));
+        assert!(insert_texts(&p.candidates("ally:")).contains(&"@ally:any-status"));
+        assert!(
+            !insert_texts(&p.candidates("self:")).iter().any(|t| t.contains("any-status")),
+            "self takes no any-status (or any ranking) selector"
+        );
+        // typing the prefix surfaces it
+        assert!(insert_texts(&p.candidates("enemy:any")).contains(&"@enemy:any-status"));
+        // grammar validity
+        assert!(is_valid_mention("@enemy:any-status"));
+        assert!(is_valid_mention("@ally:any-status"));
+        assert!(!is_valid_mention("@self:any-status"));
     }
 
     #[test]
