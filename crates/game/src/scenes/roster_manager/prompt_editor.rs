@@ -104,7 +104,17 @@ pub(super) struct PromptEditor {
 }
 
 impl PromptEditor {
-    pub(super) fn new(creature_index: usize, name: &str, base: Option<&Path>) -> Self {
+    /// `roster` (b3-t1): the scene's roster (e.g. `RosterManager::creatures`),
+    /// used to build the instructions editor's `@`-mention vocabulary via
+    /// `GameMentionProvider`. `roster.get(creature_index)` guards out-of-range
+    /// indices so an empty/mismatched roster leaves mentions off rather than
+    /// panicking.
+    pub(super) fn new(
+        creature_index: usize,
+        name: &str,
+        base: Option<&Path>,
+        roster: &[crate::creatures::Creature],
+    ) -> Self {
         let seed = crate::instructions::read_instructions_maybe(base, name).unwrap_or_default();
 
         let mut instructions = TextEditor::new(TextEditorConfig {
@@ -113,6 +123,10 @@ impl PromptEditor {
             placeholder: String::new(),
         });
         instructions.set_text(&seed);
+        if let Some(creature) = roster.get(creature_index) {
+            let provider = crate::mention::GameMentionProvider::new(creature, roster);
+            instructions.set_mention_provider(Box::new(provider), '@');
+        }
 
         let agent_input = TextEditor::new(TextEditorConfig {
             sizing: Sizing::Grow {
@@ -519,7 +533,7 @@ mod tests {
         crate::instructions::write_instructions_in(&base, name, "# known md")
             .expect("seed write should succeed");
 
-        let popup = PromptEditor::new(0, name, Some(&base));
+        let popup = PromptEditor::new(0, name, Some(&base), &[]);
 
         assert_eq!(popup.instructions_text(), "# known md");
 
@@ -531,7 +545,7 @@ mod tests {
         let base = temp_base_dir("seed-missing");
         let name = "Nonexistent Creature";
 
-        let popup = PromptEditor::new(0, name, Some(&base));
+        let popup = PromptEditor::new(0, name, Some(&base), &[]);
 
         assert_eq!(popup.instructions_text(), "");
 
@@ -693,7 +707,7 @@ mod tests {
     /// Testing Guidance line 66/67.
     #[test]
     fn popup_occludes_and_draws_border() {
-        let popup = PromptEditor::new(0, "Test Creature", None);
+        let popup = PromptEditor::new(0, "Test Creature", None, &[]);
         let (w, h) = (80u16, 30u16);
         let buf = render_popup(&popup, w, h);
         let (blanks, lit) = tally(&buf, w, h);
@@ -707,7 +721,7 @@ mod tests {
     fn file_path_visible() {
         let base = temp_base_dir("file-path-visible");
         let name = "Path Creature";
-        let popup = PromptEditor::new(0, name, Some(&base));
+        let popup = PromptEditor::new(0, name, Some(&base), &[]);
         let (w, h) = (80u16, 30u16);
         let buf = render_popup(&popup, w, h);
 
@@ -721,7 +735,7 @@ mod tests {
     /// An empty agent input must show its placeholder in its laid-out rect.
     #[test]
     fn agent_placeholder_renders() {
-        let popup = PromptEditor::new(0, "Test Creature", None);
+        let popup = PromptEditor::new(0, "Test Creature", None, &[]);
         let (w, h) = (80u16, 30u16);
         let buf = render_popup(&popup, w, h);
 
@@ -741,7 +755,7 @@ mod tests {
         let name = "Seeded Creature";
         crate::instructions::write_instructions_in(&base, name, "distinctseedword")
             .expect("seed write should succeed");
-        let popup = PromptEditor::new(0, name, Some(&base));
+        let popup = PromptEditor::new(0, name, Some(&base), &[]);
         let (w, h) = (80u16, 30u16);
         let buf = render_popup(&popup, w, h);
 
@@ -759,7 +773,7 @@ mod tests {
     /// `close` rect — b3-t1's hit-test reuses this rect, not a recompute.
     #[test]
     fn close_rect_matches_layout() {
-        let popup = PromptEditor::new(0, "Test Creature", None);
+        let popup = PromptEditor::new(0, "Test Creature", None, &[]);
         let (w, h) = (80u16, 30u16);
         let _ = render_popup(&popup, w, h);
 
@@ -784,7 +798,7 @@ mod tests {
     /// Testing Guidance line 64.
     #[test]
     fn agent_submit_clears_input_and_stays_open() {
-        let mut popup = PromptEditor::new(0, "Test Creature", None);
+        let mut popup = PromptEditor::new(0, "Test Creature", None, &[]);
         focus_agent_input(&mut popup);
 
         for c in ['h', 'i'] {
@@ -810,7 +824,7 @@ mod tests {
     /// 51 Testing Guidance line 64.
     #[test]
     fn agent_shift_enter_grows_desired_rows() {
-        let mut popup = PromptEditor::new(0, "Test Creature", None);
+        let mut popup = PromptEditor::new(0, "Test Creature", None, &[]);
         focus_agent_input(&mut popup);
 
         let area = Rect::new(0, 0, 80, 30);
@@ -828,7 +842,7 @@ mod tests {
     /// hit.
     #[test]
     fn agent_grow_caps_at_max_rows() {
-        let mut popup = PromptEditor::new(0, "Test Creature", None);
+        let mut popup = PromptEditor::new(0, "Test Creature", None, &[]);
         focus_agent_input(&mut popup);
 
         let area = Rect::new(0, 0, 80, 30);
@@ -839,5 +853,66 @@ mod tests {
 
         let rows = popup.agent_input.borrow().desired_rows(PromptEditor::interior_w_cells(area));
         assert_eq!(rows, AGENT_INPUT_MAX_ROWS, "agent input growth must clamp at the max-rows cap");
+    }
+
+    // ── b3-t1: @-mention wiring on the instructions editor ────────────────
+
+    use crate::ability::Ability;
+    use crate::creatures::Creature;
+
+    /// A 2-creature roster: index 0 (the edited creature) has a "Douse"
+    /// ability; index 1 is a plain roster-mate for `@Frost` resolution.
+    fn wired_roster() -> Vec<Creature> {
+        vec![
+            Creature::new("Ember Wolf").with_abilities(vec![Ability::new("Douse", vec![])]),
+            Creature::new("Frost Lizard"),
+        ]
+    }
+
+    /// Types each char of `s` into the popup's currently-focused editor.
+    fn type_str(popup: &mut PromptEditor, s: &str) {
+        for c in s.chars() {
+            let key = InputEvent::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            popup.handle_input(&key);
+        }
+    }
+
+    fn press_enter(popup: &mut PromptEditor) {
+        let key = InputEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        popup.handle_input(&key);
+    }
+
+    /// The deliverable: `@enemy` (accept, continues) -> `least-hp` (accept,
+    /// terminal) collapses to the single round-tripped token
+    /// `@enemy:least-hp`, proving the game `GameMentionProvider` is attached
+    /// to the instructions editor (default focus on open).
+    #[test]
+    fn instructions_at_mention_two_stage_yields_single_token() {
+        let roster = wired_roster();
+        let mut popup = PromptEditor::new(0, "Ember Wolf", None, &roster);
+
+        type_str(&mut popup, "@enemy");
+        press_enter(&mut popup);
+        type_str(&mut popup, "least-hp");
+        press_enter(&mut popup);
+
+        assert_eq!(popup.instructions_text(), "@enemy:least-hp");
+    }
+
+    /// The edited creature's own abilities and the roster's other creature
+    /// names are offered and accept to their underscored `insert_text`.
+    #[test]
+    fn instructions_at_mention_offers_own_abilities_and_roster_names() {
+        let roster = wired_roster();
+
+        let mut ability_popup = PromptEditor::new(0, "Ember Wolf", None, &roster);
+        type_str(&mut ability_popup, "@Douse");
+        press_enter(&mut ability_popup);
+        assert_eq!(ability_popup.instructions_text(), "@Douse");
+
+        let mut roster_popup = PromptEditor::new(0, "Ember Wolf", None, &roster);
+        type_str(&mut roster_popup, "@Frost");
+        press_enter(&mut roster_popup);
+        assert_eq!(roster_popup.instructions_text(), "@Frost_Lizard");
     }
 }

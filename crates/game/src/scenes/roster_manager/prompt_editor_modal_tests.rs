@@ -38,7 +38,7 @@ fn temp_base_dir(tag: &str) -> std::path::PathBuf {
 fn open_popup(scene: &mut RosterManager, base: Option<&Path>) {
     let idx = scene.current_index;
     let name = scene.creatures[idx].name().to_string();
-    scene.prompt_editor = Some(prompt_editor::PromptEditor::new(idx, &name, base));
+    scene.prompt_editor = Some(prompt_editor::PromptEditor::new(idx, &name, base, &scene.creatures));
 }
 
 fn four_abilities() -> Vec<Ability> {

@@ -100,7 +100,7 @@ fn modal_open_suppresses_tooltip_even_when_hovered() {
     let area = Rect::new(0, 0, w, h);
     scene.creatures[0] = Creature::new("Test").with_abilities(four_probe_abilities());
     scene.hovered_ability = Some(1);
-    scene.prompt_editor = Some(prompt_editor::PromptEditor::new(0, "Test", None));
+    scene.prompt_editor = Some(prompt_editor::PromptEditor::new(0, "Test", None, &[]));
 
     let buf = render_to_buffer(&scene, w, h);
     let card = card_cell_rect(area, 1);

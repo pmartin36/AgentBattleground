@@ -494,6 +494,7 @@ impl Scene for RosterManager {
                         self.current_index,
                         &name,
                         base.as_deref(),
+                        &self.creatures,
                     ));
                 }
             }
