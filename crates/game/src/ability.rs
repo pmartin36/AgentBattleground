@@ -167,7 +167,7 @@ impl Ability {
 pub enum Element {
     Normal,
     Fire,
-    Water,
+    Ice,
     Earth,
     Lightning,
 }
@@ -177,7 +177,7 @@ impl Element {
         match self {
             Element::Normal => "Normal",
             Element::Fire => "Fire",
-            Element::Water => "Water",
+            Element::Ice => "Ice",
             Element::Earth => "Earth",
             Element::Lightning => "Lightning",
         }
@@ -330,6 +330,7 @@ mod tests {
     #[test]
     fn element_label_returns_display_string() {
         assert_eq!(Element::Fire.label(), "Fire");
+        assert_eq!(Element::Ice.label(), "Ice");
     }
 
     #[test]

@@ -10,7 +10,7 @@ use engine_core::color::Rgba;
 pub(super) fn element_color(element: Element) -> Rgba {
     match element {
         Element::Fire => Rgba::rgb(0xff, 0x8c, 0x00),
-        Element::Water => Rgba::rgb(0x1e, 0x90, 0xff),
+        Element::Ice => Rgba::rgb(0x7d, 0xd8, 0xff),
         Element::Earth => Rgba::rgb(0x2e, 0x8b, 0x57),
         Element::Lightning => Rgba::rgb(0xff, 0xd7, 0x00),
         Element::Normal => Rgba::rgb(0x9e, 0x9e, 0x9e),
@@ -44,8 +44,8 @@ mod tests {
     }
 
     #[test]
-    fn element_color_maps_water_to_blue() {
-        assert_eq!(element_color(Element::Water), Rgba::rgb(0x1e, 0x90, 0xff));
+    fn element_color_maps_ice_to_ice_blue() {
+        assert_eq!(element_color(Element::Ice), Rgba::rgb(0x7d, 0xd8, 0xff));
     }
 
     #[test]

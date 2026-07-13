@@ -245,7 +245,7 @@ pub fn demo_roster() -> Vec<Creature> {
             vec![
                 Ability::new("Frost Bite", vec![])
                     .with_ability_type(AbilityType::Attack)
-                    .with_element(Element::Water)
+                    .with_element(Element::Ice)
                     .with_class(DamageClass::Magic)
                     .with_cost(2)
                     .with_damage(18)
