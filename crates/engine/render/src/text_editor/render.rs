@@ -8,10 +8,15 @@ use ratatui::style::{Color, Modifier, Style};
 
 use crate::dots::{Dot, DotBuffer};
 
-use super::TextEditor;
+use super::{TextEditor, WrapRow};
 
 /// Dim ink color for the scrollbar thumb (see `draw_scrollbar`).
 const SCROLLBAR_COLOR: Rgba = Rgba::rgb(0x5a, 0x5a, 0x5a);
+
+/// Background tint for the selection highlight (b1-t5). A muted blue tint,
+/// not `Modifier::REVERSED` — REVERSED is reserved for the caret so the two
+/// stay visually distinguishable where they overlap.
+pub(super) const SELECTION_BG: Color = Color::Rgb(0x2f, 0x4f, 0x6f);
 
 impl TextEditor {
     /// Total wrapped display rows at the current cached viewport width.
@@ -96,6 +101,8 @@ impl TextEditor {
             buf.set_stringn(rect.x, y, &s, width, text_style);
         }
 
+        self.draw_selection(buf, rect, &rows);
+
         if self.caret_visible() {
             let (crow, ccol) = self.cursor_display_pos(width);
             if crow >= self.scroll_offset && crow < self.scroll_offset + height {
@@ -110,6 +117,46 @@ impl TextEditor {
         }
 
         self.draw_scrollbar(buf, rect);
+    }
+
+    /// Paint the selection highlight (a background tint, not `REVERSED`) on
+    /// every visible display cell whose logical column falls within the
+    /// normalized `selection_span()`. `rows` is the caller's already-wrapped
+    /// row vector (no re-wrap); iterates the same
+    /// `scroll_offset..scroll_offset+height` window as the text loop so
+    /// highlighted cells line up with the drawn glyphs. A no-op when there is
+    /// no active selection.
+    fn draw_selection(&self, buf: &mut Buffer, rect: Rect, rows: &[WrapRow]) {
+        let Some(((sl, sc), (el, ec))) = self.selection_span() else {
+            return;
+        };
+        let height = rect.height as usize;
+        let end = (self.scroll_offset + height).min(rows.len());
+        for (i, row) in rows[self.scroll_offset..end].iter().enumerate() {
+            if row.line < sl || row.line > el {
+                continue;
+            }
+            let y = rect.y + i as u16;
+            if y >= buf.area.bottom() {
+                continue;
+            }
+            let sel_start = if row.line == sl { sc } else { 0 };
+            let sel_end = if row.line == el { ec } else { self.lines[row.line].chars().count() };
+            let hl_start = sel_start.max(row.start);
+            let hl_end = sel_end.min(row.end);
+            if hl_start >= hl_end {
+                continue;
+            }
+            for col in hl_start..hl_end {
+                let x = rect.x + (col - row.start) as u16;
+                if x >= rect.right() {
+                    continue;
+                }
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_bg(SELECTION_BG);
+                }
+            }
+        }
     }
 
     /// Draw a vertical scrollbar THUMB in the right-most terminal cell column
@@ -144,5 +191,111 @@ impl TextEditor {
 
         let area = Rect::new(rect.right().saturating_sub(1), rect.y, 1, rect.height);
         crate::draw_dots(buf, area, &dotbuf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{Sizing, TextEditorConfig};
+    use super::*;
+
+    fn config() -> TextEditorConfig {
+        TextEditorConfig {
+            sizing: Sizing::Fixed,
+            submit_on_enter: false,
+            placeholder: String::new(),
+        }
+    }
+
+    fn make_buf(w: u16, h: u16) -> Buffer {
+        Buffer::empty(Rect::new(0, 0, w, h))
+    }
+
+    /// Assert `bg == SELECTION_BG` for every x in `highlighted`, and
+    /// `bg == Color::Reset` for every other x in `0..width`, on row `y`.
+    fn assert_row_highlight(buf: &Buffer, y: u16, width: u16, highlighted: &[u16]) {
+        for x in 0..width {
+            let bg = buf.cell((x, y)).unwrap().bg;
+            if highlighted.contains(&x) {
+                assert_eq!(bg, SELECTION_BG, "expected highlight at ({x},{y})");
+            } else {
+                assert_eq!(bg, Color::Reset, "expected no highlight at ({x},{y})");
+            }
+        }
+    }
+
+    #[test]
+    fn selection_highlights_exact_cells_on_one_row() {
+        let mut ed = TextEditor::new(config());
+        ed.set_text("abcdef");
+        ed.set_selection((0, 1), (0, 4));
+        let rect = Rect::new(0, 0, 10, 3);
+        let mut buf = make_buf(10, 3);
+
+        ed.render(&mut buf, rect);
+
+        assert_row_highlight(&buf, 0, 10, &[1, 2, 3]);
+    }
+
+    #[test]
+    fn selection_across_wrap_boundary_highlights_both_rows() {
+        let mut ed = TextEditor::new(config());
+        ed.set_text("abcdefgh"); // no spaces: wraps to "abcd" / "efgh" at width 4
+        ed.set_selection((0, 2), (0, 6));
+        let rect = Rect::new(0, 0, 4, 2);
+        let mut buf = make_buf(4, 2);
+
+        ed.render(&mut buf, rect);
+
+        assert_row_highlight(&buf, 0, 4, &[2, 3]);
+        assert_row_highlight(&buf, 1, 4, &[0, 1]);
+    }
+
+    #[test]
+    fn multiline_selection_highlights_tail_middle_head() {
+        let mut ed = TextEditor::new(config());
+        ed.set_text("abc\ndef\nghi");
+        ed.set_selection((0, 1), (2, 2));
+        let rect = Rect::new(0, 0, 5, 3);
+        let mut buf = make_buf(5, 3);
+
+        ed.render(&mut buf, rect);
+
+        assert_row_highlight(&buf, 0, 5, &[1, 2]); // tail of "abc"
+        assert_row_highlight(&buf, 1, 5, &[0, 1, 2]); // full middle line "def"
+        assert_row_highlight(&buf, 2, 5, &[0, 1]); // head of "ghi"
+    }
+
+    #[test]
+    fn no_selection_renders_no_highlight() {
+        let mut ed = TextEditor::new(config());
+        ed.set_text("abcdef");
+        let rect = Rect::new(0, 0, 10, 3);
+        let mut buf = make_buf(10, 3);
+
+        ed.render(&mut buf, rect);
+
+        for y in 0..3 {
+            assert_row_highlight(&buf, y, 10, &[]);
+        }
+    }
+
+    #[test]
+    fn active_end_caret_keeps_reversed_over_highlight() {
+        let mut ed = TextEditor::new(config());
+        ed.set_text("abcdef");
+        // Reverse selection so the caret (active end) sits at the span
+        // start, inside the highlighted range.
+        ed.set_selection((0, 4), (0, 1));
+        ed.cursor_line = 0;
+        ed.cursor_col = 1;
+        let rect = Rect::new(0, 0, 10, 3);
+        let mut buf = make_buf(10, 3);
+
+        ed.render(&mut buf, rect);
+
+        let caret = buf.cell((1, 0)).unwrap();
+        assert!(caret.modifier.contains(Modifier::REVERSED), "caret must stay REVERSED over the highlight");
+        assert_eq!(caret.bg, SELECTION_BG, "caret cell must still carry the highlight bg underneath");
     }
 }

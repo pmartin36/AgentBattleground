@@ -8,7 +8,12 @@ use ratatui::crossterm::event::{
 };
 
 mod render;
+mod selection;
 mod wrap;
+
+/// Logical `(line, col)` position, char-indexed into `lines[line]` — the
+/// same convention as `cursor_line`/`cursor_col`. b1-t1.
+type Pos = (usize, usize);
 
 /// Display rows scrolled per mouse wheel notch (one `ScrollUp`/`ScrollDown`
 /// event = one notch, crossterm's model).
@@ -69,6 +74,13 @@ pub struct TextEditor {
     /// Whether this editor currently has input focus. An unfocused editor
     /// never draws a caret regardless of blink phase.
     focused: bool,
+    /// Active selection as `(anchor, caret)`, both logical char-indexed
+    /// `(line, col)` positions; `None` = no selection. b1-t1.
+    selection: Option<(Pos, Pos)>,
+    /// Anchor cell of an in-progress text-selection mouse drag; `Some` from
+    /// `Down(Left)` (in-rect) through the matching `Up(Left)`, `None`
+    /// otherwise. b1-t3. Distinct from any future scrollbar drag state.
+    drag_anchor: Option<Pos>,
 }
 
 /// One display row produced by wrapping a logical line: `[start, end)` are
@@ -97,6 +109,8 @@ impl TextEditor {
             viewport_y: 0,
             blink_accum: Duration::ZERO,
             focused: true,
+            selection: None,
+            drag_anchor: None,
         }
     }
 
@@ -152,6 +166,7 @@ impl TextEditor {
     pub fn handle_key(&mut self, key: KeyEvent) -> EditorEvent {
         match key.code {
             KeyCode::Char(c) => {
+                self.delete_selection();
                 self.insert_char(c);
                 EditorEvent::Changed
             }
@@ -159,19 +174,20 @@ impl TextEditor {
                 if self.config.submit_on_enter && !key.modifiers.contains(KeyModifiers::SHIFT) {
                     EditorEvent::Submit
                 } else {
+                    self.delete_selection();
                     self.insert_newline();
                     EditorEvent::Changed
                 }
             }
             KeyCode::Backspace => {
-                if self.backspace() {
+                if self.delete_selection() || self.backspace() {
                     EditorEvent::Changed
                 } else {
                     EditorEvent::None
                 }
             }
             KeyCode::Delete => {
-                if self.delete() {
+                if self.delete_selection() || self.delete() {
                     EditorEvent::Changed
                 } else {
                     EditorEvent::None
@@ -183,7 +199,8 @@ impl TextEditor {
             | KeyCode::Down
             | KeyCode::Home
             | KeyCode::End => {
-                self.move_cursor(key.code);
+                let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+                self.move_and_update_selection(key.code, shift);
                 EditorEvent::None
             }
             KeyCode::PageUp => {
@@ -304,35 +321,68 @@ impl TextEditor {
 
     /// Feed a mouse event into the editor: wheel up/down scrolls the
     /// viewport (see `scroll_by`); a left click inside the cached content
-    /// rect places the caret at the clicked cell (via `wrap_rows` +
-    /// `set_from_display`) and resets the blink to visible. Returns `true`
-    /// iff the event was handled (scroll actually moved `scroll_offset`, or
-    /// an in-rect click placed the caret); `false` for a clamped scroll
-    /// no-op, an out-of-rect click, or any other event.
+    /// rect places the caret at the clicked cell (via `place_caret_at_cell`)
+    /// and begins a text-selection drag (b1-t3); `Drag(Left)` extends the
+    /// selection while a drag is active; `Up(Left)` ends it. Returns `true`
+    /// iff the event was handled (scroll actually moved `scroll_offset`, an
+    /// in-rect click placed the caret, an active drag was extended, or an
+    /// active drag was ended); `false` for a clamped scroll no-op, an
+    /// out-of-rect click, a `Drag`/`Up` with no active drag, or any other
+    /// event.
     pub fn handle_mouse(&mut self, ev: &MouseEvent) -> bool {
         match ev.kind {
             MouseEventKind::ScrollDown => self.scroll_by(WHEEL_SCROLL_ROWS as isize),
             MouseEventKind::ScrollUp => self.scroll_by(-(WHEEL_SCROLL_ROWS as isize)),
             MouseEventKind::Down(MouseButton::Left) => {
-                // Out-of-content-rect guard (also catches above/left via u16
-                // underflow avoidance).
-                if ev.column < self.viewport_x || ev.row < self.viewport_y {
-                    return false;
+                if self.place_caret_at_cell(ev.column, ev.row, false) {
+                    self.reset_blink();
+                    self.begin_drag_selection();
+                    true
+                } else {
+                    false
                 }
-                let local_col = (ev.column - self.viewport_x) as usize;
-                let local_row = (ev.row - self.viewport_y) as usize;
-                if local_col >= self.viewport_width || local_row >= self.viewport_height {
-                    return false;
-                }
-                let width = self.viewport_width.max(1);
-                let rows = self.wrap_rows(width);
-                let display_row = (self.scroll_offset + local_row).min(rows.len() - 1);
-                self.set_from_display(&rows, display_row, local_col);
-                self.reset_blink();
-                true
             }
+            MouseEventKind::Drag(MouseButton::Left) => self.drag_selection(ev.column, ev.row),
+            MouseEventKind::Up(MouseButton::Left) => self.end_drag_selection(),
             _ => false,
         }
+    }
+
+    /// Map a mouse cell to a logical caret position and place the caret
+    /// there (via `wrap_rows` + `set_from_display`), reused by both click
+    /// (`clamp == false`) and drag (`clamp == true`).
+    ///
+    /// `clamp == false` (click): out-of-content-rect returns `false` without
+    /// moving the caret (existing click-outside behavior). `clamp == true`
+    /// (drag): the cell is clamped into the content rect first, so the
+    /// caret always lands somewhere in-bounds and this always returns
+    /// `true`.
+    fn place_caret_at_cell(&mut self, column: u16, row: u16, clamp: bool) -> bool {
+        let (column, row) = if clamp {
+            let max_x = self.viewport_x + self.viewport_width.saturating_sub(1) as u16;
+            let max_y = self.viewport_y + self.viewport_height.saturating_sub(1) as u16;
+            (
+                column.clamp(self.viewport_x, max_x.max(self.viewport_x)),
+                row.clamp(self.viewport_y, max_y.max(self.viewport_y)),
+            )
+        } else {
+            // Out-of-content-rect guard (also catches above/left via u16
+            // underflow avoidance).
+            if column < self.viewport_x || row < self.viewport_y {
+                return false;
+            }
+            (column, row)
+        };
+        let local_col = (column - self.viewport_x) as usize;
+        let local_row = (row - self.viewport_y) as usize;
+        if !clamp && (local_col >= self.viewport_width || local_row >= self.viewport_height) {
+            return false;
+        }
+        let width = self.viewport_width.max(1);
+        let rows = self.wrap_rows(width);
+        let display_row = (self.scroll_offset + local_row).min(rows.len() - 1);
+        self.set_from_display(&rows, display_row, local_col);
+        true
     }
 
     /// Rows the caller should allot at `width_cells`. Grow: wrapped
