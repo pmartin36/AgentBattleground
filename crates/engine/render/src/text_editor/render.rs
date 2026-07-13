@@ -170,18 +170,10 @@ impl TextEditor {
         if rect.width == 0 || rect.height == 0 {
             return;
         }
-        let total = self.total_display_rows();
-        let view = rect.height as usize;
-        if total <= view {
+        let Some((thumb_top, thumb_dots, track_dots)) = self.scrollbar_thumb(rect.height as usize)
+        else {
             return;
-        }
-        let track_dots = view * 4;
-        let max_scroll = self.max_scroll_offset();
-        let thumb_dots = ((view * track_dots) / total).clamp(4, track_dots);
-        let max_top = track_dots - thumb_dots;
-        // `max_scroll` is `total - view`, which is > 0 here: the `total <=
-        // view` early-return above already ruled out the fits-viewport case.
-        let thumb_top = self.scroll_offset * max_top / max_scroll;
+        };
 
         let mut dotbuf = DotBuffer::new(2, track_dots);
         for row in thumb_top..(thumb_top + thumb_dots) {
@@ -191,6 +183,79 @@ impl TextEditor {
 
         let area = Rect::new(rect.right().saturating_sub(1), rect.y, 1, rect.height);
         crate::draw_dots(buf, area, &dotbuf);
+    }
+
+    /// Scrollbar thumb geometry at viewport height `view`, in dot units:
+    /// `(thumb_top_dots, thumb_dots, track_dots)`. `None` when content fits
+    /// (`total_display_rows() <= view`) — the single source of truth shared
+    /// by [`Self::draw_scrollbar`] and the mouse hit-test/drag math (b3-t1),
+    /// so the interactive thumb always agrees with what's rendered.
+    pub(super) fn scrollbar_thumb(&self, view: usize) -> Option<(usize, usize, usize)> {
+        let total = self.total_display_rows();
+        if view == 0 || total <= view {
+            return None;
+        }
+        let track_dots = view * 4;
+        let max_scroll = self.max_scroll_offset();
+        let thumb_dots = ((view * track_dots) / total).clamp(4, track_dots);
+        let max_top = track_dots - thumb_dots;
+        // `max_scroll` is `total - view`, which is > 0 here: the `total <=
+        // view` early-return above already ruled out the fits-viewport case.
+        let thumb_top = self.scroll_offset * max_top / max_scroll;
+        Some((thumb_top, thumb_dots, track_dots))
+    }
+
+    /// The terminal cell column the scrollbar thumb/track occupies: the
+    /// right-most column of the cached content viewport. b3-t1.
+    pub(super) fn scrollbar_col(&self) -> u16 {
+        self.viewport_x + self.viewport_width.saturating_sub(1) as u16
+    }
+
+    /// `true` iff `(column, row)` is inside the scrollbar's cell column AND
+    /// content currently overflows (`max_scroll_offset() > 0`) — mirrors
+    /// `draw_scrollbar`'s early-return so a click in the last column is only
+    /// ever routed to the scrollbar when a thumb is actually drawn there.
+    /// b3-t1.
+    pub(super) fn scrollbar_hit(&self, column: u16, row: u16) -> bool {
+        self.max_scroll_offset() > 0
+            && column == self.scrollbar_col()
+            && row >= self.viewport_y
+            && row < self.viewport_y + self.viewport_height as u16
+    }
+
+    /// Begin a scrollbar drag at the `Down(Left)` cell `row`: sets
+    /// `scrollbar_drag = true`, then pages the viewport if the press landed
+    /// above/below the thumb (track paging), or does nothing if it landed on
+    /// the thumb itself. Never touches the caret. b3-t1.
+    pub(super) fn begin_scrollbar_drag(&mut self, row: u16) {
+        self.scrollbar_drag = true;
+        let Some((thumb_top_dots, thumb_dots, _track_dots)) =
+            self.scrollbar_thumb(self.viewport_height)
+        else {
+            return;
+        };
+        let top_cell = thumb_top_dots / 4;
+        let bot_cell = (thumb_top_dots + thumb_dots - 1) / 4;
+        let local_y = row.saturating_sub(self.viewport_y) as usize;
+        if local_y < top_cell {
+            self.scroll_by(-(self.viewport_height as isize));
+        } else if local_y > bot_cell {
+            self.scroll_by(self.viewport_height as isize);
+        }
+    }
+
+    /// Map an in-progress scrollbar drag's cell `row` to `scroll_offset`,
+    /// proportionally over the track: top row -> 0, bottom row ->
+    /// `max_scroll_offset()`, interior row -> floor(local_y *
+    /// max_scroll_offset() / (view-1)). Clamps `row` into the track first.
+    /// No caret/buffer mutation. b3-t1.
+    pub(super) fn scrollbar_drag_to(&mut self, row: u16) {
+        let view = self.viewport_height.max(1);
+        let local_y = (row.max(self.viewport_y) - self.viewport_y) as usize;
+        let local_y = local_y.min(view - 1);
+        let denom = view.saturating_sub(1).max(1);
+        let max = self.max_scroll_offset();
+        self.scroll_offset = ((local_y * max) / denom).min(max);
     }
 }
 
@@ -297,5 +362,85 @@ mod tests {
         let caret = buf.cell((1, 0)).unwrap();
         assert!(caret.modifier.contains(Modifier::REVERSED), "caret must stay REVERSED over the highlight");
         assert_eq!(caret.bg, SELECTION_BG, "caret cell must still carry the highlight bg underneath");
+    }
+
+    // --- b3-t1: draggable scrollbar thumb + track paging ---
+
+    use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    fn mouse_at(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent { kind, column, row, modifiers: KeyModifiers::empty() }
+    }
+
+    /// 6 single-char lines rendered at width 6, height 2 -> 6 display rows,
+    /// `max_scroll_offset() == 4`. No interior track cell (view-1 == 1); only
+    /// exercises the endpoints. Established via `render()` so viewport dims /
+    /// scrollbar geometry match exactly what `render()` itself computes.
+    fn overflowing_editor_and_rect() -> (TextEditor, Rect) {
+        let mut editor = TextEditor::new(config());
+        editor.set_text("a\nb\nc\nd\ne\nf");
+        let rect = Rect::new(0, 0, 6, 2);
+        let mut buf = make_buf(rect.width, rect.height);
+        editor.render(&mut buf, rect);
+        (editor, rect)
+    }
+
+    /// 8 single-char lines @ height 4 -> 8 display rows, `max_scroll_offset()
+    /// == 4`, view-1 == 3: has an interior track cell for the mid-track case.
+    fn overflowing_editor_and_rect_tall() -> (TextEditor, Rect) {
+        let mut editor = TextEditor::new(config());
+        editor.set_text("a\nb\nc\nd\ne\nf\ng\nh");
+        let rect = Rect::new(0, 0, 6, 4);
+        let mut buf = make_buf(rect.width, rect.height);
+        editor.render(&mut buf, rect);
+        (editor, rect)
+    }
+
+    #[test]
+    fn scrollbar_drag_to_bottom_and_back_to_top_hits_the_endpoints() {
+        let (mut editor, rect) = overflowing_editor_and_rect();
+        let max = editor.max_scroll_offset();
+        let col = rect.right() - 1;
+
+        editor.handle_mouse(&mouse_at(MouseEventKind::Down(MouseButton::Left), col, rect.y));
+        editor.handle_mouse(&mouse_at(
+            MouseEventKind::Drag(MouseButton::Left),
+            col,
+            rect.y + rect.height - 1,
+        ));
+        assert_eq!(editor.scroll_offset, max, "drag to track bottom must hit max_scroll_offset()");
+
+        editor.handle_mouse(&mouse_at(MouseEventKind::Drag(MouseButton::Left), col, rect.y));
+        assert_eq!(editor.scroll_offset, 0, "drag back to track top must hit 0");
+    }
+
+    #[test]
+    fn scrollbar_drag_interior_cell_maps_proportionally() {
+        let (mut editor, rect) = overflowing_editor_and_rect_tall();
+        let col = rect.right() - 1;
+
+        editor.handle_mouse(&mouse_at(MouseEventKind::Down(MouseButton::Left), col, rect.y));
+        editor.handle_mouse(&mouse_at(
+            MouseEventKind::Drag(MouseButton::Left),
+            col,
+            rect.y + 2, // local_y == 2, view - 1 == 3
+        ));
+
+        assert_eq!(editor.scroll_offset, 2, "floor(2 * max_scroll_offset(4) / (view-1)(3)) == 2");
+    }
+
+    #[test]
+    fn scrollbar_column_down_does_not_move_the_caret() {
+        let (mut editor, rect) = overflowing_editor_and_rect();
+        let col = rect.right() - 1;
+        let caret_before = (editor.cursor_line, editor.cursor_col);
+
+        editor.handle_mouse(&mouse_at(MouseEventKind::Down(MouseButton::Left), col, rect.y));
+
+        assert_eq!(
+            (editor.cursor_line, editor.cursor_col),
+            caret_before,
+            "a scrollbar-column press must never place the text caret"
+        );
     }
 }

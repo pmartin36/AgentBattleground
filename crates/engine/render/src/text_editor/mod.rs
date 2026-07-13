@@ -82,8 +82,14 @@ pub struct TextEditor {
     selection: Option<(Pos, Pos)>,
     /// Anchor cell of an in-progress text-selection mouse drag; `Some` from
     /// `Down(Left)` (in-rect) through the matching `Up(Left)`, `None`
-    /// otherwise. b1-t3. Distinct from any future scrollbar drag state.
+    /// otherwise. b1-t3. Distinct from `scrollbar_drag` (the scrollbar's
+    /// separate drag state).
     drag_anchor: Option<Pos>,
+    /// `true` while a scrollbar thumb/track drag is active: from a
+    /// `Down(Left)` on the scrollbar column through the matching `Up(Left)`.
+    /// b3-t1. Mutually exclusive with `drag_anchor` by dispatch order in
+    /// `handle_mouse`.
+    scrollbar_drag: bool,
     /// System clipboard backend (real backend by default; a fake in tests
     /// via `set_clipboard`). Read by Ctrl+C/X/V (b2-t2). b2-t1.
     clipboard: Box<dyn Clipboard>,
@@ -117,6 +123,7 @@ impl TextEditor {
             focused: true,
             selection: None,
             drag_anchor: None,
+            scrollbar_drag: false,
             clipboard: Box::new(SystemClipboard::new()),
         }
     }
@@ -359,21 +366,28 @@ impl TextEditor {
     }
 
     /// Feed a mouse event into the editor: wheel up/down scrolls the
-    /// viewport (see `scroll_by`); a left click inside the cached content
-    /// rect places the caret at the clicked cell (via `place_caret_at_cell`)
-    /// and begins a text-selection drag (b1-t3); `Drag(Left)` extends the
-    /// selection while a drag is active; `Up(Left)` ends it. Returns `true`
-    /// iff the event was handled (scroll actually moved `scroll_offset`, an
-    /// in-rect click placed the caret, an active drag was extended, or an
-    /// active drag was ended); `false` for a clamped scroll no-op, an
-    /// out-of-rect click, a `Drag`/`Up` with no active drag, or any other
-    /// event.
+    /// viewport (see `scroll_by`); a left click on the scrollbar column
+    /// (only when content overflows) begins a scrollbar drag (b3-t1) and
+    /// never places the caret; otherwise a left click inside the cached
+    /// content rect places the caret at the clicked cell (via
+    /// `place_caret_at_cell`) and begins a text-selection drag (b1-t3).
+    /// `Drag(Left)` maps to `scroll_offset` while a scrollbar drag is active,
+    /// else extends the text selection while a selection drag is active.
+    /// `Up(Left)` ends whichever drag is active. Returns `true` iff the event
+    /// was handled (scroll actually moved `scroll_offset`, a scrollbar drag
+    /// began/extended/ended, an in-rect click placed the caret, an active
+    /// selection drag was extended, or an active selection drag was ended);
+    /// `false` for a clamped scroll no-op, an out-of-rect click, a `Drag`/`Up`
+    /// with no active drag, or any other event.
     pub fn handle_mouse(&mut self, ev: &MouseEvent) -> bool {
         match ev.kind {
             MouseEventKind::ScrollDown => self.scroll_by(WHEEL_SCROLL_ROWS as isize),
             MouseEventKind::ScrollUp => self.scroll_by(-(WHEEL_SCROLL_ROWS as isize)),
             MouseEventKind::Down(MouseButton::Left) => {
-                if self.place_caret_at_cell(ev.column, ev.row, false) {
+                if self.scrollbar_hit(ev.column, ev.row) {
+                    self.begin_scrollbar_drag(ev.row);
+                    true
+                } else if self.place_caret_at_cell(ev.column, ev.row, false) {
                     self.reset_blink();
                     self.begin_drag_selection();
                     true
@@ -381,8 +395,22 @@ impl TextEditor {
                     false
                 }
             }
-            MouseEventKind::Drag(MouseButton::Left) => self.drag_selection(ev.column, ev.row),
-            MouseEventKind::Up(MouseButton::Left) => self.end_drag_selection(),
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if self.scrollbar_drag {
+                    self.scrollbar_drag_to(ev.row);
+                    true
+                } else {
+                    self.drag_selection(ev.column, ev.row)
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                if self.scrollbar_drag {
+                    self.scrollbar_drag = false;
+                    true
+                } else {
+                    self.end_drag_selection()
+                }
+            }
             _ => false,
         }
     }
