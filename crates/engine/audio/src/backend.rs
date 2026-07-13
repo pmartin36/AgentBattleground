@@ -1,7 +1,7 @@
 //! Kira-backed audio backend: `Backend` enum + graceful silent fallback +
 //! mixer tracks + `init()` (b3-t1). Volume/mute state + setters (b3-t2).
 
-use crate::{Bus, Fade, MusicOpts};
+use crate::{Bus, Fade, PlayOpts};
 use kira::sound::Region;
 use kira::sound::static_sound::StaticSoundHandle;
 use kira::track::{TrackBuilder, TrackHandle};
@@ -103,11 +103,6 @@ struct Active {
     manager: AudioManager,
     music: TrackHandle,
     sfx: TrackHandle,
-    /// The single currently-playing music track, if any. Owned here (not by
-    /// the `SoundHandle` returned from `play_music`) so `stop_music`/the next
-    /// `play_music` can fade/crossfade it -- `StaticSoundHandle` is
-    /// single-owner, not `Clone`.
-    current_music: Option<StaticSoundHandle>,
 }
 
 /// The lazy-init chokepoint every public API (b3-t2/t3) funnels through:
@@ -160,7 +155,7 @@ impl Backend {
         let mut manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default())?;
         let music = manager.add_sub_track(TrackBuilder::new())?;
         let sfx = manager.add_sub_track(TrackBuilder::new())?;
-        Ok(Active { manager, music, sfx, current_music: None })
+        Ok(Active { manager, music, sfx })
     }
 
     /// `Ok` -> `Active`; `Err` -> one `tracing::warn!` + `Silent`.
@@ -214,79 +209,80 @@ pub fn is_muted() -> bool {
     state().mixer.is_muted()
 }
 
-/// b3-t3 playback handle. `None` on `Silent` / a play error; every method is
-/// a safe no-op in that case.
-pub struct SoundHandle(Option<StaticSoundHandle>);
+/// Playback handle returned by [`play`]/[`play_oneshot`]. `inner` is `None` on
+/// `Silent` / a play error; the audio-side methods are safe no-ops then.
+/// `volume` is tracked on our side (kira exposes no volume getter) so
+/// [`get_volume`](Self::get_volume) works on any backend.
+pub struct SoundHandle {
+    inner: Option<StaticSoundHandle>,
+    volume: f32,
+}
 
 impl SoundHandle {
-    /// Stops this sound with the given fade. No-op when `None`.
+    /// Stops this sound with the given fade. No-op when silent.
     pub fn stop(&mut self, fade: Fade) {
-        if let Some(h) = &mut self.0 {
+        if let Some(h) = &mut self.inner {
             h.stop(tween(fade));
         }
     }
 
-    /// Sets this sound's volume with the given fade. No-op when `None`.
+    /// Sets this sound's volume (`0.0..=1.0`, clamped) with the given fade, and
+    /// records it as the new target for [`get_volume`](Self::get_volume). No-op
+    /// on the audio side when silent.
     pub fn set_volume(&mut self, amplitude: f32, fade: Fade) {
-        if let Some(h) = &mut self.0 {
+        let amplitude = amplitude.clamp(0.0, 1.0);
+        self.volume = amplitude;
+        if let Some(h) = &mut self.inner {
             h.set_volume(amplitude_to_db(amplitude), tween(fade));
         }
     }
+
+    /// The target amplitude (`0.0..=1.0`) last set via
+    /// [`set_volume`](Self::set_volume), or the volume this sound was played at.
+    /// NOT the instantaneous value during a fade -- kira exposes no live volume
+    /// getter, so this returns the value you asked for, tracked on our side.
+    pub fn get_volume(&self) -> f32 {
+        self.volume
+    }
 }
 
-/// Plays a one-shot on the SFX bus (concurrent -- kira auto-mixes). No-op
-/// (returns a no-op handle) on `Silent`; never panics. Lazily initializes
-/// the backend if called before `init()`.
-pub fn play_sfx(sound: &'static [u8]) -> SoundHandle {
+/// Plays `sound` per `opts` (bus, opt-in looping, fade-in, volume) and returns
+/// a [`SoundHandle`] the caller holds to control it (stop / fade / volume).
+/// Concurrent -- kira auto-mixes. No-op handle on `Silent`; never panics.
+/// Lazily initializes the backend if called before `init()`.
+pub fn play(sound: &'static [u8], opts: PlayOpts) -> SoundHandle {
+    let volume = opts.volume.clamp(0.0, 1.0);
     let mut s = state();
     if let Backend::Active(a) = &mut s.backend {
-        let data = crate::cache::sound_data(sound);
-        return match a.sfx.play(data) {
-            Ok(h) => SoundHandle(Some(h)),
-            Err(_) => SoundHandle(None),
+        let mut data = crate::cache::sound_data(sound)
+            .volume(amplitude_to_db(volume))
+            .fade_in_tween(Some(tween(opts.fade_in)));
+        if let Some(region) = loop_region(&opts) {
+            data = data.loop_region(region);
+        }
+        let track = match opts.bus {
+            Bus::Music => &mut a.music,
+            Bus::Sfx => &mut a.sfx,
+        };
+        return match track.play(data) {
+            Ok(h) => SoundHandle { inner: Some(h), volume },
+            Err(_) => SoundHandle { inner: None, volume },
         };
     }
-    SoundHandle(None)
+    SoundHandle { inner: None, volume }
 }
 
-/// Plays `sound` on the Music bus per `opts`, crossfading out any
-/// currently-playing music. No-op on `Silent`; never panics. Lazily
-/// initializes the backend if called before `init()`. The returned handle is
-/// a placeholder (`None`) -- the backend retains the live handle internally
-/// so `stop_music`/the next `play_music` can fade/crossfade it.
-pub fn play_music(sound: &'static [u8], opts: MusicOpts) -> SoundHandle {
-    let mut s = state();
-    if let Backend::Active(a) = &mut s.backend {
-        if let Some(mut old) = a.current_music.take() {
-            old.stop(tween(opts.fade_in));
-        }
-        let data = crate::cache::sound_data(sound)
-            .loop_region(music_loop_region(&opts))
-            .volume(amplitude_to_db(opts.volume))
-            .fade_in_tween(Some(tween(opts.fade_in)));
-        if let Ok(h) = a.music.play(data) {
-            a.current_music = Some(h);
-        }
-    }
-    SoundHandle(None)
+/// Plays a one-shot on the SFX bus (polyphonic, no loop, full volume) -- the
+/// 90% case. Equivalent to `play(sound, PlayOpts::default())`.
+pub fn play_oneshot(sound: &'static [u8]) -> SoundHandle {
+    play(sound, PlayOpts::default())
 }
 
-/// Fades the current music track to silence. No-op on `Silent` / when no
-/// music is playing; never panics.
-pub fn stop_music(fade: Fade) {
-    let mut s = state();
-    if let Backend::Active(a) = &mut s.backend {
-        if let Some(mut h) = a.current_music.take() {
-            h.stop(tween(fade));
-        }
-    }
-}
-
-/// Pure, device-free: `MusicOpts.loop_region` -> a kira `Region`. `None`
-/// loops the whole track (start at 0s); `Some(start..)` starts the loop at
-/// `start` seconds and runs to the end of the track.
-fn music_loop_region(opts: &MusicOpts) -> Region {
-    Region::from(opts.loop_region.clone().unwrap_or(0.0..))
+/// Pure, device-free: `PlayOpts.loop_region` -> an optional kira `Region`.
+/// `None` -> no loop (play once); `Some(start..)` -> loop from `start` seconds
+/// to the end of the track.
+fn loop_region(opts: &PlayOpts) -> Option<Region> {
+    opts.loop_region.clone().map(Region::from)
 }
 
 #[cfg(test)]
@@ -405,46 +401,66 @@ mod tests {
         Box::leak(buf.into_boxed_slice())
     }
 
-    /// Spec testing bullet (line 148), pure/device-free: `Some(3.5..)`
-    /// yields a loop region starting at 3.5 seconds.
+    /// Pure/device-free: `Some(3.5..)` yields a loop region starting at 3.5s.
     #[test]
-    fn music_loop_region_some_start_is_given_seconds() {
-        let opts = MusicOpts { loop_region: Some(3.5..), ..Default::default() };
-        let region = music_loop_region(&opts);
+    fn loop_region_some_start_is_given_seconds() {
+        let opts = PlayOpts { loop_region: Some(3.5..), ..Default::default() };
+        let region = loop_region(&opts).expect("Some(..) yields a loop region");
         assert_eq!(region.start, PlaybackPosition::Seconds(3.5));
     }
 
-    /// `None` loops the whole track -- starts at 0s.
+    /// `None` means no loop (play once) -- the opt-in-looping semantic.
     #[test]
-    fn music_loop_region_none_loops_whole_track_from_zero() {
-        let opts = MusicOpts { loop_region: None, ..Default::default() };
-        let region = music_loop_region(&opts);
-        assert_eq!(region.start, PlaybackPosition::Seconds(0.0));
+    fn loop_region_none_means_no_loop() {
+        let opts = PlayOpts { loop_region: None, ..Default::default() };
+        assert!(loop_region(&opts).is_none());
     }
 
-    /// Spec lines 144-145: `play_sfx` and the handle it returns must never
-    /// panic, on `Silent` or `Active`.
+    /// `play_oneshot` and the handle it returns must never panic, on `Silent`
+    /// or `Active`.
     #[test]
-    fn play_sfx_and_handle_do_not_panic() {
-        let mut handle = play_sfx(test_wav_bytes());
+    fn play_oneshot_and_handle_do_not_panic() {
+        let mut handle = play_oneshot(test_wav_bytes());
         handle.set_volume(0.5, Fade::ms(50));
         handle.stop(Fade::NONE);
     }
 
-    /// Spec lines 144-145: `play_music` / `stop_music` must never panic, on
-    /// `Silent` or `Active`, including the returned handle.
+    /// `play` with non-default opts (music bus, looping, fade, volume) and its
+    /// handle must never panic, on `Silent` or `Active`.
     #[test]
-    fn play_music_and_stop_music_do_not_panic() {
-        let mut handle = play_music(test_wav_bytes(), MusicOpts::default());
-        handle.set_volume(0.8, Fade::NONE);
-        stop_music(Fade::ms(100));
+    fn play_with_opts_and_handle_do_not_panic() {
+        let mut handle = play(
+            test_wav_bytes(),
+            PlayOpts { bus: Bus::Music, loop_region: Some(0.0..), fade_in: Fade::ms(20), volume: 0.8 },
+        );
+        handle.set_volume(0.4, Fade::NONE);
+        handle.stop(Fade::ms(100));
+    }
+
+    /// `get_volume` tracks the last-set target amplitude (clamped), independent
+    /// of backend -- so it round-trips even headless (`Silent`).
+    #[test]
+    fn get_volume_tracks_last_set_target() {
+        let mut h = play_oneshot(test_wav_bytes());
+        assert_eq!(h.get_volume(), 1.0);
+        h.set_volume(0.3, Fade::NONE);
+        assert_eq!(h.get_volume(), 0.3);
+        h.set_volume(1.5, Fade::NONE);
+        assert_eq!(h.get_volume(), 1.0);
+    }
+
+    /// The volume a sound is played at is reflected by `get_volume` at once.
+    #[test]
+    fn play_initial_volume_reflected_in_get_volume() {
+        let h = play(test_wav_bytes(), PlayOpts { volume: 0.5, ..Default::default() });
+        assert_eq!(h.get_volume(), 0.5);
     }
 
     /// Lazy-init chokepoint: calling playback before an explicit `init()`
     /// must not panic (mirrors `access_before_init_does_not_panic` above).
     #[test]
     fn playback_before_explicit_init_does_not_panic() {
-        let mut handle = play_sfx(test_wav_bytes());
+        let mut handle = play_oneshot(test_wav_bytes());
         handle.stop(Fade::NONE);
     }
 }

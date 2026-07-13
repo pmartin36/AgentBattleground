@@ -1,5 +1,5 @@
 > # ✅ DONE! — Completed 2026-07-13
-> Status: shipped to `main`. New `engine-audio` crate (kira `=0.12.1`, cpal/Symphonia): a process-global singleton mixer with Music/SFX buses under a master track, looping music with arbitrary loop points + crossfade, concurrent fire-and-forget SFX, master/bus volume + mute, linear fades, a pointer-keyed decode-once `StaticSoundData` cache mirroring `asset_cache.rs`, and a graceful silent fallback when no audio device is present. Full gate GREEN — `cargo build --workspace --all-targets && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings` all pass (engine-audio unit tests cover silent-backend no-panic, decode-cache single-decode delta, and the value-type shapes; 548 game-crate tests pass). Verified beyond the gate: the Main Hub menu-select SFX (`UI_CONFIRM` on cursor move / select, played via `play_sfx` in `handle_input` — which receives no `EngineCtx`, the case that motivated the global singleton) confirmed audible by the owner in the real app (`cargo run -p game`). Per owner decision no scene plays background music; the `play_music`/loop/crossfade API remains in engine-audio, exercised by the crate's own tests. Linux build requires the system `libasound2-dev` (ALSA dev headers); macOS/Windows need nothing at build or runtime. Deferred expressive features (pitch, filters, reverb/delay, spatial, random-SFX, streaming, sidechain/adaptive music) live in `needs-research/audio-v2`; the future persisted volume/mute control is owned by `09-settings-model-config`.
+> Status: shipped to `main`. New `engine-audio` crate (kira `=0.12.1`, cpal/Symphonia): a process-global singleton mixer with Music/SFX buses under a master track, looping music with arbitrary loop points + crossfade, concurrent fire-and-forget SFX, master/bus volume + mute, linear fades, a pointer-keyed decode-once `StaticSoundData` cache mirroring `asset_cache.rs`, and a graceful silent fallback when no audio device is present. Full gate GREEN — `cargo build --workspace --all-targets && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings` all pass (engine-audio unit tests cover silent-backend no-panic, decode-cache single-decode delta, and the value-type shapes; 548 game-crate tests pass). Verified beyond the gate: the Main Hub menu-select SFX (`UI_CONFIRM` on cursor move / select, played via `play_oneshot` in `handle_input` — which receives no `EngineCtx`, the case that motivated the global singleton) confirmed audible by the owner in the real app (`cargo run -p game`). The public playback surface is behavior-named — `play_oneshot(bytes)` (SFX one-shot) and `play(bytes, PlayOpts { bus, loop_region, fade_in, volume })` returning a `SoundHandle` (`stop`, `set_volume`, `get_volume`); looping is opt-in and works on any bus. Per owner decision no scene plays background music; the `play` looping/faded API remains in engine-audio, exercised by the crate's own tests. Linux build requires the system `libasound2-dev` (ALSA dev headers); macOS/Windows need nothing at build or runtime. Deferred expressive features (pitch, filters, reverb/delay, spatial, random-SFX, streaming, sidechain/adaptive music) live in `needs-research/audio-v2`; the future persisted volume/mute control is owned by `09-settings-model-config`.
 
 # Engine Audio API
 
@@ -13,10 +13,10 @@ This is squarely a cross-cutting mechanism per CLAUDE.md's engine/game boundary 
 - **Engine** (`crates/engine/audio/Cargo.toml`, workspace `Cargo.toml`): new `kira` dependency (default `cpal` backend); new workspace member `crates/engine/audio`.
 - **Game** (`crates/game/src/sounds.rs`, new): sound files as `&'static [u8]` `include_bytes!` consts — the audio parallel of `game::assets` art consts. The bytes const *is* the sound's identity; there is no handle/ID/enum type.
 - **Game** (`crates/game/src/main.rs`): calls `engine_audio::init()` once at startup (right after `engine_core::logging::init`), before the alternate screen is entered.
-- **Game** (`crates/game/src/scenes/main_hub.rs`): the audible proof, wired into the Main Hub — `UI_CONFIRM` plays on the SFX bus inside `MainHub::handle_input()` on cursor Up/Down and on Enter/Space select. `handle_input` receives no `EngineCtx`, which is exactly why the global-singleton access pattern (Decision 1) is required. This proves the pipeline end-to-end with audible output — not just a headless test. (`play_music` is part of the engine-audio API and is exercised by the crate's own tests; no scene currently plays background music.)
+- **Game** (`crates/game/src/scenes/main_hub.rs`): the audible proof, wired into the Main Hub — `UI_CONFIRM` plays on the SFX bus inside `MainHub::handle_input()` on cursor Up/Down and on Enter/Space select. `handle_input` receives no `EngineCtx`, which is exactly why the global-singleton access pattern (Decision 1) is required. This proves the pipeline end-to-end with audible output — not just a headless test. (`play` supports looping / any-bus / faded playback and is exercised by the crate's own tests; no scene currently plays background music.)
 
 Out of scope (deferred to `needs-research/audio-v2`, confirmed with the project owner):
-- **Real-time pitch/playback-rate bending** — kira supports it (`set_playback_rate`, tweenable), but it's a v2 expressive feature, not a mid-scope need. `SoundHandle` in v1 exposes only `stop` and `set_volume`.
+- **Real-time pitch/playback-rate bending** — kira supports it (`set_playback_rate`, tweenable), but it's a v2 expressive feature, not a mid-scope need. `SoundHandle` in v1 exposes `stop`, `set_volume`, and `get_volume`.
 - **Filters / EQ / reverb / delay / distortion / compressor** — all built into kira as per-track effects; v1 ships no effect chain on the buses.
 - **Spatial audio and stereo panning** — the battlefield could later position sound in space; not v1.
 - **Random-SFX variation helpers** (pitch/volume jitter, clip pools to avoid repetition) — a small game-side helper on top of the v1 API; deferred so v1 stays a clean primitive.
@@ -37,9 +37,8 @@ The subsystem is reached as **free functions over a `OnceLock` global**, the sam
 // crates/engine/audio/src/lib.rs — the entire v1 public surface
 pub fn init();                                              // call once at startup; idempotent; degrades silently
 
-pub fn play_sfx(sound: &'static [u8]) -> SoundHandle;       // fire-and-forget one-shot on the SFX bus
-pub fn play_music(sound: &'static [u8], opts: MusicOpts) -> SoundHandle; // looping, on the Music bus
-pub fn stop_music(fade: Fade);                             // fade the current music out
+pub fn play_oneshot(sound: &'static [u8]) -> SoundHandle;   // one-shot, SFX bus, full volume (the 90% case)
+pub fn play(sound: &'static [u8], opts: PlayOpts) -> SoundHandle; // any bus, opt-in loop, fade-in, volume
 
 pub fn set_master_volume(amplitude: f32, fade: Fade);      // 0.0..=1.0
 pub fn set_bus_volume(bus: Bus, amplitude: f32, fade: Fade);
@@ -56,7 +55,7 @@ Device init legitimately fails on headless CI, over SSH, or in a locked-down con
 static BACKEND: OnceLock<Mutex<Backend>> = OnceLock::new();
 
 enum Backend {
-    Active(Active),  // kira AudioManager + master/Music/Sfx TrackHandles + current-music handle + mute/volume state
+    Active(Active),  // kira AudioManager + master/Music/Sfx TrackHandles; mute/volume state lives on the mixer
     Silent,          // device init failed; every op is a no-op that logs once at WARN
 }
 ```
@@ -86,28 +85,31 @@ fn sound_data(bytes: &'static [u8]) -> StaticSoundData {
 Both SFX and music decode to `StaticSoundData`; firing the same SFX repeatedly clones a shared buffer (cheap). Formats: `.ogg`/`.wav`/`.flac`/`.mp3` decode out of the box via kira's default Symphonia features. Bundled first-party assets that fail to decode `panic` as an invariant (`.expect("bundled first-party sound must decode")`), matching how `asset_cache::decoded` treats bundled art.
 
 ### 4. Two buses under master; volume + mute in memory
-The mixer is a master track with two sub-tracks: **Music** and **SFX**. `play_sfx` routes to the SFX bus, `play_music` to the Music bus, so the game can duck all SFX or all music at once with a single `set_bus_volume`. Master/bus volume are `0.0..=1.0` amplitudes at the API surface (converted to kira `Decibels`/`Volume` internally). `set_muted(true)` drops the master to silence via a tween and remembers the pre-mute level, restored on `set_muted(false)`. All of this is in-memory runtime state on `Active`; persistence is `09-settings-model-config`'s job (Decision 8).
+The mixer is a master track with two sub-tracks: **Music** and **SFX**. `play_oneshot` routes to the SFX bus; `play` routes to whichever bus `PlayOpts.bus` names, so the game can duck all SFX or all music at once with a single `set_bus_volume`. Master/bus volume are `0.0..=1.0` amplitudes at the API surface (converted to kira `Decibels`/`Volume` internally). `set_muted(true)` drops the master to silence via a tween and remembers the pre-mute level, restored on `set_muted(false)`. All of this is in-memory runtime state on `Active`; persistence is `09-settings-model-config`'s job (Decision 8).
 
-### 5. Looping music with arbitrary loop points; one logical track at a time
-`play_music` plays a `StaticSoundData` on the Music bus with a loop region. `MusicOpts::loop_region: None` loops the whole track; `Some(3.5..)` plays an intro once then seamlessly loops the body — kira's `loop_region` headline feature. Starting new music while music is already playing **crossfades**: the outgoing track fades out over `fade_in` while the new one fades in, so scene transitions don't hard-cut the score. `stop_music(fade)` fades the current track to silence.
+### 5. `play` — sustained/controllable playback on any bus, opt-in looping
+`play(bytes, PlayOpts)` plays a `StaticSoundData` on `opts.bus` and returns a `SoundHandle` the caller holds to control it. Naming is by **behavior, not content role**: looping is opt-in via `loop_region` — `None` plays once, `Some(0.0..)` loops the whole track, `Some(3.5..)` plays an intro once then seamlessly loops the body from 3.5s (kira's `loop_region` headline feature). So a looping ambience or engine hum is just `play(.., PlayOpts { bus: Sfx, loop_region: Some(0.0..), .. })` — no "music" misnomer, and a musical sting is `play_oneshot`. There is no engine-owned "current track": stopping/fading is `handle.stop(fade)`, and replacing a background bed with a crossfade is a caller pattern (hold the old handle, fade it out as the new one fades in) — a thin convenience can be added if a scene ever needs it.
 
 ```rust
-pub struct MusicOpts {
-    pub loop_region: Option<Range<f64>>, // seconds; None = loop whole track
+pub struct PlayOpts {
+    pub bus: Bus,                            // Music or Sfx
+    pub loop_region: Option<RangeFrom<f64>>, // None = play once; Some(3.5..) = loop from 3.5s to end
     pub fade_in: Fade,
-    pub volume: f32,                     // 0.0..=1.0, relative to the Music bus
+    pub volume: f32,                         // 0.0..=1.0, relative to the bus
 }
+// Default = one-shot on Sfx at full volume (what play_oneshot uses)
 ```
 
-### 6. One-shot SFX: fire-and-forget, concurrent, auto-mixed
-`play_sfx(bytes)` plays a one-shot on the SFX bus and returns a `SoundHandle` the caller may ignore. Many may overlap; kira sums all live voices for us — we never hand-mix samples. The returned handle exposes only what mid scope needs:
+### 6. `play_oneshot` — the common case — and the `SoundHandle`
+`play_oneshot(bytes)` is sugar for `play(bytes, PlayOpts::default())`: a one-shot on the SFX bus at full volume, returning a `SoundHandle` the caller may ignore. Many may overlap; kira sums all live voices for us — we never hand-mix samples. The handle exposes only what mid scope needs — stop, set volume, and read the target volume back. kira has **no volume getter** (volume is write-only over a command channel to the audio thread), so `get_volume` returns the last amplitude set on our side (the target), not the instantaneous mid-fade value; it is tracked regardless of backend, so it round-trips even headless:
 
 ```rust
-pub struct SoundHandle { /* wraps the kira handle; no-op methods when Silent */ }
+pub struct SoundHandle { /* Option<kira handle> + tracked target volume; no-op audio methods when Silent */ }
 impl SoundHandle {
     pub fn stop(&mut self, fade: Fade);
-    pub fn set_volume(&mut self, amplitude: f32, fade: Fade);
-    // set_playback_rate (pitch), filters, panning → v2 (needs-research/audio-v2)
+    pub fn set_volume(&mut self, amplitude: f32, fade: Fade); // 0.0..=1.0, clamped; records the target
+    pub fn get_volume(&self) -> f32;                          // last-set target, tracked our side
+    // pause/resume, seek, set_playback_rate (pitch), filters, panning → v2 (needs-research/audio-v2)
 }
 ```
 
@@ -143,11 +145,11 @@ Hard invariants respected (per CLAUDE.md / `31-engine-game-crate-split`): `engin
 
 ## Testing Guidance (headless, no audio device)
 CI has no audio device, so the default test path exercises the `Silent` backend — which is itself the most important thing to prove safe:
-- `init()` on a machine with no audio device returns normally and installs `Backend::Silent`; every subsequent `play_sfx`/`play_music`/`stop_music`/`set_*` is a no-op that does **not** panic.
-- Calling `play_sfx` **before** `init()` lazily initializes and still never panics (ordering-independence).
-- Decode cache: two `play_sfx` calls with the same `&'static [u8]` perform exactly **one** real decode — assert via a `#[cfg(test)]` decode-recompute counter sampled as a before/after delta (never an absolute — the cache is process-global and shared across concurrent tests), the established `asset_cache` pattern.
+- `init()` on a machine with no audio device returns normally and installs `Backend::Silent`; every subsequent `play`/`play_oneshot`/`set_*` is a no-op that does **not** panic.
+- Calling `play_oneshot` **before** `init()` lazily initializes and still never panics (ordering-independence).
+- Decode cache: two `play_oneshot` calls with the same `&'static [u8]` perform exactly **one** real decode — assert via a `#[cfg(test)]` decode-recompute counter sampled as a before/after delta (never an absolute — the cache is process-global and shared across concurrent tests), the established `asset_cache` pattern.
 - `set_muted(true)` then `is_muted()` returns `true`; `set_muted(false)` restores the prior master amplitude (assert the stored pre-mute level round-trips).
-- `MusicOpts { loop_region: Some(3.5..), .. }` constructs a kira loop region with the expected start (unit-level, no device).
+- `PlayOpts { loop_region: Some(3.5..), .. }` constructs a kira loop region with the expected start, and `loop_region: None` yields no loop (unit-level, no device); `SoundHandle::get_volume` round-trips the last-set target amplitude (clamped) on the silent backend.
 
 **Verification requirements (beyond the automated gate — passing tests ≠ working software):**
 - On a real machine with audio, manually confirm and record the in-app audible behavior: a one-shot SFX fires on a menu keypress with no perceptible latency, and several overlapping SFX mix without clipping/dropping. Not "done" until heard. (Music playback — seamless loop points and crossfade — is implemented in `engine-audio` and covered by the crate's headless unit tests; it is not wired into a scene, so it is not part of the in-app manual check.)

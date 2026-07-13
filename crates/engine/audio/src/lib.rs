@@ -3,8 +3,7 @@ mod backend;
 mod cache;
 
 pub use backend::{
-    SoundHandle, init, is_muted, play_music, play_sfx, set_bus_volume, set_master_volume,
-    set_muted, stop_music,
+    SoundHandle, init, is_muted, play, play_oneshot, set_bus_volume, set_master_volume, set_muted,
 };
 
 use std::ops::RangeFrom;
@@ -32,19 +31,23 @@ pub enum Bus {
     Sfx,
 }
 
-/// Options for `play_music` (b3-t3). `loop_region` is `RangeFrom<f64>`
-/// (seconds) — not `Range<f64>` — so `Some(3.5..)` means "loop the whole
-/// track from 3.5s to the end"; `None` loops the entire track.
+/// Options for [`play`]. `bus` selects the volume group. `loop_region`
+/// (`RangeFrom<f64>` seconds) is opt-in looping: `None` plays once,
+/// `Some(0.0..)` loops the whole track, `Some(3.5..)` plays an intro once then
+/// loops the body from 3.5s to the end. `fade_in` and `volume` apply on start.
+/// `Default` is a one-shot on the SFX bus at full volume — what [`play_oneshot`]
+/// uses.
 #[derive(Debug, Clone, PartialEq)]
-pub struct MusicOpts {
+pub struct PlayOpts {
+    pub bus: Bus,
     pub loop_region: Option<RangeFrom<f64>>,
     pub fade_in: Fade,
     pub volume: f32,
 }
 
-impl Default for MusicOpts {
+impl Default for PlayOpts {
     fn default() -> Self {
-        Self { loop_region: None, fade_in: Fade::NONE, volume: 1.0 }
+        Self { bus: Bus::Sfx, loop_region: None, fade_in: Fade::NONE, volume: 1.0 }
     }
 }
 
@@ -63,13 +66,16 @@ mod tests {
     }
 
     #[test]
-    fn music_opts_default_volume_full() {
-        assert_eq!(MusicOpts::default().volume, 1.0);
+    fn play_opts_default_is_oneshot_sfx_full_volume() {
+        let o = PlayOpts::default();
+        assert_eq!(o.bus, Bus::Sfx);
+        assert!(o.loop_region.is_none());
+        assert_eq!(o.volume, 1.0);
     }
 
     #[test]
-    fn music_opts_loop_region_start() {
-        let opts = MusicOpts { loop_region: Some(3.5..), ..Default::default() };
+    fn play_opts_loop_region_start() {
+        let opts = PlayOpts { loop_region: Some(3.5..), ..Default::default() };
         assert_eq!(opts.loop_region.unwrap().start, 3.5);
     }
 

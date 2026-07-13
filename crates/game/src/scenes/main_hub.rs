@@ -12,7 +12,7 @@ use engine_render::{
     flex, Align, Basis, Button, ButtonState, Direction, FlexChild, FlexStyle, Justify,
 };
 
-use engine_audio::play_sfx;
+use engine_audio::play_oneshot;
 use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use crate::scene_id::SceneId;
 
@@ -294,17 +294,17 @@ impl Scene for MainHub {
         match ev {
             InputEvent::Key(key) => match key.code {
                 KeyCode::Up => {
-                    play_sfx(crate::sounds::UI_CONFIRM);
+                    play_oneshot(crate::sounds::UI_CONFIRM);
                     let n = self.buttons.len();
                     self.cursor_index = (self.cursor_index + n - 1) % n;
                 }
                 KeyCode::Down => {
-                    play_sfx(crate::sounds::UI_CONFIRM);
+                    play_oneshot(crate::sounds::UI_CONFIRM);
                     let n = self.buttons.len();
                     self.cursor_index = (self.cursor_index + 1) % n;
                 }
                 KeyCode::Enter | KeyCode::Char(' ') => {
-                    play_sfx(crate::sounds::UI_CONFIRM);
+                    play_oneshot(crate::sounds::UI_CONFIRM);
                     return self.activate(self.cursor_index);
                 }
                 _ => {}

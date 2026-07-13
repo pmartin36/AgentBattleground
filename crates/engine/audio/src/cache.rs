@@ -43,7 +43,7 @@ fn store() -> &'static Mutex<HashMap<usize, StaticSoundData>> {
 /// decodable (callers pass first-party bundled `'static` sounds --
 /// invariant).
 ///
-/// Consumed by `backend.rs`'s `play_sfx`/`play_music`.
+/// Consumed by `backend.rs`'s `play`/`play_oneshot`.
 pub(crate) fn sound_data(bytes: &'static [u8]) -> StaticSoundData {
     let key = bytes.as_ptr() as usize; // <-- source-bytes pointer, the only safe identity
     let mut map = store().lock().expect("sound cache mutex poisoned");
@@ -69,7 +69,7 @@ pub(crate) fn decode_recompute_count() -> u64 {
 /// Test-only, crate-visible lock serializing every `#[cfg(test)]` code path
 /// in THIS crate's lib-test binary (`cargo test -p engine-audio --lib`) that
 /// either samples `decode_recompute_count()` as a delta, or performs a
-/// decode that would inflate such a delta. b3-t3's `play_sfx`/`play_music`
+/// decode that would inflate such a delta. b3-t3's `play`/`play_oneshot`
 /// tests MUST reuse THIS lock, not declare their own, or the delta they
 /// observe can be polluted by an unrelated test's cache miss (mirrors
 /// `engine_render::asset_cache::cache_test_lock`).
