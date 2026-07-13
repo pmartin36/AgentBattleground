@@ -54,7 +54,8 @@ fn four_abilities() -> Vec<Ability> {
 #[test]
 fn modal_suppresses_left_right_nav() {
     let mut scene = RosterManager::new();
-    open_popup(&mut scene, None);
+    let base = temp_base_dir("modal");
+    open_popup(&mut scene, Some(&base));
     let before = scene.current_index;
 
     scene.handle_input(key_event(KeyCode::Left));
@@ -78,7 +79,8 @@ fn modal_suppresses_ability_hover() {
     // Populate ability_hit_rects while the popup is still closed.
     let _ = render_to_buffer(&scene, w, h);
 
-    open_popup(&mut scene, None);
+    let base = temp_base_dir("modal");
+    open_popup(&mut scene, Some(&base));
 
     let cells = RosterManager::panel_interior_regions(area).ability_cells;
     let cell = cells[1].to_cell_rect();
@@ -95,7 +97,8 @@ fn modal_suppresses_ability_hover() {
 #[test]
 fn esc_closes_popup() {
     let mut scene = RosterManager::new();
-    open_popup(&mut scene, None);
+    let base = temp_base_dir("modal");
+    open_popup(&mut scene, Some(&base));
     assert!(scene.prompt_editor.is_some(), "setup: popup must be open");
 
     scene.handle_input(key_event(KeyCode::Esc));

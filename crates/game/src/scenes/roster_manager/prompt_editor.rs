@@ -721,7 +721,7 @@ mod tests {
     /// Testing Guidance line 66/67.
     #[test]
     fn popup_occludes_and_draws_border() {
-        let popup = PromptEditor::new(0, "Test Creature", None, &[]);
+        let popup = hermetic_popup("Test Creature", &[]);
         let (w, h) = (80u16, 30u16);
         let buf = render_popup(&popup, w, h);
         let (blanks, lit) = tally(&buf, w, h);
@@ -749,7 +749,7 @@ mod tests {
     /// An empty agent input must show its placeholder in its laid-out rect.
     #[test]
     fn agent_placeholder_renders() {
-        let popup = PromptEditor::new(0, "Test Creature", None, &[]);
+        let popup = hermetic_popup("Test Creature", &[]);
         let (w, h) = (80u16, 30u16);
         let buf = render_popup(&popup, w, h);
 
@@ -787,7 +787,7 @@ mod tests {
     /// `close` rect — b3-t1's hit-test reuses this rect, not a recompute.
     #[test]
     fn close_rect_matches_layout() {
-        let popup = PromptEditor::new(0, "Test Creature", None, &[]);
+        let popup = hermetic_popup("Test Creature", &[]);
         let (w, h) = (80u16, 30u16);
         let _ = render_popup(&popup, w, h);
 
@@ -812,7 +812,7 @@ mod tests {
     /// Testing Guidance line 64.
     #[test]
     fn agent_submit_clears_input_and_stays_open() {
-        let mut popup = PromptEditor::new(0, "Test Creature", None, &[]);
+        let mut popup = hermetic_popup("Test Creature", &[]);
         focus_agent_input(&mut popup);
 
         for c in ['h', 'i'] {
@@ -838,7 +838,7 @@ mod tests {
     /// 51 Testing Guidance line 64.
     #[test]
     fn agent_shift_enter_grows_desired_rows() {
-        let mut popup = PromptEditor::new(0, "Test Creature", None, &[]);
+        let mut popup = hermetic_popup("Test Creature", &[]);
         focus_agent_input(&mut popup);
 
         let area = Rect::new(0, 0, 80, 30);
@@ -856,7 +856,7 @@ mod tests {
     /// hit.
     #[test]
     fn agent_grow_caps_at_max_rows() {
-        let mut popup = PromptEditor::new(0, "Test Creature", None, &[]);
+        let mut popup = hermetic_popup("Test Creature", &[]);
         focus_agent_input(&mut popup);
 
         let area = Rect::new(0, 0, 80, 30);
@@ -883,6 +883,16 @@ mod tests {
         ]
     }
 
+    /// Builds a `PromptEditor` against a fresh hermetic temp base dir (empty
+    /// instructions), so no test reads or writes the real
+    /// `creature_instructions/` (spec 47's mandate). `PromptEditor::new` copies
+    /// the base into its own `PathBuf`, so the editor keeps working after the
+    /// local `base` drops.
+    fn hermetic_popup(name: &str, roster: &[Creature]) -> PromptEditor {
+        let base = temp_base_dir(name);
+        PromptEditor::new(0, name, Some(&base), roster)
+    }
+
     /// Types each char of `s` into the popup's currently-focused editor.
     fn type_str(popup: &mut PromptEditor, s: &str) {
         for c in s.chars() {
@@ -903,7 +913,7 @@ mod tests {
     #[test]
     fn instructions_at_mention_two_stage_yields_single_token() {
         let roster = wired_roster();
-        let mut popup = PromptEditor::new(0, "Ember Wolf", None, &roster);
+        let mut popup = hermetic_popup("Ember Wolf", &roster);
 
         type_str(&mut popup, "@enemy");
         press_enter(&mut popup);
@@ -919,12 +929,12 @@ mod tests {
     fn instructions_at_mention_offers_own_abilities_and_roster_names() {
         let roster = wired_roster();
 
-        let mut ability_popup = PromptEditor::new(0, "Ember Wolf", None, &roster);
+        let mut ability_popup = hermetic_popup("Ember Wolf", &roster);
         type_str(&mut ability_popup, "@Douse");
         press_enter(&mut ability_popup);
         assert_eq!(ability_popup.instructions_text(), "@Douse");
 
-        let mut roster_popup = PromptEditor::new(0, "Ember Wolf", None, &roster);
+        let mut roster_popup = hermetic_popup("Ember Wolf", &roster);
         type_str(&mut roster_popup, "@Frost");
         press_enter(&mut roster_popup);
         assert_eq!(roster_popup.instructions_text(), "@Frost_Lizard");
@@ -938,7 +948,7 @@ mod tests {
     #[test]
     fn esc_dismisses_mention_popup_not_modal() {
         let roster = wired_roster();
-        let mut popup = PromptEditor::new(0, "Ember Wolf", None, &roster);
+        let mut popup = hermetic_popup("Ember Wolf", &roster);
 
         type_str(&mut popup, "@enemy");
 
