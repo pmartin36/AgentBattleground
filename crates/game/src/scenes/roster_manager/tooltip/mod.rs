@@ -7,7 +7,7 @@
 mod palette;
 mod pills;
 
-use crate::ability::{Ability, StatusEffect};
+use crate::ability::{Ability, StatusKind};
 use engine_core::color::Rgba;
 use engine_render::dots::Dot;
 use engine_render::{
@@ -311,7 +311,7 @@ fn fill_damage_range(buf: &mut Buffer, rect: DotRect, ability: &Ability) {
 
 /// `"Status:"` header plus effect names in a 2-column grid
 /// (effect0|effect1 / effect2|effect3 / ...).
-fn fill_status(buf: &mut Buffer, rect: DotRect, effects: &[StatusEffect]) {
+fn fill_status(buf: &mut Buffer, rect: DotRect, effects: &[StatusKind]) {
     let body_rows = (effects.len() as u16).div_ceil(2).max(1) as i32;
     let sections = flex(
         rect,
@@ -359,10 +359,10 @@ fn fill_status(buf: &mut Buffer, rect: DotRect, effects: &[StatusEffect]) {
             ],
         );
         if let Some(effect) = effects.get(2 * i) {
-            label(buf, cols[0].to_cell_rect(), &effect.name, TextAlign::Left, text_style());
+            label(buf, cols[0].to_cell_rect(), effect.label(), TextAlign::Left, text_style());
         }
         if let Some(effect) = effects.get(2 * i + 1) {
-            label(buf, cols[1].to_cell_rect(), &effect.name, TextAlign::Left, text_style());
+            label(buf, cols[1].to_cell_rect(), effect.label(), TextAlign::Left, text_style());
         }
     }
 }
@@ -436,7 +436,7 @@ fn draw_labeled_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ability::{AbilityType, DamageClass, Element, StatusEffect};
+    use crate::ability::{AbilityType, DamageClass, Element, StatusKind};
     use crate::scenes::test_util::{lit_dot_color, rect_text};
     use ratatui::layout::Rect;
 
@@ -453,7 +453,10 @@ mod tests {
             .with_range(5)
             .with_status_effects(
                 (0..status_effect_count)
-                    .map(|i| StatusEffect { name: format!("Effect{i}") })
+                    .map(|i| {
+                        [StatusKind::Burn, StatusKind::Frozen, StatusKind::Shocked, StatusKind::Rooted]
+                            [i % 4]
+                    })
                     .collect(),
             )
             .with_flavor("A crackling roar.")
@@ -580,12 +583,11 @@ mod tests {
     #[test]
     fn layout_status_height_scales_with_effect_count() {
         // Only Status present in both, so `rows[0]` is the Status rect.
-        let one = Ability::new("Roar", vec![])
-            .with_status_effects(vec![StatusEffect { name: "A".into() }]);
+        let one = Ability::new("Roar", vec![]).with_status_effects(vec![StatusKind::Burn]);
         let three = Ability::new("Roar", vec![]).with_status_effects(vec![
-            StatusEffect { name: "A".into() },
-            StatusEffect { name: "B".into() },
-            StatusEffect { name: "C".into() },
+            StatusKind::Burn,
+            StatusKind::Frozen,
+            StatusKind::Shocked,
         ]);
 
         let layout_one = layout_tooltip(&one, hovered_cell());
@@ -646,6 +648,7 @@ mod tests {
             "Attack",
             "Fire",
             "Physical",
+            "Burn",
         ] {
             assert!(
                 card_text.contains(expected),

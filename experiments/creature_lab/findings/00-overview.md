@@ -25,6 +25,18 @@ coherence matter far more than fine pixel detail.
   the picture: the magnitude wall applies to body motion generally (not just props), VACE 1.3B cannot
   manifest new solid limb structure regardless of control shape or strength, and chaining low-magnitude
   clips avoids melting at the cost of the model barely moving at all.
+- **Skeletal/rig approaches (both the hand-drawn capsule rig and the later FABRIK IK + real-texture
+  cutout rig) are now CLOSED, per `02-dead-ends`.** The IK+cutout version (`10-ik-cutout-feasibility-
+  prototype.md`) fixed every diagnosable bug across 3 body plans (measurement errors, auto-thickness
+  bias, capsule-vs-silhouette mismatch, compositing artifacts) and still read as "rough" in real
+  braille playback (2026-07-10, user verdict). **Root cause is not braille resolution** — it's that
+  cutting a sprite into rigid pieces leaves nothing actually rendered *at* the joint (two flat
+  textures pivoting against each other, no material bending), which reads as unnatural motion
+  regardless of resolution or how many surface bugs get fixed. Don't reattempt rigid-cutout-and-hinge
+  limb rendering without a real deformation/blend-skinning renderer — see `02-dead-ends`.
+- **Active next avenue: ComfyUI + SCAIL-2** (topology-free motion transfer), installed and ready to
+  test at `../ComfyUI/` — see `09-exhaustive-search-plan.md` for the research behind it. Not yet
+  run/validated as of this note.
 
 ## Meta-learnings (the expensive ones — internalize these)
 1. **STILLS LIE. Judge braille playback, across the WHOLE arc.** Repeatedly a clip looked clean on 3

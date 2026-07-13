@@ -4,7 +4,7 @@
 //! 6 near-identical files (name, GIF path, and function identifier are the
 //! only things that ever differed between them).
 
-use crate::ability::{Ability, AbilityType, DamageClass, Element, Modifier, StatusEffect};
+use crate::ability::{Ability, AbilityType, DamageClass, Element, Modifier, StatusKind};
 use crate::squad_role::{squad_role, SquadRole, ACTIVE_SLOTS, BENCH_SLOTS};
 use crate::stamina::{Stamina, STAMINA_MAX_CAP};
 use crate::stats::Stats;
@@ -228,7 +228,7 @@ pub fn demo_roster() -> Vec<Creature> {
                     .with_cost(3)
                     .with_damage(25)
                     .with_range(1)
-                    .with_status_effects(vec![StatusEffect { name: "Burn".to_string() }])
+                    .with_status_effects(vec![StatusKind::Burn])
                     .with_flavor("Fangs wreathed in flame, searing on contact."),
                 Ability::new("Howl", vec![])
                     .with_ability_type(AbilityType::Buff)
@@ -292,7 +292,7 @@ pub fn demo_roster() -> Vec<Creature> {
                     .with_cost(3)
                     .with_damage(22)
                     .with_range(3)
-                    .with_status_effects(vec![StatusEffect { name: "Shock".to_string() }])
+                    .with_status_effects(vec![StatusKind::Shocked])
                     .with_flavor("A bolt of lightning called down from storm clouds."),
                 Ability::new("Wind Slash", vec![])
                     .with_ability_type(AbilityType::Attack)
@@ -317,7 +317,7 @@ pub fn demo_roster() -> Vec<Creature> {
                     .with_class(DamageClass::Magic)
                     .with_cost(2)
                     .with_range(2)
-                    .with_status_effects(vec![StatusEffect { name: "Rooted".to_string() }])
+                    .with_status_effects(vec![StatusKind::Rooted])
                     .with_flavor("Grasping roots erupt to snare the target's feet."),
                 Ability::new("Photosynthesis", vec![])
                     .with_ability_type(AbilityType::Buff)
@@ -350,7 +350,7 @@ pub fn demo_roster() -> Vec<Creature> {
                     .with_cost(2)
                     .with_damage(20)
                     .with_range(1)
-                    .with_status_effects(vec![StatusEffect { name: "Bleed".to_string() }])
+                    .with_status_effects(vec![StatusKind::Burn])
                     .with_flavor("A blindingly fast strike from the shadows."),
                 Ability::new("Vanish", vec![])
                     .with_ability_type(AbilityType::Buff)

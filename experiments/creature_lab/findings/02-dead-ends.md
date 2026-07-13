@@ -67,6 +67,35 @@ melt (mechanic works), but on the arms-out **roar** body pose it read badly, and
 are loose/manual. *Revisit:* the **decomposition is right** (see 03) — the execution needs a real swing
 body-motion + auto hand-detection, not this.
 
+## Skeletal/rig approaches
+
+**Hand-authored 2-bone capsule rig (`rig_arm.py`).** Zero-melt, zero-hallucination by construction
+(fully code-driven, no diffusion in the motion path) — but User: *"the rig version sucks, to be
+honest... the rig doesn't work. plainly. it's not an approach we can use."* Looked bolted-on (a
+synthetic drawn capsule, not the creature's own art style) and required hand-measured pivots/bone
+lengths per creature — doesn't generalize. See `08-skeletal-rig-approach.md`. *Revisit if:* never as
+a hand-drawn capsule; see the IK+cutout attempt below for the direct successor.
+
+**FABRIK IK + real-texture cutout rig (`ikrig.py`).** The direct fix for the rig's two named flaws:
+drove the limb via inverse kinematics against a Cartesian target (not hand-authored angles), and
+rendered by cutting the actual creature texture out of the source art (two rigid pieces hinged at the
+joint) instead of drawing a synthetic shape. Built a validation gate (catches bad joint placement
+before rendering — proven to catch real errors, e.g. a root point floating in background), auto-
+measured limb thickness from the creature's own silhouette (with real, fixed biases: measuring
+exactly at a socket or a round fist/paw is wrong by construction), and a silhouette-conforming cutout
+mask (fixes capsules not fitting claws/branches). Tested clean across 3 diverse body plans (rock-
+golem arm, canine leg, branch-limbed humanoid) with every bug found diagnosed to a specific root
+cause and mostly fixed — chin-fusion measurement error, oversized auto-thickness blob, floating-twig
+debris, pale-ghost compositing, a shadow thread. Static PNG frames looked coherent throughout. **Still
+failed in real braille playback** — User: *"that doesn't work. they all look pretty rough."* **Not a
+braille-resolution problem** — user confirmed the actual cause: *"it's a problem of unnatural
+movement... taking a sprite and breaking it apart so that there's nothing in the joints."* Cutting a
+sprite into rigid pieces and hinging them leaves the joint itself unrendered — no material actually
+bends there, two flat textures just pivot against each other — and that reads as unnatural motion at
+any resolution, independent of every bug above being fixed. *Revisit if:* a renderer that actually
+deforms material across the joint (soft blend-skinning/mesh warp, not a rigid hinge between separately
+cut pieces) — the rigid-cutout-and-hinge technique itself is the dead end, not its bugs.
+
 ## Hardcoded effects
 
 **Authored cyan "slash-arc" effect.** Sword-specific → **not generalizable** (a telepath has no slash).

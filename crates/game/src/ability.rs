@@ -53,7 +53,7 @@ pub struct Ability {
     cost: Option<u8>,
     damage: Option<u32>,
     range: Option<u8>,
-    status_effects: Vec<StatusEffect>,
+    status_effects: Vec<StatusKind>,
     flavor: Option<String>,
 }
 
@@ -118,7 +118,7 @@ impl Ability {
         self
     }
 
-    pub fn with_status_effects(mut self, status_effects: Vec<StatusEffect>) -> Self {
+    pub fn with_status_effects(mut self, status_effects: Vec<StatusKind>) -> Self {
         self.status_effects = status_effects;
         self
     }
@@ -152,7 +152,7 @@ impl Ability {
         self.range
     }
 
-    pub fn status_effects(&self) -> &[StatusEffect] {
+    pub fn status_effects(&self) -> &[StatusKind] {
         &self.status_effects
     }
 
@@ -220,10 +220,27 @@ impl DamageClass {
     }
 }
 
-/// A named status effect an ability may inflict/apply.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StatusEffect {
-    pub name: String,
+/// A combat status kind an ability may inflict. `label()` is the single
+/// source of display text — callers must never re-match on the variant.
+/// Kind only; the applied-with-duration instance is spec 10's (reserved
+/// name `StatusEffect`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusKind {
+    Burn,
+    Frozen,
+    Shocked,
+    Rooted,
+}
+
+impl StatusKind {
+    pub fn label(&self) -> &'static str {
+        match self {
+            StatusKind::Burn => "Burn",
+            StatusKind::Frozen => "Frozen",
+            StatusKind::Shocked => "Shocked",
+            StatusKind::Rooted => "Rooted",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -326,9 +343,11 @@ mod tests {
     }
 
     #[test]
-    fn status_effect_constructs_and_reads_back_name() {
-        let effect = StatusEffect { name: "Burn".to_string() };
-        assert_eq!(effect.name, "Burn");
+    fn status_kind_label_returns_display_string() {
+        assert_eq!(StatusKind::Burn.label(), "Burn");
+        assert_eq!(StatusKind::Frozen.label(), "Frozen");
+        assert_eq!(StatusKind::Shocked.label(), "Shocked");
+        assert_eq!(StatusKind::Rooted.label(), "Rooted");
     }
 
     #[test]
@@ -340,7 +359,7 @@ mod tests {
             .with_cost(3)
             .with_damage(42)
             .with_range(5)
-            .with_status_effects(vec![StatusEffect { name: "Stun".to_string() }])
+            .with_status_effects(vec![StatusKind::Shocked])
             .with_flavor("A crackling roar.");
 
         assert_eq!(ability.ability_type(), Some(AbilityType::Debuff));
@@ -349,10 +368,7 @@ mod tests {
         assert_eq!(ability.cost(), Some(3));
         assert_eq!(ability.damage(), Some(42));
         assert_eq!(ability.range(), Some(5));
-        assert_eq!(
-            ability.status_effects(),
-            &[StatusEffect { name: "Stun".to_string() }]
-        );
+        assert_eq!(ability.status_effects(), &[StatusKind::Shocked]);
         assert_eq!(ability.flavor(), Some("A crackling roar."));
     }
 
