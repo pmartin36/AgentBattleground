@@ -1222,6 +1222,7 @@ dependencies = [
 name = "engine-render"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "engine-core",
  "image",
  "ratatui",

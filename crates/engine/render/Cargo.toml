@@ -7,3 +7,4 @@ edition = "2021"
 engine-core = { path = "../core" }
 ratatui = { workspace = true }
 image = "0.25"
+arboard = { version = "3.6", default-features = false }

@@ -7,9 +7,12 @@ use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 
+mod clipboard;
 mod render;
 mod selection;
 mod wrap;
+
+use clipboard::{Clipboard, SystemClipboard};
 
 /// Logical `(line, col)` position, char-indexed into `lines[line]` — the
 /// same convention as `cursor_line`/`cursor_col`. b1-t1.
@@ -81,6 +84,9 @@ pub struct TextEditor {
     /// `Down(Left)` (in-rect) through the matching `Up(Left)`, `None`
     /// otherwise. b1-t3. Distinct from any future scrollbar drag state.
     drag_anchor: Option<Pos>,
+    /// System clipboard backend (real backend by default; a fake in tests
+    /// via `set_clipboard`). Read by Ctrl+C/X/V (b2-t2). b2-t1.
+    clipboard: Box<dyn Clipboard>,
 }
 
 /// One display row produced by wrapping a logical line: `[start, end)` are
@@ -111,7 +117,15 @@ impl TextEditor {
             focused: true,
             selection: None,
             drag_anchor: None,
+            clipboard: Box::new(SystemClipboard::new()),
         }
+    }
+
+    /// Swap the clipboard backend (tests inject a fake; production code
+    /// never needs to call this — `new()` defaults to the real backend).
+    /// b2-t1.
+    pub fn set_clipboard(&mut self, clipboard: Box<dyn Clipboard>) {
+        self.clipboard = clipboard;
     }
 
     /// Advance the blink accumulator by `dt`, wrapping at the full cycle
@@ -165,6 +179,31 @@ impl TextEditor {
     /// caret or mutating the buffer.
     pub fn handle_key(&mut self, key: KeyEvent) -> EditorEvent {
         match key.code {
+            KeyCode::Char(c)
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && matches!(c, 'c' | 'C' | 'x' | 'X' | 'v' | 'V') =>
+            {
+                match c.to_ascii_lowercase() {
+                    'c' => {
+                        self.copy_selection();
+                        EditorEvent::None
+                    }
+                    'x' => {
+                        if self.cut_selection() {
+                            EditorEvent::Changed
+                        } else {
+                            EditorEvent::None
+                        }
+                    }
+                    _ => {
+                        if self.paste() {
+                            EditorEvent::Changed
+                        } else {
+                            EditorEvent::None
+                        }
+                    }
+                }
+            }
             KeyCode::Char(c) => {
                 self.delete_selection();
                 self.insert_char(c);
