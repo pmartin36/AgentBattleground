@@ -40,11 +40,17 @@ The four creature stats (`34`) each drive two mechanics — the point at which `
 
 This mapping is the decision. The exact formulas/scaling are not settled here (see Open Questions).
 
-STR's and VIT's secondaries also resolve the two placeholders in today's `Stamina` model (`crates/game/src/stamina.rs`), both currently flat constants:
-- **STR → Max Stamina** replaces the fixed `MAX_PERCENT = 100` (identical for every creature) with a per-creature capacity.
+STR's and VIT's secondaries drive the `Stamina` model (`crates/game/src/stamina.rs`), which stores per-creature `current`/`max` points with a derived `percent`:
+- **STR → Max Stamina** — the per-creature `max` field exists (defaulting to `STAMINA_MAX_CAP`) and carries a `// TODO: derive from STR` marker; this engine supplies that derivation formula.
 - **VIT → Stamina Recovery Rate** replaces the fixed `RECOVERY_DURATION` (recover-to-full in one day) with a per-creature, gradual %/day recovery — the concrete recovery rule `34` deferred to this spec.
 
-Both require evolving the `Stamina` struct when implemented: it tracks only a 0–100 `percent` with no per-creature max and a single recover-to-full duration (see Open Questions).
+### Combat Data Resolved Here
+Other specs define concrete combat data but leave it mechanically inert; this engine is where it takes effect:
+- **Ability fields** (`47`) — each ability's `damage`, `range`, `element`, `class` (physical/magic), and stamina `cost` resolve into hits, reach, type matchups, and stamina drain here.
+- **Status effects** (`55`) — `StatusKind` (Burn/Frozen/Shocked/Rooted) is the kind; this engine owns the *applied instance* — kind + duration/magnitude, e.g. `ActiveStatus { kind: StatusKind, turns }` — and ticks it each turn. (`StatusEffect` is reserved for this instance.)
+- **`@` mentions** (`56`) — the skill file's `@` grammar (`@enemy:lowest-hp`, `@self:frozen`, `@Douse`, `@Ember_Wolf`) is authored inert; this engine resolves each mention against live battle state — targeting selectors, status conditions, and ability/creature references — when interpreting a turn.
+
+The skill file itself is the per-creature instructions Markdown (`47`, `creature_instructions/<name>.md`), which carries those `@` mentions.
 
 ### Replay Artifact
 After each turn, the engine records the state delta — what happened, who acted, what skills fired, resulting state. This sequence becomes the replay file, which the viewer consumes and the server stores.
@@ -67,7 +73,7 @@ Bots use the same engine as human opponents, with server-authored skill files. B
 
 ## Open Questions / TBDs
 - **Combat formulas per stat** — the *Stat Effects* mapping is decided, but the numbers are not: damage per STR point, how DEX accuracy resolves against DEX dodge, the magic-vs-physical damage split, and the INT attacker−defender difference → status-potency curve.
-- **STR → Max Stamina modeling** — `Stamina` currently tracks only a 0–100 `percent` against a flat `MAX_PERCENT`; a per-creature max means either scaling drain-per-damage by capacity or switching to explicit current/max values.
+- **STR → Max Stamina modeling** — `Stamina` stores explicit `current`/`max` points (the `max` field carries a TODO to derive from STR); what remains is the STR→max formula.
 - **VIT → Stamina Recovery Rate modeling** — replaces the current one-shot recover-to-full (`RECOVERY_DURATION`) with gradual %/day recovery; the rate curve and whether an injured creature recovers on that same %/day track are open.
 - What is the exact LLM interface? (ollama-style local API? direct binary?)
 - How are skill files structured to make LLM interpretation reliable?
@@ -78,6 +84,9 @@ Bots use the same engine as human opponents, with server-authored skill files. B
 ## Dependencies
 - `03-army-skill-editing` — skill files are the engine's primary input
 - `34-creature-attributes-data-model` — stats, abilities/modifiers, and stamina (`Stamina`, the reworked `Exhaustion`) are the data this engine's combat math and turn resolution act on; this engine is where their mechanical effects finally get defined (see *Stat Effects*)
+- `47-ability-and-instructions-data-model` — the ability combat fields (`damage`/`range`/`element`/`class`/`cost`) this engine resolves, and the per-creature instructions Markdown that IS the skill file
+- `55-combat-status-and-element-enums` — `StatusKind` (the kind this engine applies as timed instances) and the `Element` set for type matchups
+- `56-at-mention-authoring` — the `@` mention grammar this engine resolves against live battle state
 - `36-battle-viewer-squad-layout` — the 3v3 + bench squad structure this engine's turn/action model must respect
 - `04-matchmaking-battle-initiation` — triggers the engine with downloaded opponent data
 - `05-battle-viewer` — consumes the engine's turn output (live or via replay file)
