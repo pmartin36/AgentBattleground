@@ -38,9 +38,17 @@ fn base_data_dir(explicit: Option<&Path>) -> PathBuf {
     }
 }
 
+/// Spaces→underscores convention (ASCII space only, no other transform).
+/// Single source of truth for the name↔token mapping shared by instruction
+/// filenames (below) and `@`-mention insert-text tokens
+/// (`crates/game/src/mention.rs`, b2-t1) so the two can never drift.
+pub fn underscore_name(name: &str) -> String {
+    name.replace(' ', "_")
+}
+
 /// `<name with ' '→'_'>.md` (ASCII space only, no other transform).
 fn instructions_file_name(name: &str) -> String {
-    format!("{}.md", name.replace(' ', "_"))
+    format!("{}.md", underscore_name(name))
 }
 
 // ── explicit-base forms (test surface, race-free) ──────────────────────────

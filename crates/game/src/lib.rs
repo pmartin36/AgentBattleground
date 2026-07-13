@@ -4,6 +4,7 @@ pub mod assets;
 pub mod braille_name;
 pub mod creatures;
 pub mod instructions;
+pub mod mention;
 pub mod scene_id;
 pub mod scenes;
 pub mod squad_role;
