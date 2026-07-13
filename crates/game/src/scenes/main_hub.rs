@@ -12,7 +12,7 @@ use engine_render::{
     flex, Align, Basis, Button, ButtonState, Direction, FlexChild, FlexStyle, Justify,
 };
 
-use engine_audio::{play_music, play_sfx, Fade, MusicOpts};
+use engine_audio::play_sfx;
 use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use crate::scene_id::SceneId;
 
@@ -263,12 +263,7 @@ impl Scene for MainHub {
         SceneId::MainHub.into()
     }
 
-    fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {
-        play_music(
-            crate::sounds::HUB_THEME,
-            MusicOpts { loop_region: None, fade_in: Fade::ms(600), volume: 1.0 },
-        );
-    }
+    fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {}
 
     fn update(&mut self, _ctx: &mut EngineCtx, _dt: Duration) -> Option<Transition> {
         None

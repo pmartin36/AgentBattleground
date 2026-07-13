@@ -5,6 +5,3 @@
 
 /// UI confirm click, `.ogg`. Played on cursor move / select in menu scenes.
 pub const UI_CONFIRM: &[u8] = include_bytes!("sounds/ui_confirm.ogg");
-
-/// Main Hub background music loop, `.ogg`.
-pub const HUB_THEME: &[u8] = include_bytes!("sounds/hub_theme.ogg");

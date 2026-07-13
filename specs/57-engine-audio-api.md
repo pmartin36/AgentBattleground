@@ -10,7 +10,7 @@ This is squarely a cross-cutting mechanism per CLAUDE.md's engine/game boundary 
 - **Engine** (`crates/engine/audio/Cargo.toml`, workspace `Cargo.toml`): new `kira` dependency (default `cpal` backend); new workspace member `crates/engine/audio`.
 - **Game** (`crates/game/src/sounds.rs`, new): sound files as `&'static [u8]` `include_bytes!` consts — the audio parallel of `game::assets` art consts. The bytes const *is* the sound's identity; there is no handle/ID/enum type.
 - **Game** (`crates/game/src/main.rs`): calls `engine_audio::init()` once at startup (right after `engine_core::logging::init`), before the alternate screen is entered.
-- **Game** (`crates/game/src/scenes/main_hub.rs`): the audible proof, wired into the Main Hub — `HUB_THEME` starts looping on the Music bus in `MainHub::enter()` (currently empty), and `UI_CONFIRM` plays on the SFX bus inside `MainHub::handle_input()` on cursor Up/Down and on Enter/Space select. `handle_input` receives no `EngineCtx`, which is exactly why the global-singleton access pattern (Decision 1) is required. This proves the pipeline end-to-end with audible output — not just a headless test.
+- **Game** (`crates/game/src/scenes/main_hub.rs`): the audible proof, wired into the Main Hub — `UI_CONFIRM` plays on the SFX bus inside `MainHub::handle_input()` on cursor Up/Down and on Enter/Space select. `handle_input` receives no `EngineCtx`, which is exactly why the global-singleton access pattern (Decision 1) is required. This proves the pipeline end-to-end with audible output — not just a headless test. (`play_music` is part of the engine-audio API and is exercised by the crate's own tests; no scene currently plays background music.)
 
 Out of scope (deferred to `needs-research/audio-v2`, confirmed with the project owner):
 - **Real-time pitch/playback-rate bending** — kira supports it (`set_playback_rate`, tweenable), but it's a v2 expressive feature, not a mid-scope need. `SoundHandle` in v1 exposes only `stop` and `set_volume`.
@@ -66,7 +66,6 @@ Sound files are `include_bytes!` consts in `crates/game/src/sounds.rs`, the audi
 ```rust
 // crates/game/src/sounds.rs
 pub const UI_CONFIRM: &[u8] = include_bytes!("sounds/ui_confirm.ogg");
-pub const HUB_THEME:  &[u8] = include_bytes!("sounds/hub_theme.ogg");
 ```
 
 `engine-audio` holds a decode-once cache mirroring `asset_cache.rs` exactly, including its load-bearing safety invariant — **the key is always `bytes.as_ptr() as usize`, never the decoded object's address** (a `'static` slice lives in rodata for the whole process and can't be freed/reused; a decoded heap allocation's address can be, which is why keying on it would be unsound):
@@ -135,7 +134,7 @@ impl Fade {
 | 4–7. Buses, volume/mute, music loop/crossfade, SFX, fades | **Engine** | `crates/engine/audio/src/backend.rs`, `lib.rs` |
 | 3. Sound-byte consts | **Game** | `crates/game/src/sounds.rs` (new), `crates/game/src/sounds/*.ogg` (new) |
 | 8. `engine_audio::init()` at startup | **Game** | `crates/game/src/main.rs` |
-| Scope. Music loop in `enter` + click SFX in `handle_input` | **Game** | `crates/game/src/scenes/main_hub.rs` |
+| Scope. Click SFX in `handle_input` | **Game** | `crates/game/src/scenes/main_hub.rs` |
 
 Hard invariants respected (per CLAUDE.md / `31-engine-game-crate-split`): `engine-audio` contains **no `include_bytes!`-bundled sound files**, **no closed enum of concrete sounds**, and **no path dependency on `crates/game`** — exactly the rules that keep `engine-render` content-free. The bytes, and the choice of which sound plays when, live in `crates/game`.
 
@@ -148,7 +147,7 @@ CI has no audio device, so the default test path exercises the `Silent` backend 
 - `MusicOpts { loop_region: Some(3.5..), .. }` constructs a kira loop region with the expected start (unit-level, no device).
 
 **Verification requirements (beyond the automated gate — passing tests ≠ working software):**
-- On a real machine with audio, manually confirm all four audible behaviors and record the result: (1) looping music actually loops seamlessly at its loop point, (2) a one-shot SFX fires on a keypress with no perceptible latency, (3) several SFX overlapping mix without clipping/dropping, (4) a music crossfade on scene change is smooth, not a hard cut. Not "done" until heard.
+- On a real machine with audio, manually confirm and record the in-app audible behavior: a one-shot SFX fires on a menu keypress with no perceptible latency, and several overlapping SFX mix without clipping/dropping. Not "done" until heard. (Music playback — seamless loop points and crossfade — is implemented in `engine-audio` and covered by the crate's headless unit tests; it is not wired into a scene, so it is not part of the in-app manual check.)
 - Confirm the one wired-in scene sound is audible in the real app (`cargo run -p game`), not merely present in a test.
 
 ## Open Questions / TBDs
