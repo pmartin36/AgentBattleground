@@ -7,6 +7,7 @@ pub mod instructions;
 pub mod mention;
 pub mod scene_id;
 pub mod scenes;
+pub mod sounds;
 pub mod squad_role;
 pub mod stamina;
 pub mod stats;

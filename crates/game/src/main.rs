@@ -10,6 +10,7 @@ fn main() -> io::Result<()> {
         version = env!("CARGO_PKG_VERSION"),
         "agent battleground starting"
     );
+    engine_audio::init();
 
     match game::cli::resolve_boot(std::env::args().skip(1)) {
         Ok((id, params)) => game::app::run_with_params(game::registry::construct(id), params),

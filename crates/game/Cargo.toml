@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 engine-core = { path = "../engine/core" }
 engine-render = { path = "../engine/render" }
+engine-audio = { path = "../engine/audio" }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 serde = { workspace = true }

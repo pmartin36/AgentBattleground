@@ -12,6 +12,7 @@ use engine_render::{
     flex, Align, Basis, Button, ButtonState, Direction, FlexChild, FlexStyle, Justify,
 };
 
+use engine_audio::{play_music, play_sfx, Fade, MusicOpts};
 use engine_core::scene::{EngineCtx, InputEvent, Scene, Transition};
 use crate::scene_id::SceneId;
 
@@ -262,7 +263,12 @@ impl Scene for MainHub {
         SceneId::MainHub.into()
     }
 
-    fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {}
+    fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {
+        play_music(
+            crate::sounds::HUB_THEME,
+            MusicOpts { loop_region: None, fade_in: Fade::ms(600), volume: 1.0 },
+        );
+    }
 
     fn update(&mut self, _ctx: &mut EngineCtx, _dt: Duration) -> Option<Transition> {
         None
@@ -293,14 +299,19 @@ impl Scene for MainHub {
         match ev {
             InputEvent::Key(key) => match key.code {
                 KeyCode::Up => {
+                    play_sfx(crate::sounds::UI_CONFIRM);
                     let n = self.buttons.len();
                     self.cursor_index = (self.cursor_index + n - 1) % n;
                 }
                 KeyCode::Down => {
+                    play_sfx(crate::sounds::UI_CONFIRM);
                     let n = self.buttons.len();
                     self.cursor_index = (self.cursor_index + 1) % n;
                 }
-                KeyCode::Enter | KeyCode::Char(' ') => return self.activate(self.cursor_index),
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    play_sfx(crate::sounds::UI_CONFIRM);
+                    return self.activate(self.cursor_index);
+                }
                 _ => {}
             },
             InputEvent::Mouse(me) => {
