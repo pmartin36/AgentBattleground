@@ -1,13 +1,13 @@
-//! Ability hover tooltip (spec 49). This module lands incrementally:
-//! b1-t1 = scaffold + tunable constants + pill color palette only.
-//! No rendering/geometry lives here yet (b2).
-
-// Constants and palette fns below are consumed by b2 (geometry/pill
-// rendering) and b3 (wiring) — not yet called from any production path.
-// Suppress dead_code until that wiring lands.
+//! Ability hover tooltip (spec 49). Composition root: owns the card layout
+//! ([`layout_tooltip`]/[`present_rows`]) and the overlay render
+//! ([`render_tooltip`] + the per-row fillers), and pulls the pill capsule
+//! ([`pills`]) and its color palette ([`palette`]) from sibling submodules.
 #![allow(dead_code)]
 
-use crate::ability::{Ability, AbilityType, DamageClass, Element, StatusEffect};
+mod palette;
+mod pills;
+
+use crate::ability::{Ability, StatusEffect};
 use engine_core::color::Rgba;
 use engine_render::dots::Dot;
 use engine_render::{
@@ -17,6 +17,9 @@ use engine_render::{
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
+
+use palette::{ability_type_color, class_color, element_color};
+use pills::{pill, pill_width_dots, INTER_PILL_GAP_CELLS, PILL_HEIGHT_CELLS};
 
 /// Tooltip card width (spec:26). Placeholder — tunable. Wide enough that the
 /// full three-pill row (ability_type/element/class, each padded
@@ -32,114 +35,6 @@ pub(super) const INTERIOR_PADDING_CELLS: u16 = 1;
 /// margin cell between the card frame and every content row (1 cell clears the
 /// frame, the second is the visible margin).
 pub(super) const INTERIOR_PADDING_H_CELLS: u16 = 2;
-/// Corner radius (dots) for the pill capsule ends — 2 for visibly rounded
-/// caps that close onto the over/underline (the fixed chamfer now lights the
-/// diagonal connector dot, so radius 2 reads clean). Explicit deviation from
-/// the chamfer-1 house default, per the pill design.
-pub(super) const PILL_CORNER_RADIUS_DOTS: usize = 2;
-/// Pill height — 3 cells: an overline row, the text row, and an underline
-/// row. Braille border dots can't share a cell with the terminal-text label,
-/// so the dot lines above/below the text live in the adjacent cells.
-pub(super) const PILL_HEIGHT_CELLS: u16 = 3;
-/// Gap between adjacent pills in the pill row.
-pub(super) const INTER_PILL_GAP_CELLS: u16 = 1;
-/// Pill capsule border ring thickness (dots).
-pub(super) const PILL_BORDER_THICKNESS_DOTS: usize = 1;
-/// Pill label text color — a legible fg over the tinted capsule (never
-/// `Style::default()`'s unset `Color::Reset`; see `lib.rs::label`'s caveat).
-pub(super) const PILL_TEXT_COLOR: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
-
-/// Maps an [`Element`] to its starter pill color. Exhaustive match — a
-/// future variant fails to compile rather than silently falling through.
-pub(super) fn element_color(element: Element) -> Rgba {
-    match element {
-        Element::Fire => Rgba::rgb(0xff, 0x8c, 0x00),
-        Element::Water => Rgba::rgb(0x1e, 0x90, 0xff),
-        Element::Earth => Rgba::rgb(0x2e, 0x8b, 0x57),
-        Element::Lightning => Rgba::rgb(0xff, 0xd7, 0x00),
-        Element::Normal => Rgba::rgb(0x9e, 0x9e, 0x9e),
-    }
-}
-
-/// Maps an [`AbilityType`] to its starter pill color. Exhaustive match.
-pub(super) fn ability_type_color(ability_type: AbilityType) -> Rgba {
-    match ability_type {
-        AbilityType::Attack => Rgba::rgb(0xd0, 0x30, 0x30),
-        AbilityType::Buff => Rgba::rgb(0x3c, 0xb3, 0x71),
-        AbilityType::Debuff => Rgba::rgb(0x8a, 0x2b, 0xe2),
-    }
-}
-
-/// Maps a [`DamageClass`] to its starter pill color. Exhaustive match.
-pub(super) fn class_color(class: DamageClass) -> Rgba {
-    match class {
-        DamageClass::Physical => Rgba::rgb(0xd2, 0xb4, 0x8c),
-        DamageClass::Magic => Rgba::rgb(0x94, 0x00, 0xd3),
-    }
-}
-
-/// A rounded capsule ("pill") hugging its centered `text`: a 6-dot-tall
-/// capsule centered in the 3-cell `rect` with solid tinted, rounded END CAPS
-/// on the left and right, an OVERLINE (top row) and UNDERLINE (bottom row)
-/// across the full width, and a `Transparent` centre so the (white) label
-/// stays legible. Built by filling the capsule and clearing the central
-/// interior, leaving the caps and top/bottom rows lit. `rect` is dot-precise;
-/// the label is placed at the floored cell rect (plain terminal text is
-/// cell-quantized). A zero-area `rect` draws nothing and does not panic.
-pub(super) fn pill(buf: &mut Buffer, rect: DotRect, text: &str, color: Rgba) {
-    let cr = rect.to_cell_rect();
-    if cr.width == 0 || cr.height == 0 {
-        return;
-    }
-
-    let w_dots = cr.width as usize * 2;
-    let box_h: usize = 6;
-    let mut dots = ui_primitives::rounded_rect(
-        w_dots,
-        box_h,
-        PILL_BORDER_THICKNESS_DOTS,
-        PILL_CORNER_RADIUS_DOTS,
-        color,
-        Dot::Lit(color),
-    );
-    // Clear the central interior (between the end caps, below the overline and
-    // above the underline) so the caps stay solid, the top/bottom rows stay as
-    // the over/underline, and the middle is transparent behind the label.
-    let cap_w = (PILL_H_PAD_CELLS as usize * 2).min(w_dots / 2);
-    let inner_top = PILL_BORDER_THICKNESS_DOTS;
-    let inner_bot = box_h.saturating_sub(PILL_BORDER_THICKNESS_DOTS);
-    for row in inner_top..inner_bot {
-        for col in cap_w..w_dots.saturating_sub(cap_w) {
-            dots.set(col, row, Dot::Transparent);
-        }
-    }
-    // Clip the outermost dot column of each cap — its 2-dot flat vertical edge
-    // reads angular; dropping it tapers the cap to the chamfered diagonal so it
-    // reads rounder.
-    if w_dots > 0 {
-        for row in 0..box_h {
-            dots.set(0, row, Dot::Transparent);
-            dots.set(w_dots - 1, row, Dot::Transparent);
-        }
-    }
-    crate::scenes::post_battle::columns::blit_dots(
-        buf,
-        DotRect { x: cr.x as i32 * 2, y: cr.y as i32 * 4 + 3, w: w_dots as i32, h: box_h as i32 },
-        &dots,
-    );
-
-    label(
-        buf,
-        cr,
-        text,
-        TextAlign::Center,
-        Style::default().fg(Color::Rgb(
-            PILL_TEXT_COLOR.r,
-            PILL_TEXT_COLOR.g,
-            PILL_TEXT_COLOR.b,
-        )),
-    );
-}
 
 /// Max flavor-text lines the card reserves (spec:33 clips flavor to 2 rows).
 pub(super) const FLAVOR_MAX_LINES: u16 = 2;
@@ -166,14 +61,6 @@ pub(super) const CARD_TEXT_COLOR: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
 pub(super) const FIELD_LABEL_COLOR: Rgba = Rgba::rgb(0x8f, 0xa8, 0xc8);
 /// Flavor-text color — gray, de-emphasized under the field rows.
 pub(super) const FLAVOR_TEXT_COLOR: Rgba = Rgba::rgb(0x9e, 0x9e, 0x9e);
-/// Horizontal padding (cells) each side of a pill label, inside the pill.
-/// 2 cells (not 1) so at least one dot column of the tinted border/fill
-/// clears `PILL_CORNER_RADIUS_DOTS`'s chamfer and survives outside the
-/// centered text glyphs (the leftmost/rightmost pill cell is fully
-/// chamfered on every row when the radius is 3 dots — see `pill_width_dots`).
-pub(super) const PILL_H_PAD_CELLS: u16 = 2;
-/// Minimum pill width (cells) so a shrunk pill never fully chamfers away.
-pub(super) const MIN_PILL_WIDTH_CELLS: u16 = 4;
 
 /// Which content rows a tooltip card may show, in fixed top-to-bottom order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,14 +105,6 @@ pub(super) fn present_rows(ability: &Ability) -> Vec<TooltipRow> {
     rows
 }
 
-/// Computes the tooltip card's outer `DotRect` (fixed width, content-driven
-/// height) and each present row's rect, laid out via `engine_render::flex`
-/// (Column) over a 1-cell-inset interior, anchored so the card's
-/// bottom-right corner sits `ANCHOR_GAP_CELLS` cells above-left of
-/// `hovered_cell`'s top-left corner — no clamp. A single `Fixed` spacer
-/// child of `PRE_FLAVOR_GAP_CELLS*4` dots is inserted before Flavor when
-/// Flavor is present and at least one row precedes it; the spacer never
-/// appears in the returned `rows`.
 /// Fixed content height (cells) for one present row. Exhaustive match — a
 /// future `TooltipRow` variant fails to compile rather than defaulting to a
 /// wrong height.
@@ -239,6 +118,14 @@ fn row_height_cells(row: TooltipRow, ability: &Ability) -> u16 {
     }
 }
 
+/// Computes the tooltip card's outer `DotRect` (fixed width, content-driven
+/// height) and each present row's rect, laid out via `engine_render::flex`
+/// (Column) over a 1-cell-inset interior, anchored so the card's
+/// bottom-right corner sits `ANCHOR_GAP_CELLS` cells above-left of
+/// `hovered_cell`'s top-left corner — no clamp. A single `Fixed` spacer
+/// child of `PRE_FLAVOR_GAP_CELLS*4` dots is inserted before Flavor when
+/// Flavor is present and at least one row precedes it; the spacer never
+/// appears in the returned `rows`.
 pub(super) fn layout_tooltip(ability: &Ability, hovered_cell: DotRect) -> TooltipLayout {
     let rows = present_rows(ability);
     // Flavor is always the last present row (fixed order); the gap only
@@ -546,158 +433,12 @@ fn draw_labeled_value(
     }
 }
 
-/// A pill's fixed main-axis width in dots: label chars + padding each side,
-/// floored at `MIN_PILL_WIDTH_CELLS` so a shrunk pill never fully chamfers
-/// away.
-fn pill_width_dots(label: &str) -> i32 {
-    ((label.chars().count() as u16 + PILL_H_PAD_CELLS * 2).max(MIN_PILL_WIDTH_CELLS) as i32) * 2
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ability::StatusEffect;
+    use crate::ability::{AbilityType, DamageClass, Element, StatusEffect};
     use crate::scenes::test_util::{lit_dot_color, rect_text};
     use ratatui::layout::Rect;
-
-    #[test]
-    fn element_color_maps_fire_to_orange() {
-        assert_eq!(element_color(Element::Fire), Rgba::rgb(0xff, 0x8c, 0x00));
-    }
-
-    #[test]
-    fn element_color_maps_water_to_blue() {
-        assert_eq!(element_color(Element::Water), Rgba::rgb(0x1e, 0x90, 0xff));
-    }
-
-    #[test]
-    fn element_color_maps_earth_to_green() {
-        assert_eq!(element_color(Element::Earth), Rgba::rgb(0x2e, 0x8b, 0x57));
-    }
-
-    #[test]
-    fn element_color_maps_lightning_to_yellow() {
-        assert_eq!(element_color(Element::Lightning), Rgba::rgb(0xff, 0xd7, 0x00));
-    }
-
-    #[test]
-    fn element_color_maps_normal_to_grey() {
-        assert_eq!(element_color(Element::Normal), Rgba::rgb(0x9e, 0x9e, 0x9e));
-    }
-
-    #[test]
-    fn ability_type_color_maps_attack_to_red() {
-        assert_eq!(
-            ability_type_color(AbilityType::Attack),
-            Rgba::rgb(0xd0, 0x30, 0x30)
-        );
-    }
-
-    #[test]
-    fn ability_type_color_maps_buff_to_green() {
-        assert_eq!(
-            ability_type_color(AbilityType::Buff),
-            Rgba::rgb(0x3c, 0xb3, 0x71)
-        );
-    }
-
-    #[test]
-    fn ability_type_color_maps_debuff_to_purple() {
-        assert_eq!(
-            ability_type_color(AbilityType::Debuff),
-            Rgba::rgb(0x8a, 0x2b, 0xe2)
-        );
-    }
-
-    #[test]
-    fn class_color_maps_physical_to_tan() {
-        assert_eq!(class_color(DamageClass::Physical), Rgba::rgb(0xd2, 0xb4, 0x8c));
-    }
-
-    #[test]
-    fn class_color_maps_magic_to_violet() {
-        assert_eq!(class_color(DamageClass::Magic), Rgba::rgb(0x94, 0x00, 0xd3));
-    }
-
-    #[test]
-    fn all_palette_colors_are_opaque() {
-        assert_eq!(element_color(Element::Fire).a, 0xFF);
-        assert_eq!(ability_type_color(AbilityType::Attack).a, 0xFF);
-        assert_eq!(class_color(DamageClass::Physical).a, 0xFF);
-    }
-
-    // ---------------------------------------------------------------- pill
-
-    /// The capsule is a tinted OUTLINE: the overline (top edge, dot row 3) and
-    /// underline (bottom edge, dot row 8) decode to `color`, and the interior
-    /// (dot row 5) is transparent — not a filled chip. Empty `text` so no glyph
-    /// overwrites the sampled dots. Pill is 3 cells tall (6-cell × 3-cell rect).
-    #[test]
-    fn pill_outline_over_underline_lit_interior_transparent() {
-        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 3));
-        let rect = DotRect { x: 0, y: 0, w: 12, h: 12 };
-        let color = Rgba::rgb(0x11, 0x22, 0x33);
-
-        pill(&mut buf, rect, "", color);
-
-        assert_eq!(lit_dot_color(&buf, 5, 3), Some(color), "overline (top edge) dot must be lit");
-        assert_eq!(lit_dot_color(&buf, 5, 8), Some(color), "underline (bottom edge) dot must be lit");
-        assert_eq!(lit_dot_color(&buf, 5, 5), None, "interior must be transparent (outline, not filled)");
-    }
-
-    /// The capsule's outermost corner dot is chamfered (transparent/unlit)
-    /// while a mid-edge dot on the same overline row is lit — proving rounded,
-    /// not square, caps.
-    #[test]
-    fn pill_chamfered_corner_is_unlit_while_mid_edge_is_lit() {
-        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 3));
-        let rect = DotRect { x: 0, y: 0, w: 12, h: 12 };
-        let color = Rgba::rgb(0x11, 0x22, 0x33);
-
-        pill(&mut buf, rect, "", color);
-
-        assert_eq!(
-            lit_dot_color(&buf, 0, 3),
-            None,
-            "outermost corner dot must be chamfered (unlit)"
-        );
-        assert_eq!(
-            lit_dot_color(&buf, 5, 3),
-            Some(color),
-            "mid-edge dot on the same overline row must be lit"
-        );
-    }
-
-    /// `text` is drawn centered inside the capsule's cell rect.
-    #[test]
-    fn pill_label_centered() {
-        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 1));
-        let rect = DotRect { x: 0, y: 0, w: 20, h: 4 };
-        let color = Rgba::rgb(0x11, 0x22, 0x33);
-
-        pill(&mut buf, rect, "Hi", color);
-
-        assert_eq!(buf.cell((4, 0)).unwrap().symbol(), "H");
-        assert_eq!(buf.cell((5, 0)).unwrap().symbol(), "i");
-    }
-
-    /// A zero-area `rect` draws nothing and does not panic.
-    #[test]
-    fn pill_zero_area_rect_draws_nothing_and_does_not_panic() {
-        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
-        let rect = DotRect { x: 0, y: 0, w: 0, h: 0 };
-        let color = Rgba::rgb(0x11, 0x22, 0x33);
-
-        pill(&mut buf, rect, "text", color);
-
-        for x in 0..4 {
-            assert_eq!(
-                buf.cell((x, 0)).unwrap().symbol(),
-                " ",
-                "cell ({x},0) must remain blank"
-            );
-        }
-    }
 
     // ------------------------------------------------ present_rows / layout
 
