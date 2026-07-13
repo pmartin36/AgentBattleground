@@ -61,8 +61,16 @@ fn wrap_rows_splits_overlong_token_into_char_chunks() {
     assert_eq!(
         rows,
         vec![
-            WrapRow { line: 0, start: 0, end: 4 },
-            WrapRow { line: 0, start: 4, end: 8 },
+            WrapRow {
+                line: 0,
+                start: 0,
+                end: 4
+            },
+            WrapRow {
+                line: 0,
+                start: 4,
+                end: 8
+            },
         ]
     );
 }
@@ -71,7 +79,14 @@ fn wrap_rows_splits_overlong_token_into_char_chunks() {
 fn wrap_rows_empty_line_yields_single_empty_row() {
     let editor = TextEditor::new(config());
     let rows = editor.wrap_rows(10);
-    assert_eq!(rows, vec![WrapRow { line: 0, start: 0, end: 0 }]);
+    assert_eq!(
+        rows,
+        vec![WrapRow {
+            line: 0,
+            start: 0,
+            end: 0
+        }]
+    );
 }
 
 #[test]
@@ -86,8 +101,16 @@ fn wrap_rows_preserves_literal_spaces_as_a_partition() {
     assert_eq!(
         rows,
         vec![
-            WrapRow { line: 0, start: 0, end: 3 },
-            WrapRow { line: 0, start: 3, end: 6 },
+            WrapRow {
+                line: 0,
+                start: 0,
+                end: 3
+            },
+            WrapRow {
+                line: 0,
+                start: 3,
+                end: 6
+            },
         ]
     );
 }
@@ -152,10 +175,19 @@ fn key(code: KeyCode) -> KeyEvent {
 #[test]
 fn typing_chars_then_backspace_mutates_buffer_and_returns_changed() {
     let mut editor = TextEditor::new(config());
-    assert_eq!(editor.handle_key(key(KeyCode::Char('h'))), EditorEvent::Changed);
-    assert_eq!(editor.handle_key(key(KeyCode::Char('i'))), EditorEvent::Changed);
+    assert_eq!(
+        editor.handle_key(key(KeyCode::Char('h'))),
+        EditorEvent::Changed
+    );
+    assert_eq!(
+        editor.handle_key(key(KeyCode::Char('i'))),
+        EditorEvent::Changed
+    );
     assert_eq!(editor.text(), "hi");
-    assert_eq!(editor.handle_key(key(KeyCode::Backspace)), EditorEvent::Changed);
+    assert_eq!(
+        editor.handle_key(key(KeyCode::Backspace)),
+        EditorEvent::Changed
+    );
     assert_eq!(editor.text(), "h");
 }
 
@@ -188,7 +220,10 @@ fn enter_without_submit_on_enter_inserts_newline_splitting_at_caret() {
 #[test]
 fn backspace_at_buffer_start_returns_none_and_leaves_text_empty() {
     let mut editor = TextEditor::new(config());
-    assert_eq!(editor.handle_key(key(KeyCode::Backspace)), EditorEvent::None);
+    assert_eq!(
+        editor.handle_key(key(KeyCode::Backspace)),
+        EditorEvent::None
+    );
     assert_eq!(editor.text(), "");
 }
 
@@ -198,7 +233,10 @@ fn delete_at_end_of_non_last_line_merges_next_line_up() {
     editor.set_text("ab\ncd");
     editor.cursor_line = 0;
     editor.cursor_col = 2; // end of "ab"
-    assert_eq!(editor.handle_key(key(KeyCode::Delete)), EditorEvent::Changed);
+    assert_eq!(
+        editor.handle_key(key(KeyCode::Delete)),
+        EditorEvent::Changed
+    );
     assert_eq!(editor.text(), "abcd");
 }
 
@@ -474,7 +512,14 @@ fn make_buf(w: u16, h: u16) -> Buffer {
 /// spaces stripped, for row-by-row wrap assertions.
 fn row_text(buf: &Buffer, rect: Rect, y: u16) -> String {
     (rect.left()..rect.right())
-        .map(|x| buf.cell((x, y)).unwrap().symbol().chars().next().unwrap_or(' '))
+        .map(|x| {
+            buf.cell((x, y))
+                .unwrap()
+                .symbol()
+                .chars()
+                .next()
+                .unwrap_or(' ')
+        })
         .collect::<String>()
         .trim_end()
         .to_string()
@@ -503,7 +548,11 @@ fn caret_cell_is_reverse_video_and_preserves_underlying_char() {
         caret.modifier.contains(Modifier::REVERSED),
         "caret cell must carry REVERSED for the block-cursor effect"
     );
-    assert_eq!(caret.symbol(), " ", "caret must not overwrite/blank an existing char");
+    assert_eq!(
+        caret.symbol(),
+        " ",
+        "caret must not overwrite/blank an existing char"
+    );
 
     // The written text cells themselves are not reverse-video.
     let h_cell = buf.cell((0, 0)).unwrap();
@@ -515,8 +564,8 @@ fn caret_cell_is_reverse_video_and_preserves_underlying_char() {
 fn long_line_occupies_expected_display_rows() {
     let mut editor = TextEditor::new(config());
     editor.set_text("one two three"); // wraps to 3 rows @ width 6
-    // Height (5) exceeds the 3 wrapped rows so content fits vertically —
-    // no scrollbar/gutter, full width available (stable across b3-t2).
+                                      // Height (5) exceeds the 3 wrapped rows so content fits vertically —
+                                      // no scrollbar/gutter, full width available (stable across b3-t2).
     let rect = Rect::new(0, 0, 6, 5);
     let mut buf = make_buf(6, 5);
 
@@ -525,7 +574,11 @@ fn long_line_occupies_expected_display_rows() {
     assert_eq!(row_text(&buf, rect, 0), "one");
     assert_eq!(row_text(&buf, rect, 1), "two");
     assert_eq!(row_text(&buf, rect, 2), "three");
-    assert_eq!(row_text(&buf, rect, 3), "", "row past the last wrapped row must be blank");
+    assert_eq!(
+        row_text(&buf, rect, 3),
+        "",
+        "row past the last wrapped row must be blank"
+    );
 }
 
 #[test]
@@ -544,7 +597,10 @@ fn empty_focused_editor_renders_placeholder_and_caret_at_origin() {
     // A focused empty editor draws the caret at position 0 — so clicking into
     // an empty box shows a visible cursor rather than nothing.
     assert!(
-        buf.cell((0, 0)).unwrap().modifier.contains(Modifier::REVERSED),
+        buf.cell((0, 0))
+            .unwrap()
+            .modifier
+            .contains(Modifier::REVERSED),
         "a focused empty editor must draw the caret at the origin"
     );
     for x in rect.left()..rect.right() {
@@ -553,7 +609,10 @@ fn empty_focused_editor_renders_placeholder_and_caret_at_origin() {
                 continue;
             }
             assert!(
-                !buf.cell((x, y)).unwrap().modifier.contains(Modifier::REVERSED),
+                !buf.cell((x, y))
+                    .unwrap()
+                    .modifier
+                    .contains(Modifier::REVERSED),
                 "the caret must only appear at the origin"
             );
         }
@@ -572,7 +631,10 @@ fn empty_unfocused_editor_draws_no_caret() {
     for x in rect.left()..rect.right() {
         for y in rect.top()..rect.bottom() {
             assert!(
-                !buf.cell((x, y)).unwrap().modifier.contains(Modifier::REVERSED),
+                !buf.cell((x, y))
+                    .unwrap()
+                    .modifier
+                    .contains(Modifier::REVERSED),
                 "an unfocused empty editor must not draw a caret"
             );
         }
@@ -623,7 +685,10 @@ fn overflowing_content_draws_thumb_only_in_rightmost_column() {
     // it is empty.
     let x = rect.right() - 1;
     let (top_mask, _) = decode_braille_cell(&buf, x, 0).expect("top cell must carry the thumb");
-    assert_eq!(top_mask, 0xFF, "thumb fills the top cell (both dot columns) at offset 0");
+    assert_eq!(
+        top_mask, 0xFF,
+        "thumb fills the top cell (both dot columns) at offset 0"
+    );
     assert!(
         decode_braille_cell(&buf, x, 1).is_none(),
         "no full-height track: the cell below the thumb is empty at offset 0"
@@ -647,7 +712,10 @@ fn thumb_moves_down_as_scroll_offset_increases() {
     );
     let (bottom_mask, _) =
         decode_braille_cell(&buf2, x, 1).expect("bottom cell must carry the thumb");
-    assert_eq!(bottom_mask, 0xFF, "thumb is flush to the bottom cell at max scroll offset");
+    assert_eq!(
+        bottom_mask, 0xFF,
+        "thumb is flush to the bottom cell at max scroll offset"
+    );
 }
 
 #[test]
@@ -687,7 +755,10 @@ fn grow_desired_rows_tracks_wrap_count_as_width_narrows() {
     let narrow = editor.desired_rows(6);
 
     assert_eq!(wide, 1, "fits on one row at a wide width");
-    assert_eq!(narrow, 3, "wraps to 3 rows at width 6, matching wrap_rows(6)");
+    assert_eq!(
+        narrow, 3,
+        "wraps to 3 rows at width 6, matching wrap_rows(6)"
+    );
     assert!(narrow > wide, "narrower width wraps to more rows");
 }
 
@@ -696,7 +767,11 @@ fn grow_desired_rows_clamps_to_max_rows() {
     let mut editor = TextEditor::new(grow_config(3));
     editor.set_text("a\nb\nc\nd\ne\nf"); // 6 single-char logical lines -> 6 display rows at width 6
 
-    assert_eq!(editor.desired_rows(6), 3, "clamped to max_rows even though content wraps to 6 rows");
+    assert_eq!(
+        editor.desired_rows(6),
+        3,
+        "clamped to max_rows even though content wraps to 6 rows"
+    );
 }
 
 #[test]
@@ -706,22 +781,37 @@ fn grow_at_max_rows_still_allows_scrolling_past_cap() {
     editor.viewport_width = 6;
     editor.viewport_height = 3; // caller sized the rect to desired_rows(6) == 3
 
-    assert_eq!(editor.desired_rows(6), 3, "reporting stays capped at max_rows");
+    assert_eq!(
+        editor.desired_rows(6),
+        3,
+        "reporting stays capped at max_rows"
+    );
     assert_eq!(
         editor.max_scroll_offset(),
         editor.total_display_rows() - 3,
         "content beyond max_rows is still reachable by scrolling"
     );
-    assert!(editor.max_scroll_offset() > 0, "there is scrollable overflow beyond the cap");
+    assert!(
+        editor.max_scroll_offset() > 0,
+        "there is scrollable overflow beyond the cap"
+    );
 }
 
 #[test]
 fn desired_rows_never_returns_zero_for_empty_editor() {
     let grow_empty = TextEditor::new(grow_config(5));
-    assert_eq!(grow_empty.desired_rows(10), 1, "empty Grow editor floors to 1");
+    assert_eq!(
+        grow_empty.desired_rows(10),
+        1,
+        "empty Grow editor floors to 1"
+    );
 
     let fixed_empty = TextEditor::new(config());
-    assert_eq!(fixed_empty.desired_rows(10), 1, "empty Fixed editor floors to 1");
+    assert_eq!(
+        fixed_empty.desired_rows(10),
+        1,
+        "empty Fixed editor floors to 1"
+    );
 }
 
 #[test]
@@ -729,7 +819,11 @@ fn fixed_desired_rows_is_uncapped_natural_wrap_count() {
     let mut editor = TextEditor::new(config()); // Sizing::Fixed
     editor.set_text("a\nb\nc\nd\ne\nf"); // 6 display rows at width 6
 
-    assert_eq!(editor.desired_rows(6), 6, "Fixed reports the natural wrapped row count, no cap");
+    assert_eq!(
+        editor.desired_rows(6),
+        6,
+        "Fixed reports the natural wrapped row count, no cap"
+    );
 }
 
 // --- b1-t1: slow cursor blink — accumulator, tick, focus flag, render gating ---
@@ -739,13 +833,19 @@ fn caret_visible_at_phase_zero_when_focused_and_render_shows_reversed_cell() {
     let mut editor = TextEditor::new(config());
     editor.set_text("hi"); // caret lands at end (col 2)
 
-    assert!(editor.caret_visible(), "caret must be visible at phase 0 on a focused editor");
+    assert!(
+        editor.caret_visible(),
+        "caret must be visible at phase 0 on a focused editor"
+    );
 
     let rect = Rect::new(0, 0, 10, 3);
     let mut buf = make_buf(10, 3);
     editor.render(&mut buf, rect);
     let caret = buf.cell((2, 0)).unwrap();
-    assert!(caret.modifier.contains(Modifier::REVERSED), "caret cell must be reverse-video at phase 0");
+    assert!(
+        caret.modifier.contains(Modifier::REVERSED),
+        "caret cell must be reverse-video at phase 0"
+    );
 }
 
 #[test]
@@ -754,7 +854,10 @@ fn tick_half_period_hides_caret_and_render_omits_reversed_cell() {
     editor.set_text("hi");
 
     editor.tick(BLINK_PERIOD);
-    assert!(!editor.caret_visible(), "caret must be hidden once accumulator reaches the second half");
+    assert!(
+        !editor.caret_visible(),
+        "caret must be hidden once accumulator reaches the second half"
+    );
 
     let rect = Rect::new(0, 0, 10, 3);
     let mut buf = make_buf(10, 3);
@@ -771,11 +874,17 @@ fn edit_during_hidden_phase_resets_caret_to_visible() {
     let mut editor = TextEditor::new(config());
     editor.set_text("hi");
     editor.tick(BLINK_PERIOD);
-    assert!(!editor.caret_visible(), "precondition: caret is hidden before the edit");
+    assert!(
+        !editor.caret_visible(),
+        "precondition: caret is hidden before the edit"
+    );
 
     editor.handle_key(key(KeyCode::Char('x')));
 
-    assert!(editor.caret_visible(), "any edit must reset the blink phase back to visible");
+    assert!(
+        editor.caret_visible(),
+        "any edit must reset the blink phase back to visible"
+    );
 }
 
 #[test]
@@ -786,21 +895,32 @@ fn unfocused_editor_renders_no_caret_while_focused_one_does() {
     let mut focused_buf = make_buf(10, 3);
     focused.render(&mut focused_buf, rect);
     assert!(
-        focused_buf.cell((2, 0)).unwrap().modifier.contains(Modifier::REVERSED),
+        focused_buf
+            .cell((2, 0))
+            .unwrap()
+            .modifier
+            .contains(Modifier::REVERSED),
         "a focused editor at phase 0 must render a caret"
     );
 
     let mut unfocused = TextEditor::new(config());
     unfocused.set_text("hi");
     unfocused.set_focused(false);
-    assert!(!unfocused.caret_visible(), "an unfocused editor must never report the caret visible");
+    assert!(
+        !unfocused.caret_visible(),
+        "an unfocused editor must never report the caret visible"
+    );
 
     let mut unfocused_buf = make_buf(10, 3);
     unfocused.render(&mut unfocused_buf, rect);
     for x in rect.left()..rect.right() {
         for y in rect.top()..rect.bottom() {
             assert!(
-                !unfocused_buf.cell((x, y)).unwrap().modifier.contains(Modifier::REVERSED),
+                !unfocused_buf
+                    .cell((x, y))
+                    .unwrap()
+                    .modifier
+                    .contains(Modifier::REVERSED),
                 "an unfocused editor must render NO caret anywhere in its rect"
             );
         }
@@ -891,7 +1011,10 @@ fn click_row_past_content_clamps_to_last_wrapped_row() {
         editor.viewport_y + local_row as u16,
     ));
 
-    assert!(handled, "a click below content but inside the rect must still report handled");
+    assert!(
+        handled,
+        "a click below content but inside the rect must still report handled"
+    );
     assert_eq!((editor.cursor_line, editor.cursor_col), expected);
 }
 
@@ -926,7 +1049,11 @@ fn click_outside_content_rect_is_ignored() {
         editor.viewport_y,
     )));
 
-    assert_eq!(editor.text(), text_before, "an out-of-rect click must not mutate the buffer");
+    assert_eq!(
+        editor.text(),
+        text_before,
+        "an out-of-rect click must not mutate the buffer"
+    );
     assert_eq!(
         (editor.cursor_line, editor.cursor_col),
         cursor_before,
@@ -938,7 +1065,10 @@ fn click_outside_content_rect_is_ignored() {
 fn click_to_place_resets_blink_to_visible() {
     let mut editor = clickable_editor();
     editor.tick(BLINK_PERIOD);
-    assert!(!editor.caret_visible(), "precondition: caret hidden before click");
+    assert!(
+        !editor.caret_visible(),
+        "precondition: caret hidden before click"
+    );
 
     let handled = editor.handle_mouse(&mouse_at(
         MouseEventKind::Down(MouseButton::Left),
@@ -947,5 +1077,8 @@ fn click_to_place_resets_blink_to_visible() {
     ));
 
     assert!(handled, "an in-content click must report handled");
-    assert!(editor.caret_visible(), "an in-content click must reset the blink phase to visible");
+    assert!(
+        editor.caret_visible(),
+        "an in-content click must reset the blink phase to visible"
+    );
 }

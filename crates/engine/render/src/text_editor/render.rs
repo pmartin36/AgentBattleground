@@ -18,6 +18,13 @@ const SCROLLBAR_COLOR: Rgba = Rgba::rgb(0x5a, 0x5a, 0x5a);
 /// stay visually distinguishable where they overlap.
 pub(super) const SELECTION_BG: Color = Color::Rgb(0x2f, 0x4f, 0x6f);
 
+/// Mention-popup panel border ink (dot pipeline). b1-t3.
+pub(super) const MENTION_BORDER: Rgba = Rgba::rgb(0x8a, 0x8a, 0x8a);
+
+/// Mention-popup highlighted-row background tint; distinct from
+/// `SELECTION_BG`. b1-t3.
+pub(super) const MENTION_HIGHLIGHT_BG: Color = Color::Rgb(0x3a, 0x5a, 0x8a);
+
 impl TextEditor {
     /// Total wrapped display rows at the current cached viewport width.
     pub(super) fn total_display_rows(&self) -> usize {
@@ -73,8 +80,17 @@ impl TextEditor {
         self.scroll_offset = self.scroll_offset.min(self.max_scroll_offset());
 
         if self.text().is_empty() {
-            let style = Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM);
-            crate::wrapped_text(buf, rect, &self.config.placeholder, crate::TextAlign::Left, style, false);
+            let style = Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM);
+            crate::wrapped_text(
+                buf,
+                rect,
+                &self.config.placeholder,
+                crate::TextAlign::Left,
+                style,
+                false,
+            );
             // Caret at position 0 for an empty buffer — otherwise clicking into
             // an empty box would leave the caret invisible.
             if self.caret_visible() {
@@ -97,7 +113,11 @@ impl TextEditor {
                 continue;
             }
             let line = &self.lines[row.line];
-            let s: String = line.chars().skip(row.start).take(row.end - row.start).collect();
+            let s: String = line
+                .chars()
+                .skip(row.start)
+                .take(row.end - row.start)
+                .collect();
             buf.set_stringn(rect.x, y, &s, width, text_style);
         }
 
@@ -117,6 +137,83 @@ impl TextEditor {
         }
 
         self.draw_scrollbar(buf, rect);
+        self.draw_mention_popup(buf, rect);
+    }
+
+    /// Draw the open mention popup as an inline overlay anchored at the
+    /// trigger caret: an opaque bordered panel through the dot pipeline
+    /// (`ui_primitives` + `draw_dots`), then each candidate's `display`
+    /// string as plain text over the panel interior, with the highlighted
+    /// row given `MENTION_HIGHLIGHT_BG`. Records the drawn candidate-list
+    /// cell rect onto `mention_popup.list_rect` for `mention_mouse_accept`'s
+    /// hit-test. A no-op when there is no open popup or it has no
+    /// candidates — this guard is real (not stubbed) so editors with no
+    /// popup open render byte-for-byte unchanged. b1-t3.
+    fn draw_mention_popup(&mut self, buf: &mut Buffer, rect: Rect) {
+        let Some(popup) = self.mention_popup.as_ref() else {
+            return;
+        };
+        if popup.candidates.is_empty() {
+            return;
+        }
+        let anchor = popup.anchor;
+        let highlight = popup.highlight;
+        let displays: Vec<String> = popup.candidates.iter().map(|c| c.display.clone()).collect();
+
+        let width = self.viewport_width.max(1);
+        let (arow, acol) = self.display_pos(anchor.0, anchor.1, width);
+        let view_h = self.viewport_height.max(1);
+        if arow < self.scroll_offset || arow >= self.scroll_offset + view_h {
+            return; // caret off-screen: nothing to anchor the popup to
+        }
+        let caret_y = rect.y + (arow - self.scroll_offset) as u16;
+        let caret_x = rect.x + acol as u16;
+
+        let text_w = displays.iter().map(|d| d.chars().count()).max().unwrap_or(0);
+        let text_h = displays.len();
+        if text_w == 0 || text_h == 0 {
+            return;
+        }
+        let popup_w = (text_w + 2) as u16;
+        let popup_h = (text_h + 2) as u16;
+
+        let mut popup_y = caret_y + 1;
+        if popup_y.saturating_add(popup_h) > buf.area.bottom() {
+            popup_y = caret_y.saturating_sub(popup_h);
+        }
+        let mut popup_x = caret_x;
+        if popup_x.saturating_add(popup_w) > buf.area.right() {
+            popup_x = buf.area.right().saturating_sub(popup_w);
+        }
+        popup_x = popup_x.max(buf.area.left());
+        popup_y = popup_y.max(buf.area.top());
+
+        let panel = crate::ui_primitives::rect(
+            popup_w as usize * 2,
+            popup_h as usize * 4,
+            2,
+            MENTION_BORDER,
+            Dot::Occlude,
+        );
+        crate::draw_dots(buf, Rect::new(popup_x, popup_y, popup_w, popup_h), &panel);
+
+        for (i, disp) in displays.iter().enumerate() {
+            let y = popup_y + 1 + i as u16;
+            if y >= buf.area.bottom() {
+                continue;
+            }
+            let x = popup_x + 1;
+            let style = if i == highlight {
+                Style::default().bg(MENTION_HIGHLIGHT_BG)
+            } else {
+                Style::default()
+            };
+            buf.set_stringn(x, y, disp, text_w, style);
+        }
+
+        if let Some(popup) = self.mention_popup.as_mut() {
+            popup.list_rect = Some(Rect::new(popup_x + 1, popup_y + 1, text_w as u16, text_h as u16));
+        }
     }
 
     /// Paint the selection highlight (a background tint, not `REVERSED`) on
@@ -141,7 +238,11 @@ impl TextEditor {
                 continue;
             }
             let sel_start = if row.line == sl { sc } else { 0 };
-            let sel_end = if row.line == el { ec } else { self.lines[row.line].chars().count() };
+            let sel_end = if row.line == el {
+                ec
+            } else {
+                self.lines[row.line].chars().count()
+            };
             let hl_start = sel_start.max(row.start);
             let hl_end = sel_end.min(row.end);
             if hl_start >= hl_end {
@@ -360,8 +461,14 @@ mod tests {
         ed.render(&mut buf, rect);
 
         let caret = buf.cell((1, 0)).unwrap();
-        assert!(caret.modifier.contains(Modifier::REVERSED), "caret must stay REVERSED over the highlight");
-        assert_eq!(caret.bg, SELECTION_BG, "caret cell must still carry the highlight bg underneath");
+        assert!(
+            caret.modifier.contains(Modifier::REVERSED),
+            "caret must stay REVERSED over the highlight"
+        );
+        assert_eq!(
+            caret.bg, SELECTION_BG,
+            "caret cell must still carry the highlight bg underneath"
+        );
     }
 
     // --- b3-t1: draggable scrollbar thumb + track paging ---
@@ -369,7 +476,12 @@ mod tests {
     use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
     fn mouse_at(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
-        MouseEvent { kind, column, row, modifiers: KeyModifiers::empty() }
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        }
     }
 
     /// 6 single-char lines rendered at width 6, height 2 -> 6 display rows,
@@ -402,15 +514,26 @@ mod tests {
         let max = editor.max_scroll_offset();
         let col = rect.right() - 1;
 
-        editor.handle_mouse(&mouse_at(MouseEventKind::Down(MouseButton::Left), col, rect.y));
+        editor.handle_mouse(&mouse_at(
+            MouseEventKind::Down(MouseButton::Left),
+            col,
+            rect.y,
+        ));
         editor.handle_mouse(&mouse_at(
             MouseEventKind::Drag(MouseButton::Left),
             col,
             rect.y + rect.height - 1,
         ));
-        assert_eq!(editor.scroll_offset, max, "drag to track bottom must hit max_scroll_offset()");
+        assert_eq!(
+            editor.scroll_offset, max,
+            "drag to track bottom must hit max_scroll_offset()"
+        );
 
-        editor.handle_mouse(&mouse_at(MouseEventKind::Drag(MouseButton::Left), col, rect.y));
+        editor.handle_mouse(&mouse_at(
+            MouseEventKind::Drag(MouseButton::Left),
+            col,
+            rect.y,
+        ));
         assert_eq!(editor.scroll_offset, 0, "drag back to track top must hit 0");
     }
 
@@ -419,14 +542,21 @@ mod tests {
         let (mut editor, rect) = overflowing_editor_and_rect_tall();
         let col = rect.right() - 1;
 
-        editor.handle_mouse(&mouse_at(MouseEventKind::Down(MouseButton::Left), col, rect.y));
+        editor.handle_mouse(&mouse_at(
+            MouseEventKind::Down(MouseButton::Left),
+            col,
+            rect.y,
+        ));
         editor.handle_mouse(&mouse_at(
             MouseEventKind::Drag(MouseButton::Left),
             col,
             rect.y + 2, // local_y == 2, view - 1 == 3
         ));
 
-        assert_eq!(editor.scroll_offset, 2, "floor(2 * max_scroll_offset(4) / (view-1)(3)) == 2");
+        assert_eq!(
+            editor.scroll_offset, 2,
+            "floor(2 * max_scroll_offset(4) / (view-1)(3)) == 2"
+        );
     }
 
     #[test]
@@ -435,7 +565,11 @@ mod tests {
         let col = rect.right() - 1;
         let caret_before = (editor.cursor_line, editor.cursor_col);
 
-        editor.handle_mouse(&mouse_at(MouseEventKind::Down(MouseButton::Left), col, rect.y));
+        editor.handle_mouse(&mouse_at(
+            MouseEventKind::Down(MouseButton::Left),
+            col,
+            rect.y,
+        ));
 
         assert_eq!(
             (editor.cursor_line, editor.cursor_col),

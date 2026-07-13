@@ -175,7 +175,12 @@ mod tests {
     }
 
     fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
-        MouseEvent { kind, column, row, modifiers: KeyModifiers::empty() }
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        }
     }
 
     /// Seed a viewport at the origin so `handle_mouse` can map cells to caret
@@ -269,7 +274,11 @@ mod tests {
         assert_eq!(ed.text(), "aefbcd");
 
         assert!(ed.undo(), "undo of paste must be its own step");
-        assert_eq!(ed.text(), "aef", "first undo restores the post-cut buffer only");
+        assert_eq!(
+            ed.text(),
+            "aef",
+            "first undo restores the post-cut buffer only"
+        );
         assert!(ed.undo(), "undo of cut must be its own step");
         assert_eq!(ed.text(), "abcdef");
         assert_eq!(ed.selection, Some(((0, 1), (0, 4))));
@@ -309,7 +318,10 @@ mod tests {
 
         ed.handle_key(key(KeyCode::Char('b')));
 
-        assert!(!ed.redo(), "a new edit after undo must clear the redo stack");
+        assert!(
+            !ed.redo(),
+            "a new edit after undo must clear the redo stack"
+        );
     }
 
     // b4-t2: Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z bindings, through handle_key.
@@ -400,7 +412,11 @@ mod tests {
         assert_eq!(ed.text(), "cdab");
 
         assert!(ed.undo());
-        assert_eq!(ed.text(), "ab", "undo must remove only the post-click run ('cd')");
+        assert_eq!(
+            ed.text(),
+            "ab",
+            "undo must remove only the post-click run ('cd')"
+        );
     }
 
     /// A mouse drag-selection is a caret move: typing that replaces the
@@ -418,6 +434,10 @@ mod tests {
         assert_eq!(ed.text(), "abX");
 
         assert!(ed.undo());
-        assert_eq!(ed.text(), "abcd", "undo removes only the selection-replacement step");
+        assert_eq!(
+            ed.text(),
+            "abcd",
+            "undo removes only the selection-replacement step"
+        );
     }
 }

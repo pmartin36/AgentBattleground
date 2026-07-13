@@ -332,7 +332,10 @@ mod tests {
             editor.viewport_y + a_row as u16,
         ));
         assert!(down_handled, "an in-content Down must report handled");
-        assert_eq!(editor.selection, None, "Down alone must not start a live selection");
+        assert_eq!(
+            editor.selection, None,
+            "Down alone must not start a live selection"
+        );
 
         let drag_handled = editor.handle_mouse(&mouse_at(
             MouseEventKind::Drag(MouseButton::Left),
@@ -403,7 +406,10 @@ mod tests {
             far_row,
         ));
 
-        assert!(drag_handled, "an out-of-rect drag while dragging must still report handled (clamped)");
+        assert!(
+            drag_handled,
+            "an out-of-rect drag while dragging must still report handled (clamped)"
+        );
         assert_eq!((editor.cursor_line, editor.cursor_col), expected_caret);
         assert_eq!(editor.selection, Some((anchor_pos, expected_caret)));
     }
@@ -419,7 +425,10 @@ mod tests {
             editor.viewport_y,
         ));
 
-        assert!(!drag_handled, "a Drag with no preceding Down must be a no-op");
+        assert!(
+            !drag_handled,
+            "a Drag with no preceding Down must be a no-op"
+        );
         assert_eq!(editor.selection, None);
         assert_eq!((editor.cursor_line, editor.cursor_col), cursor_before);
     }
@@ -442,7 +451,10 @@ mod tests {
             editor.viewport_y,
         ));
 
-        assert!(!drag_handled, "a Drag with no preceding in-rect Down must be a no-op");
+        assert!(
+            !drag_handled,
+            "a Drag with no preceding in-rect Down must be a no-op"
+        );
         assert_eq!(editor.selection, None);
         assert_eq!((editor.cursor_line, editor.cursor_col), cursor_before);
     }

@@ -9,12 +9,14 @@ use ratatui::crossterm::event::{
 
 mod clipboard;
 mod history;
+mod mention;
 mod render;
 mod selection;
 mod wrap;
 
 use clipboard::{Clipboard, SystemClipboard};
 use history::{EditKind, Snapshot};
+pub use mention::{MentionCandidate, MentionProvider};
 
 /// Logical `(line, col)` position, char-indexed into `lines[line]` — the
 /// same convention as `cursor_line`/`cursor_col`. b1-t1.
@@ -95,6 +97,13 @@ pub struct TextEditor {
     /// System clipboard backend (real backend by default; a fake in tests
     /// via `set_clipboard`). Read by Ctrl+C/X/V (b2-t2). b2-t1.
     clipboard: Box<dyn Clipboard>,
+    /// Attached `@`-mention provider + trigger char, if any; `None` means no
+    /// mention autocomplete for this editor. Set via `set_mention_provider`.
+    /// b1-t1.
+    mention_provider: Option<(Box<dyn mention::MentionProvider>, char)>,
+    /// Open mention-autocomplete popup state; `None` when no popup is
+    /// showing. Driven from `dispatch_key`'s hooks. b1-t2.
+    mention_popup: Option<mention::MentionPopup>,
     /// Bounded undo stack of pre-edit snapshots, oldest-first; capped at
     /// `history::UNDO_STACK_DEPTH`. b4-t1.
     undo_stack: std::collections::VecDeque<Snapshot>,
@@ -137,6 +146,8 @@ impl TextEditor {
             drag_anchor: None,
             scrollbar_drag: false,
             clipboard: Box::new(SystemClipboard::new()),
+            mention_provider: None,
+            mention_popup: None,
             undo_stack: std::collections::VecDeque::new(),
             redo_stack: Vec::new(),
             last_edit_kind: None,
@@ -224,9 +235,25 @@ impl TextEditor {
         event
     }
 
+    /// Mention-popup-aware wrapper around `dispatch_key_inner`: while the
+    /// popup is open, `mention_handle_open` gets first refusal on the key
+    /// (`Some` = fully handled, `None` = fall through to normal dispatch);
+    /// afterward `mention_after_key` re-queries (if still open) or opens the
+    /// popup (on the trigger char). b1-t2.
+    fn dispatch_key(&mut self, key: KeyEvent) -> EditorEvent {
+        if self.mention_popup.is_some() {
+            if let Some(event) = self.mention_handle_open(key) {
+                return event;
+            }
+        }
+        let event = self.dispatch_key_inner(key);
+        self.mention_after_key(key);
+        event
+    }
+
     /// The original `handle_key` match body, unchanged — dispatched to from
     /// `handle_key`'s snapshot/commit wrapper (b4-t1). b4-t1.
-    fn dispatch_key(&mut self, key: KeyEvent) -> EditorEvent {
+    fn dispatch_key_inner(&mut self, key: KeyEvent) -> EditorEvent {
         match key.code {
             KeyCode::Char(c)
                 if key.modifiers.contains(KeyModifiers::CONTROL)
@@ -438,7 +465,9 @@ impl TextEditor {
             MouseEventKind::ScrollDown => self.scroll_by(WHEEL_SCROLL_ROWS as isize),
             MouseEventKind::ScrollUp => self.scroll_by(-(WHEEL_SCROLL_ROWS as isize)),
             MouseEventKind::Down(MouseButton::Left) => {
-                if self.scrollbar_hit(ev.column, ev.row) {
+                if self.mention_mouse_accept(ev.column, ev.row) {
+                    true
+                } else if self.scrollbar_hit(ev.column, ev.row) {
                     self.begin_scrollbar_drag(ev.row);
                     true
                 } else if self.place_caret_at_cell(ev.column, ev.row, false) {
@@ -555,3 +584,6 @@ impl TextEditor {
 #[cfg(test)]
 #[path = "../text_editor_tests.rs"]
 mod text_editor_tests;
+
+#[cfg(test)]
+mod mention_tests;
