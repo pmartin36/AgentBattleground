@@ -1,8 +1,11 @@
+> # ✅ DONE! — Completed 2026-07-13
+> Status: implemented via the tdd-pipeline, shipped to `main`.
+
 # Engine Text-Editing Primitives
 
 ## Status
 
-Pending. Adds the first **terminal** text-editing widget to the engine. Engine-level and reusable by any game built on this workspace (per owner: only the text-input and multi-line scrollable editor — with its scrollbar as a built-in fixture — become engine primitives; the underline/pill/tooltip do not). Consumed by the prompt editor popup (`51`).
+Done (shipped to `main`). Adds the first **terminal** text-editing widget to the engine. Engine-level and reusable by any game built on this workspace (per owner: only the text-input and multi-line scrollable editor — with its scrollbar as a built-in fixture — become engine primitives; the underline/pill/tooltip do not). Consumed by the prompt editor popup (`51`).
 
 ## Purpose
 

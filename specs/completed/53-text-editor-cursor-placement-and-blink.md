@@ -1,8 +1,11 @@
+> # ✅ DONE! — Completed 2026-07-13
+> Status: implemented via the tdd-pipeline, shipped to `main`.
+
 # TextEditor Cursor Placement, Focus & Blink
 
 ## Status
 
-Pending. Follow-up to `50-engine-text-editing-primitives` and `51-prompt-editor-popup`, covering three text-editor interaction features.
+Done (shipped to `main`). Follow-up to `50-engine-text-editing-primitives` and `51-prompt-editor-popup`, covering three text-editor interaction features.
 
 ## Purpose
 

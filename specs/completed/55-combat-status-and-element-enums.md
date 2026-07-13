@@ -1,8 +1,11 @@
+> # ✅ DONE! — Completed 2026-07-13
+> Status: implemented via the tdd-pipeline, shipped to `main`.
+
 # Combat Status & Element Enums
 
 ## Status
 
-Pending. Small data-model change extending `47-ability-and-instructions-data-model`. Replaces the free-text `StatusEffect { name }` with a concrete `StatusKind` enum and renames one `Element` variant, so the ability tooltip (`49`) and the `@` mention system (`56`) reference real combat values instead of free text.
+Done (shipped to `main`). Small data-model change extending `47-ability-and-instructions-data-model`. Replaces the free-text `StatusEffect { name }` with a concrete `StatusKind` enum and renames one `Element` variant, so the ability tooltip (`49`) and the `@` mention system (`56`) reference real combat values instead of free text.
 
 ## Purpose
 

@@ -1,8 +1,11 @@
+> # ✅ DONE! — Completed 2026-07-13
+> Status: implemented via the tdd-pipeline, shipped to `main`.
+
 # Ability Combat Fields & Creature Instructions Data Model
 
 ## Status
 
-Pending. Foundation spec for the roster detail-panel redesign. It adds the data the redesigned panel (`48-roster-detail-panel-redesign`), the ability tooltip (`49-ability-hover-tooltip`), and the prompt editor (`51-prompt-editor-popup`) render — nothing more. **No combat math, no LLM, no UI.** Just fields, enums, on-disk instruction files, and demo data.
+Done (shipped to `main`). Foundation spec for the roster detail-panel redesign. It adds the data the redesigned panel (`48-roster-detail-panel-redesign`), the ability tooltip (`49-ability-hover-tooltip`), and the prompt editor (`51-prompt-editor-popup`) render — nothing more. **No combat math, no LLM, no UI.** Just fields, enums, on-disk instruction files, and demo data.
 
 ## Purpose
 

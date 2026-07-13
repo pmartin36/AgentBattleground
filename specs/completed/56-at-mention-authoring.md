@@ -1,8 +1,11 @@
+> # ✅ DONE! — Completed 2026-07-13
+> Status: implemented via the tdd-pipeline, shipped to `main`.
+
 # `@` Mention Authoring
 
 ## Status
 
-Pending. Adds an inline `@` autocomplete to the engine `TextEditor` plus this game's mention vocabulary, so authors can reference creatures, the creature's own abilities, and dynamic battle targets from within the instructions Markdown. **Authoring + token storage only** — actually *resolving* a mention at battle time ("who has the most HP") is the battle engine's job, deferred to `10-battle-simulation-engine`.
+Done (shipped to `main`). Adds an inline `@` autocomplete to the engine `TextEditor` plus this game's mention vocabulary, so authors can reference creatures, the creature's own abilities, and dynamic battle targets from within the instructions Markdown. **Authoring + token storage only** — actually *resolving* a mention at battle time ("who has the most HP") is the battle engine's job, deferred to `10-battle-simulation-engine`.
 
 ## Purpose
 

@@ -1,8 +1,11 @@
+> # ✅ DONE! — Completed 2026-07-13
+> Status: implemented via the tdd-pipeline, shipped to `main` (undo-coalescing seam fixed post-validation).
+
 # TextEditor v2: Selection, Clipboard, Draggable Scrollbar, Undo/Redo
 
 ## Status
 
-Pending. Extends the engine `TextEditor` from `50-engine-text-editing-primitives` with four of the deferred v2 mechanics. Engine-level (every `TextEditor` inherits them); the prompt-editor popup (`51`) gets them for free. Text selection is included here because copy/cut require it.
+Done (shipped to `main`). Extends the engine `TextEditor` from `50-engine-text-editing-primitives` with four of the deferred v2 mechanics. Engine-level (every `TextEditor` inherits them); the prompt-editor popup (`51`) gets them for free. Text selection is included here because copy/cut require it.
 
 ## Purpose
 

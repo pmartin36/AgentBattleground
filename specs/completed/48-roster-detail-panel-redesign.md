@@ -1,8 +1,11 @@
+> # ✅ DONE! — Completed 2026-07-13
+> Status: implemented via the tdd-pipeline, shipped to `main` (two cosmetic escalations resolved).
+
 # Roster Detail Panel Redesign
 
 ## Status
 
-Pending. Replaces the contents of the roster manager's right-hand details panel. Same footprint as today (right third of the screen, existing procedural dot border) — only the interior changes.
+Done (shipped to `main`). Replaces the contents of the roster manager's right-hand details panel. Same footprint as today (right third of the screen, existing procedural dot border) — only the interior changes.
 
 ## Purpose
 

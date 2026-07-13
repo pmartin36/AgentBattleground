@@ -1,8 +1,11 @@
+> # ✅ DONE! — Completed 2026-07-13
+> Status: implemented via the tdd-pipeline, shipped to `main`.
+
 # Engine Text Rendering
 
 ## Status
 
-Pending. Replaces the engine's single centered `label` helper with an **alignment- and style-aware** text API, and adds a **wrapped/ellipsized** multi-line helper for static display text. Engine-level and reusable. Foundational to the roster detail panel (`48`) and ability tooltip (`49`) despite its higher number — same situation as `40-flex-layout-primitive`, a late-numbered foundational primitive.
+Done (shipped to `main`). Replaces the engine's single centered `label` helper with an **alignment- and style-aware** text API, and adds a **wrapped/ellipsized** multi-line helper for static display text. Engine-level and reusable. Foundational to the roster detail panel (`48`) and ability tooltip (`49`) despite its higher number — same situation as `40-flex-layout-primitive`, a late-numbered foundational primitive.
 
 ## Purpose
 

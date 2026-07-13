@@ -1,8 +1,11 @@
+> # ✅ DONE! — Completed 2026-07-13
+> Status: implemented via the tdd-pipeline, shipped to `main`.
+
 # Ability Hover Tooltip
 
 ## Status
 
-Pending. The overlay shown when the player hovers an ability in the roster detail panel (`48`). Bespoke game-side rendering (an overlay + pills), **not** reusable engine primitives — per owner, underline/pill/tooltip are one-off for this game.
+Done (shipped to `main`). The overlay shown when the player hovers an ability in the roster detail panel (`48`). Bespoke game-side rendering (an overlay + pills), **not** reusable engine primitives — per owner, underline/pill/tooltip are one-off for this game.
 
 ## Purpose
 

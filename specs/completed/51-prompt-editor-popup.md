@@ -1,8 +1,11 @@
+> # ✅ DONE! — Completed 2026-07-13
+> Status: implemented via the tdd-pipeline, shipped to `main`.
+
 # Prompt Editor Popup
 
 ## Status
 
-Pending. The large modal overlay opened by the roster panel's **[Edit]** button (`48`) for editing a creature's battle instructions. Consumes the engine `TextEditor` (`50`). The AI-assisted rewrite behind the top input is **stubbed** here and specified for real in the needs-research follow-up (`needs-research/ai-prompt-rewrite-agent`).
+Done (shipped to `main`). The large modal overlay opened by the roster panel's **[Edit]** button (`48`) for editing a creature's battle instructions. Consumes the engine `TextEditor` (`50`). The AI-assisted rewrite behind the top input is **stubbed** here and specified for real in the needs-research follow-up (`needs-research/ai-prompt-rewrite-agent`).
 
 ## Purpose
 
