@@ -29,6 +29,14 @@ impl TextEditor {
     pub fn set_mention_provider(&mut self, provider: Box<dyn MentionProvider>, trigger: char) {
         self.mention_provider = Some((provider, trigger));
     }
+
+    /// Whether a `@`-mention popup is currently open on this editor. Lets an
+    /// embedding modal (which may bind its own key, e.g. Esc, over the
+    /// editor) know the editor wants first refusal on that key while the
+    /// popup is capturing it.
+    pub fn mention_active(&self) -> bool {
+        self.mention_popup.is_some()
+    }
 }
 
 /// Open mention-autocomplete popup state: `anchor` is the logical position

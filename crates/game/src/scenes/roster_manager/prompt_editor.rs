@@ -159,7 +159,21 @@ impl PromptEditor {
     pub(super) fn handle_input(&mut self, ev: &InputEvent) -> bool {
         match ev {
             InputEvent::Key(key) => match key.code {
-                KeyCode::Esc => return true,
+                KeyCode::Esc => {
+                    // Spec 56: while the focused editor has an open
+                    // @-mention popup, Esc dismisses the popup (leaving the
+                    // literal @query typed) instead of closing the whole
+                    // modal. Only close the modal when no popup captures it.
+                    let editor = match self.focus {
+                        PopupFocus::AgentInput => self.agent_input.get_mut(),
+                        PopupFocus::Instructions => self.instructions.get_mut(),
+                    };
+                    if editor.mention_active() {
+                        editor.handle_key(*key);
+                    } else {
+                        return true;
+                    }
+                }
                 KeyCode::Tab => self.toggle_focus(),
                 _ => match self.focus {
                     PopupFocus::AgentInput => {
@@ -914,5 +928,31 @@ mod tests {
         type_str(&mut roster_popup, "@Frost");
         press_enter(&mut roster_popup);
         assert_eq!(roster_popup.instructions_text(), "@Frost_Lizard");
+    }
+
+    /// Spec 56:35 — Esc while the instructions editor has an open
+    /// `@`-mention popup dismisses only the popup (leaving the literal
+    /// `@query` typed), instead of closing the whole modal. A second Esc,
+    /// with no popup open, closes the modal normally (unchanged behavior,
+    /// mirrors `prompt_editor_modal_tests::esc_closes_popup`).
+    #[test]
+    fn esc_dismisses_mention_popup_not_modal() {
+        let roster = wired_roster();
+        let mut popup = PromptEditor::new(0, "Ember Wolf", None, &roster);
+
+        type_str(&mut popup, "@enemy");
+
+        let esc = InputEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let closed_first = popup.handle_input(&esc);
+
+        assert!(!closed_first, "Esc with an open mention popup must not close the modal");
+        assert_eq!(
+            popup.instructions_text(),
+            "@enemy",
+            "Esc must leave the literal @query typed, not mutate it"
+        );
+
+        let closed_second = popup.handle_input(&esc);
+        assert!(closed_second, "Esc with no popup open must close the modal (normal behavior)");
     }
 }
