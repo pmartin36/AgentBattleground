@@ -28,7 +28,7 @@ pub enum StatusKind { Burn, Frozen, Shocked, Rooted }
 
 ### 3. Ripple updates
 - `Ability::status_effects: Vec<StatusKind>` now holds the enum (field name unchanged); `with_status_effects`/getter unchanged in shape.
-- `demo_roster()`: status effects now use `StatusKind` variants; any `Element::Water` demo values become `Element::Ice`.
+- `demo_roster()`: status effects now use `StatusKind` variants; any `Element::Water` demo values become `Element::Ice`. Existing free-text demo statuses map to the nearest variant — **`Bleed`→`Burn`** (treated as the same effect; no `Bleed` variant is added), `Shock`→`Shocked` — the rest already match `{Burn, Frozen, Shocked, Rooted}`.
 - Tooltip status rendering (`fill_status` in `tooltip.rs`) prints `kind.label()` instead of `effect.name`.
 - Update all tests that constructed `StatusEffect { name: .. }` or referenced `Element::Water`.
 
