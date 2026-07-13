@@ -1,0 +1,8 @@
+[package]
+name = "engine-audio"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+kira = "=0.12.1"
+tracing = { workspace = true }

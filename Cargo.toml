@@ -4,6 +4,7 @@ members = [
     "crates/engine/core",
     "crates/engine/derive",
     "crates/engine/render",
+    "crates/engine/audio",
     "crates/engine/inspector",
     "crates/game",
 ]
