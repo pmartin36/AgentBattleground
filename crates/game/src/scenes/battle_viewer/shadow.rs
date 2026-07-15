@@ -1,10 +1,14 @@
 use super::*;
+use super::sizing::WIDTH_FILL_RATIO;
 
 /// Fraction of a cell's width, AT the piece's own position, that its contact
-/// shadow's own outer diameter targets — deliberately smaller than
-/// `WIDTH_FILL_RATIO` so the shadow reads as a mark under the creature's
-/// feet, not another shape competing with it for the same footprint.
-const SHADOW_WIDTH_RATIO: f32 = 0.55;
+/// shadow's own outer diameter targets. Deliberately THE SAME as the sprite's
+/// `WIDTH_FILL_RATIO` rather than an independent value: the ring reads as the
+/// creature's own footprint on its cell, so the two must agree by
+/// construction. A separately-tuned constant (this was `0.55`) drifts out of
+/// agreement the moment either side is retuned — which is exactly what
+/// happened when the board resized and every cell grew.
+const SHADOW_WIDTH_RATIO: f32 = WIDTH_FILL_RATIO;
 
 impl BattleViewer {
     /// b7-t1: pure fade scalar in `[0,1]` for `piece_index`'s contact shadow,

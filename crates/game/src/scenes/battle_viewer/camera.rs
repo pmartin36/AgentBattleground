@@ -167,7 +167,27 @@ impl BattleCamera {
 /// puts that boundary almost on top of the camera, blowing up the near/far
 /// size ratio until the far piece rasterizes to a near-invisible handful of
 /// dots (this shipped as a real bug at margin `0.5`).
-const OVER_SHOULDER_CAMERA_DEPTH: f32 = 10.0;
+///
+/// What that paragraph is really describing is the near/far DISTANCE RATIO
+/// (`depth / (depth - BOARD_ROWS)`) — the far edge's distance over the near
+/// edge's — since that ratio is what drives the near/far size blow-up. So the
+/// depth scales WITH the board to hold the ratio fixed at the `10.0/3.0` the
+/// 7-row board was tuned to, rather than pinning either the absolute depth or
+/// the absolute margin (neither of which is the tuned quantity, and both of
+/// which drift the shot when the board resizes):
+///
+/// - `depth = BOARD_ROWS * 10/7` -> `10.0` at 7 rows (the original value,
+///   exactly), `~7.14` at the current 5.
+/// - Pinning depth `10.0` at 5 rows would push the ratio to 10/5 = 2.0,
+///   flattening the shot AND crowding the bench sprite against the frame edge.
+/// - Pinning the margin `3.0` at 5 rows gives ratio 8/3 = 2.67 — same problems,
+///   smaller. (Both measured: bench sprite hit dot-column 0 with zero slack.)
+const OVER_SHOULDER_CAMERA_DEPTH: f32 = BOARD_ROWS as f32 * OVER_SHOULDER_STANDOFF_RATIO;
+
+/// Over-the-shoulder camera depth as a multiple of `BOARD_ROWS`, holding the
+/// near/far distance ratio at the value the shot was tuned to on a 7-row board
+/// (depth 10 -> 10/3). See `OVER_SHOULDER_CAMERA_DEPTH`.
+const OVER_SHOULDER_STANDOFF_RATIO: f32 = 10.0 / 7.0;
 /// World-units-above-ground the over-shoulder camera sits at — a modest,
 /// human/creature shoulder-height scale (matching Sideline's `2.5`), not
 /// constrained by keeping `forward_distance` positive (the yaw-180 facing

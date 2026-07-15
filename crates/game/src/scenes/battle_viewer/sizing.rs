@@ -29,11 +29,20 @@ pub fn sprite_base_dot_rows(camera: &BattleCamera) -> u32 {
 
 /// Fraction of a cell's width, AT the piece's own position, that a creature's
 /// rendered WIDTH targets under Sideline/OverShoulder — the binding
-/// constraint there is width filling the base of the cell the piece stands
-/// on (project owner's explicit ask), unlike Top-Down's height-ratio
-/// approach (`SPRITE_DOT_RATIO`), which exists to keep sprites from
-/// overflowing a fixed-size square cell from directly above.
-const WIDTH_FILL_RATIO: f32 = 0.92;
+/// constraint there is the width of the cell the piece stands on, unlike
+/// Top-Down's height-ratio approach (`SPRITE_DOT_RATIO`), which exists to
+/// keep sprites from overflowing a fixed-size square cell from directly
+/// above.
+///
+/// Was `0.92` (a near-exact cell-width fill) while the board was 7x7. The 5x5
+/// resize enlarges every cell — the board auto-fits the viewport, so fewer
+/// columns span the same screen — which scaled creatures up with it (measured
+/// ~1.5x linear under the default Sideline camera). `0.77` lands the apparent
+/// size between the 7x7 and unadjusted-5x5 extremes, per the project owner's
+/// call that the former read too small and the latter too big. Also the
+/// contact shadow's diameter (`shadow.rs`'s `SHADOW_WIDTH_RATIO`), so ring and
+/// creature agree by construction rather than as two tuned constants.
+pub(super) const WIDTH_FILL_RATIO: f32 = 0.77;
 
 /// Per-piece sprite height in dots for Sideline/OverShoulder: sized so the
 /// creature's rendered WIDTH is `WIDTH_FILL_RATIO` of a cell-width AT `pos`

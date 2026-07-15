@@ -22,10 +22,10 @@ use crate::scenes::battle_viewer::battle_menu::BattleMenu;
 mod battle_menu;
 
 /// Single source of truth for the board's column count. Every downstream
-/// consumer must reference this constant, never a bare literal `8`.
-pub const BOARD_COLS: u16 = 7;
+/// consumer must reference this constant, never a bare literal `5`.
+pub const BOARD_COLS: u16 = 5;
 /// Single source of truth for the board's row count.
-pub const BOARD_ROWS: u16 = 7;
+pub const BOARD_ROWS: u16 = 5;
 
 /// World-x the Sideline camera anchors on — the board's horizontal center
 /// column, derived from `BOARD_COLS` (never a bare literal `3.5`).

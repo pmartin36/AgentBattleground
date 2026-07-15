@@ -163,17 +163,20 @@ mod draw_board_lines_tests {
     }
 
     /// Hand-picked geometry used by every case below: board_rect origin
-    /// (2,1), cell_width_cols=4, cell_height_rows=2, sized for a 7x7 grid
-    /// (board_rect 28x14) in a 40x20 buffer. DotBuffer is
-    /// board_rect.width*2 x board_rect.height*4 = 56x56 dots (8x8 dots per
-    /// board cell, 7 cells per side — `draw_board_lines` iterates
-    /// `0..=BOARD_COLS`/`0..=BOARD_ROWS`, both 7). Vertical boundaries
-    /// i=0..=7 land at terminal x in {2,6,10,14,18,22,26, 29(clamped)};
-    /// horizontal boundaries j=0..=7 land at terminal y in
-    /// {1,3,5,7,9,11,13, 14(clamped)}. For every i<7/j<7 the boundary's dot
-    /// sits at dx=0/dy=0 within its terminal cell (exact, no clamp); only the
-    /// outermost i==7/j==7 boundary clamps to the LAST valid dot index
-    /// (dx=1/dy=3 — one dot short of board_rect.right()/bottom()).
+    /// (2,1), cell_width_cols=4, cell_height_rows=2, sized for a 5x5 grid
+    /// (board_rect 20x10) in a 40x20 buffer. DotBuffer is
+    /// board_rect.width*2 x board_rect.height*4 = 40x40 dots (8x8 dots per
+    /// board cell, 5 cells per side — `draw_board_lines` iterates
+    /// `0..=BOARD_COLS`/`0..=BOARD_ROWS`, both 5). The board must fill the dot
+    /// buffer exactly (5 cells x 8 dots = 40 = scale_dots 8 x 5 world units)
+    /// or the outermost boundary never reaches the edge and the fencepost case
+    /// below stops testing anything. Vertical boundaries i=0..=5 land at
+    /// terminal x in {2,6,10,14,18, 21(clamped)}; horizontal boundaries
+    /// j=0..=5 land at terminal y in {1,3,5,7,9, 10(clamped)}. For every
+    /// i<5/j<5 the boundary's dot sits at dx=0/dy=0 within its terminal cell
+    /// (exact, no clamp); only the outermost i==5/j==5 boundary clamps to the
+    /// LAST valid dot index (dx=1/dy=3 — one dot short of
+    /// board_rect.right()/bottom()).
     ///
     /// Camera is `TopDown` (full-strength grid lines, b4-t1) so the glyph/
     /// shape assertions below stay independent of grid-line *color* — color
@@ -182,7 +185,7 @@ mod draw_board_lines_tests {
         BoardGeometry {
             cell_width_cols: 4,
             cell_height_rows: 2,
-            board_rect: Rect::new(2, 1, 28, 14),
+            board_rect: Rect::new(2, 1, 20, 10),
             camera: top_down_at(8.0),
             tuning: BattleViewerTuning::default(),
             screen_offset: (0, 0),
@@ -299,27 +302,27 @@ mod draw_board_lines_tests {
         assert_eq!(buf.cell((4, 2)).unwrap().symbol(), "X");
     }
 
-    /// Point-7 fencepost resolution (chosen: clamp to the last valid dot
-    /// index, one dot short): board_rect=(2,1,28,14) -> right()=30, so the
-    /// outermost vertical boundary (i=7, since `draw_board_lines` iterates
-    /// `0..=BOARD_COLS` and `BOARD_COLS==7`) cannot sit at dot_x=56 (one past
-    /// the last valid dot 55); it clamps to dot_x=55, landing in the RIGHT
-    /// dot-column (dx=1) of the LAST valid cell (terminal x=29), not at
-    /// x=30. That cell's top-right corner: right dot-column full height
+    /// Point-5 fencepost resolution (chosen: clamp to the last valid dot
+    /// index, one dot short): board_rect=(2,1,20,10) -> right()=22, so the
+    /// outermost vertical boundary (i=5, since `draw_board_lines` iterates
+    /// `0..=BOARD_COLS` and `BOARD_COLS==5`) cannot sit at dot_x=40 (one past
+    /// the last valid dot 39); it clamps to dot_x=39, landing in the RIGHT
+    /// dot-column (dx=1) of the LAST valid cell (terminal x=21), not at
+    /// x=22. That cell's top-right corner: right dot-column full height
     /// (mask 0xB8) union top dot-row full width (mask 0x09) = mask 0xB9 ->
-    /// '\u{28B9}'. Nothing is drawn at the naive unclamped position x=30.
+    /// '\u{28B9}'. Nothing is drawn at the naive unclamped position x=22.
     #[test]
     fn far_boundary_is_clamped_one_dot_short_not_out_of_bounds() {
         let g = geom();
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 20));
         draw_board_lines(&mut buf, &g);
 
-        let clamped = buf.cell((29, 1)).unwrap();
+        let clamped = buf.cell((21, 1)).unwrap();
         assert_eq!(clamped.symbol(), "\u{28B9}");
         assert_eq!(clamped.fg, grid_fg());
 
         assert_eq!(
-            buf.cell((30, 1)).unwrap().symbol(),
+            buf.cell((22, 1)).unwrap().symbol(),
             " ",
             "nothing must be drawn one dot past board_rect's right edge"
         );

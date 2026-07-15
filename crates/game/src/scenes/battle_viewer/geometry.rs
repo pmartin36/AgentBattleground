@@ -266,8 +266,8 @@ mod board_geometry_tests {
         BattleViewerTuning::default()
     }
 
-    /// Exact-fit area: 128x64 against an 8-column allocation (`BOARD_COLS`
-    /// (7) drawn columns + 1 reserved for `BENCH_COL`, which sits one column
+    /// Exact-fit area: 128x64 against a 6-column allocation (`BOARD_COLS`
+    /// (5) drawn columns + 1 reserved for `BENCH_COL`, which sits one column
     /// past the drawn grid — see `BENCH_COL`'s doc comment; without this
     /// reservation bench renders past `board_rect`'s own edge and gets
     /// silently clipped, which is what "bench pieces sometimes go missing"
@@ -277,10 +277,12 @@ mod board_geometry_tests {
     #[test]
     fn exact_fit_area() {
         let g = board_geometry(Rect::new(0, 0, 128, 64), BattleCamera::top_down_preset(), tuning());
-        assert_eq!(g.cell_height_rows, 8);
-        assert_eq!(g.cell_width_cols, 16);
-        assert_eq!(g.board_rect, Rect::new(0, 4, 128, 56));
-        assert_eq!(g.camera, BattleCamera::top_down_preset().with_scale_dots(32.0));
+        // min(128 / (2*6), 64 / 5) = min(10, 12) = 10
+        assert_eq!(g.cell_height_rows, 10);
+        assert_eq!(g.cell_width_cols, 20);
+        // w = 20*6 = 120, bh = 10*5 = 50, centered in 128x64 -> x=4, y=7
+        assert_eq!(g.board_rect, Rect::new(4, 7, 120, 50));
+        assert_eq!(g.camera, BattleCamera::top_down_preset().with_scale_dots(40.0));
     }
 
     /// Oversized area: geometry is centered within the larger area. TopDown
@@ -288,8 +290,10 @@ mod board_geometry_tests {
     #[test]
     fn oversized_area_is_centered() {
         let g = board_geometry(Rect::new(5, 5, 200, 100), BattleCamera::top_down_preset(), tuning());
-        assert_eq!(g.cell_height_rows, 12);
-        assert_eq!(g.board_rect, Rect::new(9, 13, 192, 84));
+        // min(200 / (2*6), 100 / 5) = min(16, 20) = 16
+        assert_eq!(g.cell_height_rows, 16);
+        // w = 32*6 = 192, bh = 16*5 = 80, centered in 200x100 at (5,5) -> (9, 15)
+        assert_eq!(g.board_rect, Rect::new(9, 15, 192, 80));
     }
 
     /// Height-constrained area: height is the limiting dimension. TopDown
@@ -297,8 +301,10 @@ mod board_geometry_tests {
     #[test]
     fn height_constrained_area() {
         let g = board_geometry(Rect::new(0, 0, 300, 40), BattleCamera::top_down_preset(), tuning());
-        assert_eq!(g.cell_height_rows, 5);
-        assert_eq!(g.board_rect, Rect::new(110, 2, 80, 35));
+        // min(300 / (2*6), 40 / 5) = min(25, 8) = 8 -> height is the limit
+        assert_eq!(g.cell_height_rows, 8);
+        // w = 16*6 = 96, bh = 8*5 = 40 (fills height exactly) -> x=102, y=0
+        assert_eq!(g.board_rect, Rect::new(102, 0, 96, 40));
     }
 
     /// Width-constrained area: width is the limiting dimension. TopDown mode
@@ -306,8 +312,10 @@ mod board_geometry_tests {
     #[test]
     fn width_constrained_area() {
         let g = board_geometry(Rect::new(0, 0, 50, 300), BattleCamera::top_down_preset(), tuning());
-        assert_eq!(g.cell_height_rows, 3);
-        assert_eq!(g.board_rect, Rect::new(1, 139, 48, 21));
+        // min(50 / (2*6), 300 / 5) = min(4, 60) = 4 -> width is the limit
+        assert_eq!(g.cell_height_rows, 4);
+        // w = 8*6 = 48, bh = 4*5 = 20, centered in 50x300 -> x=1, y=140
+        assert_eq!(g.board_rect, Rect::new(1, 140, 48, 20));
     }
 
     /// Tiny area clamps to cell_height_rows == 1 and does not panic.
@@ -350,12 +358,12 @@ mod board_geometry_tests {
         let area = Rect::new(0, 0, 128, 64);
         let g_top = board_geometry(area, BattleCamera::top_down_preset(), tuning());
 
-        assert_eq!(g_top.cell_height_rows, 8);
-        assert_eq!(g_top.cell_width_cols, 16);
-        assert_eq!(g_top.board_rect, Rect::new(0, 4, 128, 56));
+        assert_eq!(g_top.cell_height_rows, 10);
+        assert_eq!(g_top.cell_width_cols, 20);
+        assert_eq!(g_top.board_rect, Rect::new(4, 7, 120, 50));
         assert_eq!(
             g_top.camera,
-            BattleCamera::top_down_preset().with_scale_dots(32.0)
+            BattleCamera::top_down_preset().with_scale_dots(40.0)
         );
     }
 
@@ -463,23 +471,35 @@ mod board_geometry_tests {
         let _ = board_geometry(area, BattleCamera::over_shoulder_preset(), tuning());
     }
 
-    /// The board-size constants are exactly 7x7 and must be referenced (not
-    /// re-hardcoded) by every downstream consumer.
+    /// The board-size constants are exactly 5x5 and must be referenced (not
+    /// re-hardcoded) by every downstream consumer. Deliberately pins the
+    /// literal size: changing the board is a design decision (bench rows,
+    /// camera standoff, and the contested middle all key off it — see spec
+    /// 58), so it should fail loudly here rather than shift silently.
     #[test]
-    fn board_size_constants_are_7x7() {
-        assert_eq!(BOARD_COLS, 7);
-        assert_eq!(BOARD_ROWS, 7);
+    fn board_size_constants_are_5x5() {
+        assert_eq!(BOARD_COLS, 5);
+        assert_eq!(BOARD_ROWS, 5);
     }
 
-    /// Row-layout constants (b2-t1): Team A bench(0)/active(1), Team B
-    /// active(5)/bench(6), each active row exactly one cell inward of its
-    /// team's bench row, and the layout is vertically symmetric.
+    /// Row-layout constants at 5x5 (spec 58): each team's active line is its
+    /// own BACK row (0 and 4), bench rows straddle the midline at 1/3 on
+    /// `BENCH_COL`, and the layout is vertically symmetric. Both bench rows
+    /// derive from `MIDLINE_ROW`; the exact values are re-pinned here so a
+    /// change to either derivation has to be deliberate.
     #[test]
     fn row_layout_constants_match_spec() {
-        assert_eq!(TEAM_A_BENCH_ROW, 2);
-        assert_eq!(TEAM_A_ROW, 1);
-        assert_eq!(TEAM_B_ROW, BOARD_ROWS - 2);
-        assert_eq!(TEAM_B_BENCH_ROW, BOARD_ROWS - 3);
+        assert_eq!(TEAM_A_BENCH_ROW, 1);
+        assert_eq!(TEAM_B_BENCH_ROW, 3);
+        assert_eq!(TEAM_A_ROW, 0);
+        assert_eq!(TEAM_B_ROW, 4);
+        assert_eq!(TEAM_B_ROW, BOARD_ROWS - 1);
+
+        // Every row between the two active lines is contested ground, and each
+        // team's bench sits inside that span (off-grid on `BENCH_COL`) rather
+        // than behind its own line.
+        const { assert!(TEAM_A_ROW < TEAM_A_BENCH_ROW) };
+        const { assert!(TEAM_B_BENCH_ROW < TEAM_B_ROW) };
 
         assert_eq!(
             TEAM_A_BENCH_ROW + TEAM_B_BENCH_ROW,

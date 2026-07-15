@@ -1,5 +1,9 @@
 > # ✅ DONE! — Completed 2026-07-08
-> Status: implemented. `BOARD_COLS`/`BOARD_ROWS` are 7×7; `pieces()` emits exactly 8 `Piece`s (3 active + 1 bench per side), reserves unrendered; row layout (bench/active/…/active/bench) and centered active columns match spec exactly; bench pieces share the same tint/scale/animation treatment as active pieces, with no `SquadRole`-derived rendering branch. `cargo test --workspace` green.
+> Status: implemented. `pieces()` emits exactly 8 `Piece`s (3 active + 1 bench per side), reserves unrendered; centered active columns match spec exactly; bench pieces share the same tint/scale/animation treatment as active pieces, with no `SquadRole`-derived rendering branch. `cargo test --workspace` green.
+>
+> **Superseded in part — see `58-battlefield-5x5-resize.md` for current truth on board size and bench placement.** Two of this spec's decisions no longer describe the code:
+> - **Board size**: `BOARD_COLS`/`BOARD_ROWS` are **5×5**, not the 7×7 decided here (`58` Decision 1).
+> - **Bench placement**: this spec's Decision "Row layout" put bench on the outermost rows (0 and 6), on the drawn grid. Later camera work (`39`/`41`) moved bench OFF the grid entirely, to `BENCH_COL` (one column past the board's far edge); its row is now derived as midline ∓ 1 (`58` Decision 3). The "row layout … match spec exactly" claim above was already inaccurate before `58` and is retained here only as history.
 
 # Battle Viewer — Squad Layout
 

@@ -8,25 +8,39 @@ pub enum Team {
     B,
 }
 
-/// Team A's active (fighting) row is one cell inward of its bench row; Team
-/// B's active row mirrors it from the bottom. Bench rows sit one cell
-/// INWARD of their own active row (toward the midline), not out at the
+/// Each team's active (fighting) row is its own BACK row — the board's outer
+/// edge — so the rows between the two lines are all contested ground. NOT one
+/// cell inward: at `BOARD_ROWS = 7` an inset line still left 3 rows between
+/// the teams, but at 5 it left only the single midline row, reading as both
+/// squads bunched in the middle of the board with an empty row wasted behind
+/// each of them.
+pub const TEAM_A_ROW: u16 = 0;
+pub const TEAM_B_ROW: u16 = BOARD_ROWS - 1;
+
+/// The board's middle row — the contested cell between the two active rows,
+/// and the axis the bench rows straddle.
+const MIDLINE_ROW: u16 = BOARD_ROWS / 2;
+
+/// Bench rows sit one cell to either side of `MIDLINE_ROW`, NOT out at the
 /// board's own edge — `BENCH_COL` (outside the drawn grid) is what already
-/// carries bench "off the field"; the row itself just needs to read as
-/// close to the action, not doubly set apart on both axes.
-pub const TEAM_A_ROW: u16 = 1;
-pub const TEAM_B_ROW: u16 = BOARD_ROWS - 2;
-pub const TEAM_A_BENCH_ROW: u16 = 2;
-pub const TEAM_B_BENCH_ROW: u16 = BOARD_ROWS - 3;
+/// carries bench "off the field"; the row itself just needs to read as close
+/// to the action, not doubly set apart on both axes. Derived from the midline
+/// rather than hardcoded: for `BOARD_ROWS = 5` this is 1/3, for 7 it is 2/4.
+/// Both must derive from the SAME rule — an earlier version paired a literal
+/// `2` with `BOARD_ROWS - 3`, which agreed only at 7 and collapsed both teams
+/// onto one row at 5 (they share `BENCH_COL`, so that put two pieces in one
+/// cell). Vertical symmetry holds for any odd `BOARD_ROWS`.
+pub const TEAM_A_BENCH_ROW: u16 = MIDLINE_ROW - 1;
+pub const TEAM_B_BENCH_ROW: u16 = MIDLINE_ROW + 1;
 
 /// Symmetric empty column margin on each board edge framing the 3 centered
-/// active columns: `(BOARD_COLS - 3) / 2`. For `BOARD_COLS = 7` this is 2,
-/// leaving cols 0-1 and 5-6 empty.
+/// active columns: `(BOARD_COLS - 3) / 2`. For `BOARD_COLS = 5` this is 1,
+/// leaving cols 0 and 4 empty.
 const COL_MARGIN: u16 = (BOARD_COLS - 3) / 2;
 
 /// The 3 centered active (fighting) columns each team's active pieces
 /// occupy, ascending, with symmetric empty margins on both board edges
-/// (18's centering approach, narrowed). For `BOARD_COLS = 7`: `[2, 3, 4]`.
+/// (18's centering approach, narrowed). For `BOARD_COLS = 5`: `[1, 2, 3]`.
 pub const ACTIVE_COLS: [u16; 3] = [COL_MARGIN, COL_MARGIN + 1, COL_MARGIN + 2];
 
 /// The single column the lone bench piece stands on — ONE PAST the drawn
@@ -157,10 +171,17 @@ mod piece_layout_tests {
 
         let active_cols: HashSet<u16> = ACTIVE_COLS.iter().copied().collect();
 
-        let a_active: Vec<&&Piece> = team_a.iter().filter(|p| p.row == TEAM_A_ROW).collect();
+        // Active/bench are separated by COLUMN, not row: at `BOARD_ROWS = 5`
+        // each team's bench row coincides with its own active row (both derive
+        // to 1/3), and only `BENCH_COL` sets the bench apart. Filtering by row
+        // alone counted the bench as a 4th active piece.
+        let a_active: Vec<&&Piece> = team_a
+            .iter()
+            .filter(|p| p.row == TEAM_A_ROW && p.col != BENCH_COL)
+            .collect();
         let a_bench: Vec<&&Piece> = team_a
             .iter()
-            .filter(|p| p.row == TEAM_A_BENCH_ROW)
+            .filter(|p| p.row == TEAM_A_BENCH_ROW && p.col == BENCH_COL)
             .collect();
         assert_eq!(a_active.len(), 3, "expected 3 Team A active pieces");
         assert_eq!(a_bench.len(), 1, "expected 1 Team A bench piece");
@@ -174,10 +195,13 @@ mod piece_layout_tests {
             "Team A bench piece must sit on BENCH_COL"
         );
 
-        let b_active: Vec<&&Piece> = team_b.iter().filter(|p| p.row == TEAM_B_ROW).collect();
+        let b_active: Vec<&&Piece> = team_b
+            .iter()
+            .filter(|p| p.row == TEAM_B_ROW && p.col != BENCH_COL)
+            .collect();
         let b_bench: Vec<&&Piece> = team_b
             .iter()
-            .filter(|p| p.row == TEAM_B_BENCH_ROW)
+            .filter(|p| p.row == TEAM_B_BENCH_ROW && p.col == BENCH_COL)
             .collect();
         assert_eq!(b_active.len(), 3, "expected 3 Team B active pieces");
         assert_eq!(b_bench.len(), 1, "expected 1 Team B bench piece");
@@ -196,6 +220,39 @@ mod piece_layout_tests {
             .map(|p| (p.team == Team::A, p.col, p.row))
             .collect();
         assert_eq!(unique.len(), 8, "no duplicate (team, col, row) entries");
+    }
+
+    /// No two pieces share a CELL, regardless of team — keyed on `(col, row)`
+    /// alone. The team-keyed check above cannot catch two opposing pieces
+    /// stacked in one cell, which is exactly what the pre-5x5 bench rule did
+    /// at `BOARD_ROWS = 5`: `TEAM_A_BENCH_ROW`'s hardcoded `2` and
+    /// `TEAM_B_BENCH_ROW`'s `BOARD_ROWS - 3` both resolved to row 2, and both
+    /// benches share `BENCH_COL`. The suite stayed green while the two pieces
+    /// rendered on top of each other; only this key exposes it.
+    #[test]
+    fn no_two_pieces_share_a_cell_across_teams() {
+        let ps = pieces();
+        let cells: HashSet<(u16, u16)> = ps.iter().map(|p| (p.col, p.row)).collect();
+        assert_eq!(
+            cells.len(),
+            ps.len(),
+            "every piece must occupy its own (col, row) cell, including \
+             across teams — two pieces in one cell render stacked"
+        );
+    }
+
+    /// Both bench pieces sit one cell to either side of the board midline,
+    /// on `BENCH_COL`, and land on DIFFERENT rows. Pins the midline-derived
+    /// rule directly rather than via the layout as a whole.
+    #[test]
+    fn bench_rows_straddle_the_midline_on_distinct_rows() {
+        assert_eq!(TEAM_A_BENCH_ROW, MIDLINE_ROW - 1);
+        assert_eq!(TEAM_B_BENCH_ROW, MIDLINE_ROW + 1);
+        assert_ne!(
+            TEAM_A_BENCH_ROW, TEAM_B_BENCH_ROW,
+            "bench rows must be distinct — they share BENCH_COL, so an equal \
+             row puts both bench pieces in the same cell"
+        );
     }
 
     /// Piece indices form the stable contiguous set 0..8, with no gaps or
