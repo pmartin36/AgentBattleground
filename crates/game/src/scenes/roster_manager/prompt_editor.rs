@@ -230,6 +230,14 @@ impl PromptEditor {
         false
     }
 
+    /// Whether one of this popup's text editors currently holds focus, and so
+    /// owns the break key (Ctrl-C = copy). Exactly one of the two is focused
+    /// while the popup is open — `render` mirrors `self.focus` onto them via
+    /// `set_focused`, and both start focused before the first render.
+    pub(super) fn consumes_break(&self) -> bool {
+        self.agent_input.borrow().focused() || self.instructions.borrow().focused()
+    }
+
     /// Cycles keyboard focus between the two editors (b3-t1's `Tab`
     /// handling).
     fn toggle_focus(&mut self) {

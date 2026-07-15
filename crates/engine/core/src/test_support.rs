@@ -36,6 +36,10 @@ pub struct MockScene {
     pub value: f32,
     #[inspect(hidden)]
     rec: Arc<Mutex<MockSceneRecorder>>,
+    /// What this scene reports from `Scene::consumes_break` — stands in for a
+    /// focused text field claiming Ctrl-C.
+    #[inspect(hidden)]
+    consumes_break: bool,
 }
 
 impl MockScene {
@@ -44,6 +48,16 @@ impl MockScene {
             key,
             value: 0.0,
             rec: Arc::new(Mutex::new(MockSceneRecorder::default())),
+            consumes_break: false,
+        }
+    }
+
+    /// Makes this scene claim the break key, as a scene with a focused text
+    /// field does.
+    pub fn consuming_break(key: SceneKey) -> Self {
+        Self {
+            consumes_break: true,
+            ..Self::new(key)
         }
     }
 
@@ -83,6 +97,10 @@ impl Scene for MockScene {
 
     fn inspect(&mut self) -> &mut dyn Inspectable {
         self
+    }
+
+    fn consumes_break(&self) -> bool {
+        self.consumes_break
     }
 }
 

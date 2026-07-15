@@ -159,13 +159,9 @@ impl BattleViewer {
     /// scheme meant a normal keypress matched NOTHING here (shipped bug: "I
     /// press the keys but nothing happens"), and matching lowercase only
     /// would reintroduce the same class of bug for shift/caps-lock users.
-    /// Yaw/pitch are on the arrow keys, not letters at all: lowercase `'q'`
-    /// specifically is intercepted upstream by `SceneManager::route_key` as
-    /// the global quit signal before it ever reaches a scene, so no key
-    /// scheme reachable by normal typing could ever put a real action on
-    /// `q` — confirmed with the project owner that `q`/`Q` must never be
-    /// bound to anything here. Arrow keys have no case and no such
-    /// conflict.
+    /// Yaw/pitch are on the arrow keys, not letters at all. `q`/`Q` must
+    /// never be bound to anything here — confirmed with the project owner.
+    /// Arrow keys have no case and no such conflict.
     fn nudge_camera(cam: &mut PerspectiveCamera, code: crossterm::event::KeyCode) {
         use crossterm::event::KeyCode;
         match code {
@@ -289,8 +285,7 @@ impl Scene for BattleViewer {
                     self.camera_mode = BattleCamera::free_roam_preset();
                 }
                 // Case-insensitive toggle for the controls-help HUD hint
-                // (never `q`/`Q` — that's the global quit key, intercepted
-                // upstream of this scene entirely).
+                // (never `q`/`Q` — those stay unbound in this scene).
                 KeyCode::Char('t') | KeyCode::Char('T') => {
                     self.show_controls_help = !self.show_controls_help;
                 }

@@ -22,10 +22,20 @@ pub trait Scene {
     /// RED stub (`unimplemented!()`) pending the code-writer's real bodies.
     fn inspect(&mut self) -> &mut dyn Inspectable;
     /// Engine polls this once per frame after input dispatch (b4-t1); return
-    /// `true` to request the same app exit `route_key`'s `q`/Ctrl-C already
+    /// `true` to request the same app exit `route_key`'s Ctrl-C/Ctrl-Q
     /// produce. Defaults to `false` so every existing `Scene` impl compiles
     /// unchanged.
     fn quit_requested(&self) -> bool {
+        false
+    }
+
+    /// Whether this scene currently owns the break key (Ctrl-C) — i.e. a
+    /// text field has focus and binds it to something else (copy). While
+    /// `true`, `route_key` forwards Ctrl-C to this scene instead of quitting;
+    /// Ctrl-Q remains an unconditional quit either way.
+    ///
+    /// Defaults to `false`: a scene with no text field lets Ctrl-C quit.
+    fn consumes_break(&self) -> bool {
         false
     }
 }

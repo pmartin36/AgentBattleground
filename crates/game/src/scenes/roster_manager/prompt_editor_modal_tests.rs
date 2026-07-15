@@ -10,9 +10,11 @@
 use super::*;
 use crate::ability::Ability;
 use crate::creatures::Creature;
+use crate::registry::GameCatalog;
 use crate::scenes::test_util::{key_event, mouse_event, rect_text, render_to_buffer};
+use engine_core::scene::manager::SceneManager;
 use engine_core::scene::EngineCtx;
-use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::style::Modifier;
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -39,6 +41,99 @@ fn open_popup(scene: &mut RosterManager, base: Option<&Path>) {
     let idx = scene.current_index;
     let name = scene.creatures[idx].name().to_string();
     scene.prompt_editor = Some(prompt_editor::PromptEditor::new(idx, &name, base, &scene.creatures));
+}
+
+// ── Ctrl-C / Ctrl-Q break routing through `SceneManager::route_key` ────────
+// These drive the REAL app key path (`SceneManager::route_key`), not
+// `scene.handle_input`/`editor.handle_key`, so they see the global Ctrl-C
+// interception a scene-level test cannot.
+
+/// A Ctrl-modified char key event.
+fn ctrl(c: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+}
+
+/// A `RosterManager` seeded with `seed` instructions for the first demo
+/// creature, booted into a `SceneManager` with the popup already open.
+fn mgr_with_open_popup(base: &Path, seed: &str) -> SceneManager {
+    crate::instructions::write_instructions_in(base, "Ember Wolf", seed)
+        .expect("seed write should succeed");
+    let mut scene = RosterManager::new_with_instructions_base(base.to_path_buf());
+    open_popup(&mut scene, Some(base));
+    SceneManager::with_scene(Box::new(scene), Box::new(GameCatalog))
+}
+
+/// Ctrl-C while the prompt editor's text field holds focus must reach the
+/// editor (where it is the copy binding) instead of quitting the app.
+#[test]
+fn ctrl_c_with_focused_prompt_editor_does_not_quit() {
+    let base = temp_base_dir("ctrl-c-focused");
+    let mut mgr = mgr_with_open_popup(&base, "seed text");
+
+    let quit = mgr.route_key(ctrl('c'));
+
+    assert!(
+        !quit,
+        "Ctrl-C with a focused prompt-editor text field must not quit — it is the editor's copy binding"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Focus delegation must follow `Tab` to the agent input: whichever of the
+/// popup's two editors holds focus owns the break key, not just the
+/// Instructions field it opens on.
+#[test]
+fn ctrl_c_does_not_quit_with_the_agent_input_focused() {
+    let base = temp_base_dir("ctrl-c-agent-focused");
+    let mut mgr = mgr_with_open_popup(&base, "seed text");
+
+    let tab = mgr.route_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert!(!tab, "setup: Tab must not quit");
+
+    let quit = mgr.route_key(ctrl('c'));
+
+    assert!(
+        !quit,
+        "Ctrl-C must not quit with the agent input focused — it is that editor's copy binding"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// With the prompt editor closed, no text field has focus, so Ctrl-C keeps
+/// its normal global meaning: quit.
+#[test]
+fn ctrl_c_with_prompt_editor_closed_quits() {
+    let base = temp_base_dir("ctrl-c-closed");
+    let scene = RosterManager::new_with_instructions_base(base.clone());
+    let mut mgr = SceneManager::with_scene(Box::new(scene), Box::new(GameCatalog));
+
+    let quit = mgr.route_key(ctrl('c'));
+
+    assert!(
+        quit,
+        "Ctrl-C with the prompt-editor popup closed must quit — no text field has focus"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Ctrl-Q is the unconditional escape hatch: it quits even while a text
+/// field has focus and is consuming Ctrl-C, so quit is never unreachable.
+#[test]
+fn ctrl_q_quits_even_with_focused_prompt_editor() {
+    let base = temp_base_dir("ctrl-q-focused");
+    let mut mgr = mgr_with_open_popup(&base, "seed text");
+
+    let quit = mgr.route_key(ctrl('q'));
+
+    assert!(
+        quit,
+        "Ctrl-Q must always quit, even while a focused text field consumes Ctrl-C"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 fn four_abilities() -> Vec<Ability> {

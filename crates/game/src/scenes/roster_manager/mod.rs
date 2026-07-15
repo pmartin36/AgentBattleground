@@ -507,6 +507,15 @@ impl Scene for RosterManager {
     fn inspect(&mut self) -> &mut dyn engine_core::Inspectable {
         self
     }
+
+    /// The prompt-editor popup owns this scene's only text fields, so it is
+    /// the sole holder of the break key: delegate to it while it is open, and
+    /// report `false` once it closes so Ctrl-C quits normally again.
+    fn consumes_break(&self) -> bool {
+        self.prompt_editor
+            .as_ref()
+            .is_some_and(|popup| popup.consumes_break())
+    }
 }
 
 mod borders;

@@ -284,6 +284,31 @@ mod tests {
         }
     }
 
+    /// Scenes with no text field inherit `Scene::consumes_break`'s `false`
+    /// default, so Ctrl-C keeps quitting for them — no per-scene opt-out.
+    /// Ctrl-Q quits there too.
+    #[test]
+    fn ctrl_c_and_ctrl_q_quit_on_scenes_without_a_text_field() {
+        for make in [
+            || Box::new(MainHub::default()) as Box<dyn Scene>,
+            || Box::new(Leaderboard) as Box<dyn Scene>,
+        ] {
+            for quit_key in ['c', 'q'] {
+                let mut mgr = SceneManager::with_scene(make(), Box::new(GameCatalog));
+                let quit = mgr.route_key(KeyEvent::new(
+                    KeyCode::Char(quit_key),
+                    KeyModifiers::CONTROL,
+                ));
+                assert!(
+                    quit,
+                    "Ctrl-{} must quit on scene {:?}, which owns no text field",
+                    quit_key.to_ascii_uppercase(),
+                    mgr.active_id()
+                );
+            }
+        }
+    }
+
     /// Regression for the dt freeze bug: `tick()` must report real wall-clock
     /// time between calls (~ms), not intra-frame elapsed (~µs).
     #[test]

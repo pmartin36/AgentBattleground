@@ -8,3 +8,9 @@ engine-core = { path = "../core" }
 ratatui = { workspace = true }
 image = "0.25"
 arboard = { version = "3.6", default-features = false }
+
+[dev-dependencies]
+# Test-only: `Scene::enter`'s `params` is a `serde_json::Value`, so this
+# crate's `Scene`-driven tests must name the type. The shipped library does
+# not depend on serde_json.
+serde_json = { workspace = true }

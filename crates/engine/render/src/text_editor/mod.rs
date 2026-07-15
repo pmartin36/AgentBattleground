@@ -8,6 +8,8 @@ use ratatui::crossterm::event::{
 };
 
 mod clipboard;
+#[cfg(test)]
+mod break_routing_tests;
 mod history;
 mod mention;
 mod render;
@@ -173,6 +175,13 @@ impl TextEditor {
     /// editor never draws a caret regardless of blink phase.
     pub fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+    }
+
+    /// Whether this editor currently has input focus. Scenes owning an editor
+    /// report this from `Scene::consumes_break` so a focused editor's Ctrl-C
+    /// copy binding reaches it instead of quitting the app.
+    pub fn focused(&self) -> bool {
+        self.focused
     }
 
     /// `true` iff the caret should be drawn this frame: focused AND the

@@ -1327,6 +1327,7 @@ dependencies = [
  "engine-core",
  "image",
  "ratatui",
+ "serde_json",
 ]
 
 [[package]]

@@ -300,18 +300,30 @@ impl SceneManager {
         Some(id)
     }
 
-    /// Route one key event. Returns `true` if the app should quit (Ctrl-C).
-    /// Digit-key ('1'-'9') scene switching is REMOVED here (b3-t1)
-    /// — it moves to `game::app`'s own dispatch table (b3-t2). All other
-    /// keys forward to the active scene via `handle_input`.
+    /// Route one key event. Returns `true` if the app should quit (Ctrl-Q, or
+    /// Ctrl-C unless the active scene consumes it). Digit-key ('1'-'9') scene
+    /// switching is REMOVED here (b3-t1) — it moves to `game::app`'s own
+    /// dispatch table (b3-t2). All other keys forward to the active scene via
+    /// `handle_input`.
     pub fn route_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
         use crossterm::event::{KeyCode, KeyModifiers};
 
-        // Quit on Ctrl-C only (raw mode delivers it as a key event, not
-        // SIGINT). A bare `q` is NOT a quit — it forwards to the active scene
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        // Ctrl-Q is the unconditional quit: checked before any scene
+        // forwarding, so quit stays reachable no matter what the active scene
+        // binds. A bare `q` is NOT a quit — it forwards to the active scene
         // like any other char, so text fields (the prompt editor, @-mentions)
         // can type it.
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if ctrl && key.code == KeyCode::Char('q') {
+            return true;
+        }
+
+        // Ctrl-C quits (raw mode delivers it as a key event, not SIGINT)
+        // unless the active scene claims it — a focused text field binds it to
+        // copy, so it forwards there instead. Ctrl-Q above remains the escape
+        // hatch when a scene consumes it.
+        if ctrl && key.code == KeyCode::Char('c') && !self.active.consumes_break() {
             return true;
         }
 
@@ -711,11 +723,60 @@ mod tests {
         );
     }
 
+    /// The `consumes_break() == false` default: a scene with no text field
+    /// lets Ctrl-C quit.
     #[test]
     fn route_key_ctrl_c_returns_quit() {
         let mut mgr = SceneManager::new(SceneKey::new("A"), Box::new(MockCatalog));
         let quit = mgr.route_key(key('c', KeyModifiers::CONTROL));
         assert!(quit, "route_key(Ctrl-C) must return true (quit signal)");
+    }
+
+    /// A scene that consumes the break key (a focused text field binding
+    /// Ctrl-C to copy) must RECEIVE the Ctrl-C rather than have the app quit
+    /// out from under it.
+    #[test]
+    fn route_key_ctrl_c_forwards_to_scene_consuming_break() {
+        let scene = crate::test_support::MockScene::consuming_break(SceneKey::new("A"));
+        let rec = scene.recorder();
+        let mut mgr = SceneManager::with_scene(Box::new(scene), Box::new(MockCatalog));
+        let ke = key('c', KeyModifiers::CONTROL);
+
+        let quit = mgr.route_key(ke);
+
+        assert!(!quit, "Ctrl-C must not quit while the active scene consumes it");
+        assert_eq!(
+            rec.lock().unwrap().last_key,
+            Some(ke),
+            "Ctrl-C must forward to a scene that consumes the break key"
+        );
+    }
+
+    /// Ctrl-Q is the unconditional quit, whatever the active scene reports.
+    #[test]
+    fn route_key_ctrl_q_returns_quit() {
+        let mut mgr = SceneManager::new(SceneKey::new("A"), Box::new(MockCatalog));
+        let quit = mgr.route_key(key('q', KeyModifiers::CONTROL));
+        assert!(quit, "route_key(Ctrl-Q) must return true (quit signal)");
+    }
+
+    /// The escape hatch: Ctrl-Q quits even while the active scene consumes
+    /// Ctrl-C, so quit is never unreachable — and is never forwarded.
+    #[test]
+    fn route_key_ctrl_q_quits_past_a_scene_consuming_break() {
+        let scene = crate::test_support::MockScene::consuming_break(SceneKey::new("A"));
+        let rec = scene.recorder();
+        let mut mgr = SceneManager::with_scene(Box::new(scene), Box::new(MockCatalog));
+        let ke = key('q', KeyModifiers::CONTROL);
+
+        let quit = mgr.route_key(ke);
+
+        assert!(quit, "Ctrl-Q must quit even while the active scene consumes Ctrl-C");
+        assert_ne!(
+            rec.lock().unwrap().last_key,
+            Some(ke),
+            "Ctrl-Q must be consumed as the global quit, not forwarded to the scene"
+        );
     }
 
     #[test]
