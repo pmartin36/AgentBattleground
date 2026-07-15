@@ -218,7 +218,9 @@ impl TextEditor {
     /// `config.submit_on_enter`). Left/Right/Up/Down/Home/End reposition the
     /// caret (see `move_cursor`) and scroll the viewport to keep it visible.
     /// PageUp/PageDown scroll the viewport by one page without moving the
-    /// caret or mutating the buffer.
+    /// caret or mutating the buffer. Any key that mutates the buffer
+    /// (reports [`EditorEvent::Changed`]) also scrolls the viewport to keep
+    /// the caret visible.
     pub fn handle_key(&mut self, key: KeyEvent) -> EditorEvent {
         let kind = Self::classify_key(&key);
         let pre = kind.map(|_| self.snapshot());
@@ -229,6 +231,14 @@ impl TextEditor {
             if event == EditorEvent::Changed {
                 self.commit_edit(pre.expect("snapshot taken whenever kind is Some"), kind);
             }
+        }
+        // Every buffer mutation reports `Changed`, so scrolling here is the
+        // one place that keeps the caret on screen for all of them — typing,
+        // Enter, Backspace/Delete, cut, paste, undo/redo, and mention
+        // insertion alike. Gated on `Changed` rather than unconditional so
+        // PageUp/PageDown keep scrolling away from a stationary caret.
+        if event == EditorEvent::Changed {
+            self.scroll_to_cursor();
         }
         if matches!(
             key.code,

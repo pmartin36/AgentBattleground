@@ -1082,3 +1082,173 @@ fn click_to_place_resets_blink_to_visible() {
         "an in-content click must reset the blink phase to visible"
     );
 }
+
+// --- editing keys scroll the viewport to follow the caret ---
+
+use super::clipboard::{Clipboard, FakeClipboard};
+
+fn ctrl_key(c: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+}
+
+/// Assert the caret's display row lies within the visible window
+/// `[scroll_offset, scroll_offset + viewport_height)`.
+fn assert_caret_visible(editor: &TextEditor) {
+    let row = editor.cursor_display_pos(editor.viewport_width.max(1)).0;
+    let top = editor.scroll_offset;
+    let bottom = top + editor.viewport_height;
+    assert!(
+        row >= top && row < bottom,
+        "caret display row {row} outside visible window [{top},{bottom})"
+    );
+}
+
+/// Two logical lines @ width 6, height 2 -> 2 display rows exactly filling
+/// the viewport, caret on the last visible row.
+fn editor_with_caret_on_last_visible_row() -> TextEditor {
+    let mut editor = TextEditor::new(config());
+    editor.set_text("a\nb"); // caret lands at end of "b" -> display row 1
+    editor.viewport_width = 6;
+    editor.viewport_height = 2;
+    editor
+}
+
+#[test]
+fn enter_at_viewport_bottom_scrolls_so_the_new_line_is_visible() {
+    let mut editor = editor_with_caret_on_last_visible_row();
+    assert_eq!(editor.scroll_offset, 0);
+
+    assert_eq!(editor.handle_key(key(KeyCode::Enter)), EditorEvent::Changed);
+
+    assert_eq!(editor.cursor_display_pos(6).0, 2, "caret on the new line");
+    assert_eq!(editor.scroll_offset, 1, "viewport must follow the new line");
+    assert_caret_visible(&editor);
+}
+
+#[test]
+fn typing_that_wraps_past_the_bottom_scrolls_to_follow() {
+    let mut editor = TextEditor::new(config());
+    editor.set_text("abcdefgh"); // no spaces: wraps "abcd"/"efgh" @ width 4
+    editor.viewport_width = 4;
+    editor.viewport_height = 2;
+    assert_eq!(editor.scroll_offset, 0);
+    assert_eq!(editor.cursor_display_pos(4).0, 1, "caret on last visible row");
+
+    // One more char wraps onto a third display row.
+    assert_eq!(
+        editor.handle_key(key(KeyCode::Char('i'))),
+        EditorEvent::Changed
+    );
+
+    assert_eq!(editor.cursor_display_pos(4).0, 2);
+    assert_eq!(editor.scroll_offset, 1, "viewport must follow the wrap");
+    assert_caret_visible(&editor);
+}
+
+#[test]
+fn paste_of_a_multiline_block_at_the_bottom_scrolls_to_follow() {
+    let mut editor = editor_with_caret_on_last_visible_row();
+    let mut clip = FakeClipboard::default();
+    clip.set_text("x\ny\nz");
+    editor.set_clipboard(Box::new(clip));
+
+    assert_eq!(editor.handle_key(ctrl_key('v')), EditorEvent::Changed);
+
+    // "a" / "bx" / "y" / "z" -> caret at end of "z", display row 3.
+    assert_eq!(editor.text(), "a\nbx\ny\nz");
+    assert_eq!(editor.cursor_display_pos(6).0, 3);
+    assert_eq!(editor.scroll_offset, 2, "viewport must follow the paste");
+    assert_caret_visible(&editor);
+}
+
+#[test]
+fn backspace_joining_lines_keeps_the_caret_visible() {
+    let mut editor = TextEditor::new(config());
+    editor.set_text("a\nb\nc\nd\ne\nf"); // 6 display rows
+    editor.viewport_width = 6;
+    editor.viewport_height = 2;
+    editor.scroll_offset = editor.max_scroll_offset(); // caret visible at bottom
+
+    // Move the caret to the top of the buffer, then scroll away from it so a
+    // pure edit (no movement key) has to bring the viewport back.
+    editor.cursor_line = 0;
+    editor.cursor_col = 1;
+    editor.scroll_offset = 4;
+
+    assert_eq!(
+        editor.handle_key(key(KeyCode::Backspace)),
+        EditorEvent::Changed
+    );
+
+    assert_eq!(editor.text(), "\nb\nc\nd\ne\nf");
+    assert_eq!(editor.scroll_offset, 0, "viewport must snap back to the edit");
+    assert_caret_visible(&editor);
+}
+
+#[test]
+fn undo_and_redo_leave_the_caret_visible() {
+    let mut editor = TextEditor::new(config());
+    editor.set_text("a\nb\nc\nd\ne\nf");
+    editor.viewport_width = 6;
+    editor.viewport_height = 2;
+    editor.cursor_line = 0;
+    editor.cursor_col = 1;
+
+    assert_eq!(
+        editor.handle_key(key(KeyCode::Char('X'))),
+        EditorEvent::Changed
+    );
+    assert_caret_visible(&editor);
+
+    // Scroll far away from the caret, then undo: the viewport must come back.
+    editor.scroll_offset = editor.max_scroll_offset();
+    assert_eq!(editor.handle_key(ctrl_key('z')), EditorEvent::Changed);
+    assert_eq!(editor.text(), "a\nb\nc\nd\ne\nf");
+    assert_caret_visible(&editor);
+
+    editor.scroll_offset = editor.max_scroll_offset();
+    assert_eq!(editor.handle_key(ctrl_key('y')), EditorEvent::Changed);
+    assert_eq!(editor.text(), "aX\nb\nc\nd\ne\nf");
+    assert_caret_visible(&editor);
+}
+
+#[test]
+fn page_down_then_page_up_scroll_without_snapping_back_to_the_caret() {
+    let mut editor = scrollable_editor();
+    editor.cursor_line = 0;
+    editor.cursor_col = 0; // caret pinned at display row 0
+
+    // PageDown scrolls the viewport away from the caret and leaves it there:
+    // the caret deliberately goes off-screen.
+    assert_eq!(editor.handle_key(key(KeyCode::PageDown)), EditorEvent::None);
+    assert_eq!(editor.scroll_offset, 2);
+    assert_eq!(
+        (editor.cursor_line, editor.cursor_col),
+        (0, 0),
+        "PageDown must not move the caret"
+    );
+
+    assert_eq!(editor.handle_key(key(KeyCode::PageDown)), EditorEvent::None);
+    assert_eq!(editor.scroll_offset, 4);
+
+    assert_eq!(editor.handle_key(key(KeyCode::PageUp)), EditorEvent::None);
+    assert_eq!(editor.scroll_offset, 2, "PageUp must not snap to the caret");
+    assert_eq!((editor.cursor_line, editor.cursor_col), (0, 0));
+}
+
+#[test]
+fn editing_before_the_first_render_scrolls_without_panicking() {
+    // `viewport_width`/`viewport_height` are 0 until `render()` sets them; a
+    // key arriving first must not panic or divide by zero.
+    let mut editor = TextEditor::new(config());
+    assert_eq!(editor.viewport_height, 0);
+
+    assert_eq!(
+        editor.handle_key(key(KeyCode::Char('a'))),
+        EditorEvent::Changed
+    );
+    assert_eq!(editor.handle_key(key(KeyCode::Enter)), EditorEvent::Changed);
+
+    assert_eq!(editor.text(), "a\n");
+    assert_eq!(editor.scroll_offset, 1);
+}
