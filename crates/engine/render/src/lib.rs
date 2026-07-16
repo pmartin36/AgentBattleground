@@ -36,7 +36,8 @@ pub use grid::{draw_grid, Cell, Grid};
 pub use screen_layout::{anchor, anchor_with_margin, stack, Anchor, RectTween, StackAxis};
 pub use shapes::{rasterize_shape, ShapeKind};
 pub use text_editor::{
-    EditorEvent, MentionCandidate, MentionProvider, Sizing, TextEditor, TextEditorConfig,
+    Decoration, EditorEvent, MentionCandidate, MentionProvider, Sizing, TextEditor,
+    TextEditorConfig, SELECTION_BG,
 };
 pub use ui_primitives::{circle, circle_outline, rect, ring, rounded_rect};
 

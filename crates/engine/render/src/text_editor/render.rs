@@ -8,15 +8,17 @@ use ratatui::style::{Color, Modifier, Style};
 
 use crate::dots::{Dot, DotBuffer};
 
-use super::{TextEditor, WrapRow};
+use super::{Pos, TextEditor, WrapRow};
 
 /// Dim ink color for the scrollbar thumb (see `draw_scrollbar`).
 const SCROLLBAR_COLOR: Rgba = Rgba::rgb(0x5a, 0x5a, 0x5a);
 
 /// Background tint for the selection highlight (b1-t5). A muted blue tint,
 /// not `Modifier::REVERSED` — REVERSED is reserved for the caret so the two
-/// stay visually distinguishable where they overlap.
-pub(super) const SELECTION_BG: Color = Color::Rgb(0x2f, 0x4f, 0x6f);
+/// stay visually distinguishable where they overlap. Exported (b2-t1) so
+/// game-side code can compare a game-defined tint against it and prove the
+/// two are distinct, without re-declaring the literal.
+pub const SELECTION_BG: Color = Color::Rgb(0x2f, 0x4f, 0x6f);
 
 /// Mention-popup panel border ink (dot pipeline). A light green,
 /// deliberately DISTINCT from the grey field-box border so the popup reads as
@@ -27,7 +29,40 @@ pub(super) const MENTION_BORDER: Rgba = Rgba::rgb(0x66, 0xcc, 0x88);
 /// `SELECTION_BG`. b1-t3.
 pub(super) const MENTION_HIGHLIGHT_BG: Color = Color::Rgb(0x3a, 0x5a, 0x8a);
 
+/// A background tint over a logical char-indexed `(line, col)` span,
+/// end-exclusive. b2-t1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Decoration {
+    pub span: ((usize, usize), (usize, usize)),
+    pub bg: Color,
+}
+
+/// Normalize a `(start, end)` span so `start <= end`, regardless of which
+/// order the caller passed them in. Shared by `decoration_at` and
+/// `draw_span_bg` (both need the same end-exclusive ordering). b2-t1.
+fn normalized_span(span: (Pos, Pos)) -> (Pos, Pos) {
+    if span.0 <= span.1 {
+        span
+    } else {
+        (span.1, span.0)
+    }
+}
+
 impl TextEditor {
+    /// Replace (not append) the decoration list. b2-t1.
+    pub fn set_decorations(&mut self, decorations: Vec<Decoration>) {
+        self.decorations = decorations;
+    }
+
+    /// Index of the first decoration whose span contains `pos`
+    /// (end-exclusive); `None` if none. b2-t1.
+    pub fn decoration_at(&self, pos: (usize, usize)) -> Option<usize> {
+        self.decorations.iter().position(|d| {
+            let (start, end) = normalized_span(d.span);
+            pos >= start && pos < end
+        })
+    }
+
     /// Total wrapped display rows at the current cached viewport width.
     pub(super) fn total_display_rows(&self) -> usize {
         self.wrap_rows(self.viewport_width.max(1)).len()
@@ -123,6 +158,7 @@ impl TextEditor {
             buf.set_stringn(rect.x, y, &s, width, text_style);
         }
 
+        self.draw_decorations(buf, rect, &rows);
         self.draw_selection(buf, rect, &rows);
 
         if self.caret_visible() {
@@ -218,17 +254,43 @@ impl TextEditor {
         }
     }
 
-    /// Paint the selection highlight (a background tint, not `REVERSED`) on
-    /// every visible display cell whose logical column falls within the
-    /// normalized `selection_span()`. `rows` is the caller's already-wrapped
-    /// row vector (no re-wrap); iterates the same
-    /// `scroll_offset..scroll_offset+height` window as the text loop so
-    /// highlighted cells line up with the drawn glyphs. A no-op when there is
-    /// no active selection.
+    /// Paint every entry in `self.decorations`, in order, ahead of the
+    /// selection highlight (`render()`'s call ordering gives selection
+    /// precedence over decorations on overlap). `rows` is the caller's
+    /// already-wrapped row vector (no re-wrap). A no-op when there are no
+    /// decorations.
+    fn draw_decorations(&self, buf: &mut Buffer, rect: Rect, rows: &[WrapRow]) {
+        for deco in &self.decorations {
+            self.draw_span_bg(buf, rect, rows, deco.span, deco.bg);
+        }
+    }
+
+    /// Paint the selection highlight (a background tint, not `REVERSED`) over
+    /// the normalized `selection_span()`, with `SELECTION_BG`. A no-op when
+    /// there is no active selection.
     fn draw_selection(&self, buf: &mut Buffer, rect: Rect, rows: &[WrapRow]) {
-        let Some(((sl, sc), (el, ec))) = self.selection_span() else {
+        let Some(span) = self.selection_span() else {
             return;
         };
+        self.draw_span_bg(buf, rect, rows, span, SELECTION_BG);
+    }
+
+    /// Paint `bg` on every visible display cell whose logical column falls
+    /// within the normalized `span`, end-exclusive. `rows` is the caller's
+    /// already-wrapped row vector (no re-wrap); iterates the same
+    /// `scroll_offset..scroll_offset+height` window as the text loop so
+    /// tinted cells line up with the drawn glyphs. b2-t1: former
+    /// `draw_selection` body, span + bg parameterized so selection and
+    /// decorations share one painting pass.
+    fn draw_span_bg(
+        &self,
+        buf: &mut Buffer,
+        rect: Rect,
+        rows: &[WrapRow],
+        span: (Pos, Pos),
+        bg: Color,
+    ) {
+        let ((sl, sc), (el, ec)) = normalized_span(span);
         let height = rect.height as usize;
         let end = (self.scroll_offset + height).min(rows.len());
         for (i, row) in rows[self.scroll_offset..end].iter().enumerate() {
@@ -239,14 +301,14 @@ impl TextEditor {
             if y >= buf.area.bottom() {
                 continue;
             }
-            let sel_start = if row.line == sl { sc } else { 0 };
-            let sel_end = if row.line == el {
+            let span_start = if row.line == sl { sc } else { 0 };
+            let span_end = if row.line == el {
                 ec
             } else {
                 self.lines[row.line].chars().count()
             };
-            let hl_start = sel_start.max(row.start);
-            let hl_end = sel_end.min(row.end);
+            let hl_start = span_start.max(row.start);
+            let hl_end = span_end.min(row.end);
             if hl_start >= hl_end {
                 continue;
             }
@@ -256,7 +318,7 @@ impl TextEditor {
                     continue;
                 }
                 if let Some(cell) = buf.cell_mut((x, y)) {
-                    cell.set_bg(SELECTION_BG);
+                    cell.set_bg(bg);
                 }
             }
         }
@@ -382,14 +444,7 @@ mod tests {
     /// Assert `bg == SELECTION_BG` for every x in `highlighted`, and
     /// `bg == Color::Reset` for every other x in `0..width`, on row `y`.
     fn assert_row_highlight(buf: &Buffer, y: u16, width: u16, highlighted: &[u16]) {
-        for x in 0..width {
-            let bg = buf.cell((x, y)).unwrap().bg;
-            if highlighted.contains(&x) {
-                assert_eq!(bg, SELECTION_BG, "expected highlight at ({x},{y})");
-            } else {
-                assert_eq!(bg, Color::Reset, "expected no highlight at ({x},{y})");
-            }
-        }
+        assert_row_bg(buf, y, width, highlighted, SELECTION_BG);
     }
 
     #[test]
@@ -471,6 +526,131 @@ mod tests {
             caret.bg, SELECTION_BG,
             "caret cell must still carry the highlight bg underneath"
         );
+    }
+
+    // --- b2-t1: span-decoration pass ---
+
+    /// A tint deliberately distinct from `SELECTION_BG`, so the precedence
+    /// test proves something.
+    const TEST_DECO_BG: Color = Color::Rgb(0x7f, 0x00, 0x00);
+
+    /// Generalized form of `assert_row_highlight`: assert `bg == expect_bg`
+    /// for every x in `tinted`, and `bg == Color::Reset` for every other x in
+    /// `0..width`, on row `y`. b2-t1.
+    fn assert_row_bg(buf: &Buffer, y: u16, width: u16, tinted: &[u16], expect_bg: Color) {
+        for x in 0..width {
+            let bg = buf.cell((x, y)).unwrap().bg;
+            if tinted.contains(&x) {
+                assert_eq!(bg, expect_bg, "expected {expect_bg:?} at ({x},{y})");
+            } else {
+                assert_eq!(bg, Color::Reset, "expected no tint at ({x},{y})");
+            }
+        }
+    }
+
+    #[test]
+    fn decorated_span_tints_exact_cells() {
+        let mut ed = TextEditor::new(config());
+        ed.set_text("abcdef");
+        ed.set_decorations(vec![Decoration {
+            span: ((0, 1), (0, 4)),
+            bg: TEST_DECO_BG,
+        }]);
+        let rect = Rect::new(0, 0, 10, 3);
+        let mut buf = make_buf(10, 3);
+
+        ed.render(&mut buf, rect);
+
+        assert_row_bg(&buf, 0, 10, &[1, 2, 3], TEST_DECO_BG);
+    }
+
+    #[test]
+    fn selection_over_decoration_renders_selection_bg() {
+        let mut ed = TextEditor::new(config());
+        ed.set_text("abcdef");
+        ed.set_decorations(vec![Decoration {
+            span: ((0, 1), (0, 4)),
+            bg: TEST_DECO_BG,
+        }]);
+        ed.set_selection((0, 1), (0, 4));
+        let rect = Rect::new(0, 0, 10, 3);
+        let mut buf = make_buf(10, 3);
+
+        ed.render(&mut buf, rect);
+
+        assert_row_bg(&buf, 0, 10, &[1, 2, 3], SELECTION_BG);
+    }
+
+    #[test]
+    fn decoration_across_wrap_boundary_tints_both_rows() {
+        let mut ed = TextEditor::new(config());
+        ed.set_text("abcdefgh"); // no spaces: wraps to "abcd" / "efgh" at width 4
+        ed.set_decorations(vec![Decoration {
+            span: ((0, 2), (0, 6)),
+            bg: TEST_DECO_BG,
+        }]);
+        let rect = Rect::new(0, 0, 4, 2);
+        let mut buf = make_buf(4, 2);
+
+        ed.render(&mut buf, rect);
+
+        assert_row_bg(&buf, 0, 4, &[2, 3], TEST_DECO_BG);
+        assert_row_bg(&buf, 1, 4, &[0, 1], TEST_DECO_BG);
+    }
+
+    #[test]
+    fn no_decorations_renders_no_tint() {
+        let mut ed = TextEditor::new(config());
+        ed.set_text("abcdef");
+        ed.set_decorations(vec![]);
+        let rect = Rect::new(0, 0, 10, 3);
+        let mut buf = make_buf(10, 3);
+
+        ed.render(&mut buf, rect);
+
+        for y in 0..3 {
+            assert_row_bg(&buf, y, 10, &[], Color::Reset);
+        }
+    }
+
+    #[test]
+    fn set_decorations_replaces_previous_list() {
+        let mut ed = TextEditor::new(config());
+        ed.set_text("abcdef");
+        ed.set_decorations(vec![Decoration {
+            span: ((0, 0), (0, 2)),
+            bg: TEST_DECO_BG,
+        }]);
+        ed.set_decorations(vec![Decoration {
+            span: ((0, 3), (0, 5)),
+            bg: TEST_DECO_BG,
+        }]);
+        let rect = Rect::new(0, 0, 10, 3);
+        let mut buf = make_buf(10, 3);
+
+        ed.render(&mut buf, rect);
+
+        assert_row_bg(&buf, 0, 10, &[3, 4], TEST_DECO_BG);
+    }
+
+    #[test]
+    fn decoration_at_hit_tests_span_end_exclusive() {
+        let mut ed = TextEditor::new(config());
+        ed.set_decorations(vec![
+            Decoration {
+                span: ((0, 1), (0, 4)),
+                bg: TEST_DECO_BG,
+            },
+            Decoration {
+                span: ((1, 0), (1, 2)),
+                bg: TEST_DECO_BG,
+            },
+        ]);
+
+        assert_eq!(ed.decoration_at((0, 2)), Some(0), "inside first span");
+        assert_eq!(ed.decoration_at((0, 4)), None, "end-exclusive boundary");
+        assert_eq!(ed.decoration_at((0, 0)), None, "before first span");
+        assert_eq!(ed.decoration_at((1, 1)), Some(1), "inside second span");
     }
 
     // --- b3-t1: draggable scrollbar thumb + track paging ---

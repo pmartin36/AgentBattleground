@@ -19,6 +19,7 @@ mod wrap;
 use clipboard::{Clipboard, SystemClipboard};
 use history::{EditKind, Snapshot};
 pub use mention::{MentionCandidate, MentionProvider};
+pub use render::{Decoration, SELECTION_BG};
 
 /// Logical `(line, col)` position, char-indexed into `lines[line]` — the
 /// same convention as `cursor_line`/`cursor_col`. b1-t1.
@@ -116,6 +117,10 @@ pub struct TextEditor {
     /// caret move or a non-coalescing edit, so the next edit starts a new
     /// undo step. b4-t1.
     last_edit_kind: Option<EditKind>,
+    /// Background-tinted spans painted ahead of the selection highlight
+    /// (which wins on overlap by render-order); e.g. diagnostic markers.
+    /// b2-t1.
+    decorations: Vec<Decoration>,
 }
 
 /// One display row produced by wrapping a logical line: `[start, end)` are
@@ -153,6 +158,7 @@ impl TextEditor {
             undo_stack: std::collections::VecDeque::new(),
             redo_stack: Vec::new(),
             last_edit_kind: None,
+            decorations: Vec::new(),
         }
     }
 
