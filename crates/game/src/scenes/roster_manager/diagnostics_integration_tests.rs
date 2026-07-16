@@ -485,11 +485,11 @@ fn editing_bad_mention_tints_exactly_its_span() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// The `[!!]` badge renders on the file-path row's reserved slot
-/// (`split_path_row`), never a hardcoded rect.
+/// The `[!!]` badge renders in the popup's top-left slot (`layout.badge`),
+/// mirroring the close (X) top-right, never a hardcoded rect.
 #[test]
-fn badge_renders_on_file_path_row() {
-    let base = temp_base_dir("editor-badge-row");
+fn badge_renders_top_left() {
+    let base = temp_base_dir("editor-badge-topleft");
     crate::instructions::write_instructions_in(&base, CREATURE_0, ONE_DIAG_TEXT)
         .expect("seed write should succeed");
     let mut scene = RosterManager::new_with_instructions_base(base.clone());
@@ -497,14 +497,22 @@ fn badge_renders_on_file_path_row() {
 
     let buf = render_to_buffer(&scene, W, H);
     let layout = prompt_editor::PromptEditor::compute_layout(Rect::new(0, 0, W, H), 1);
-    let row = diagnostics_ui::split_path_row(layout.file_path);
-    let slot = row.badge.expect("the badge slot must exist at 80 columns");
+    let slot = layout.badge.to_cell_rect();
 
     assert!(
         rect_text(&buf, slot).contains(diagnostics_ui::BADGE_TEXT),
-        "expected {:?} in the editor's badge slot, got {:?}",
+        "expected {:?} in the editor's top-left badge slot, got {:?}",
         diagnostics_ui::BADGE_TEXT,
         rect_text(&buf, slot)
+    );
+
+    // Top-left, not top-right: the badge's left edge sits left of the close
+    // (X) button's left edge, and both share the popup's top band.
+    assert!(
+        layout.badge.x < layout.close.x,
+        "badge (x={}) must be left of the close button (x={})",
+        layout.badge.x,
+        layout.close.x
     );
 
     let _ = std::fs::remove_dir_all(&base);
@@ -521,8 +529,7 @@ fn clean_file_writes_no_badge_cell() {
 
     let buf = render_to_buffer(&scene, W, H);
     let layout = prompt_editor::PromptEditor::compute_layout(Rect::new(0, 0, W, H), 1);
-    let row = diagnostics_ui::split_path_row(layout.file_path);
-    let slot = row.badge.expect("the badge slot must exist at 80 columns");
+    let slot = layout.badge.to_cell_rect();
 
     assert!(
         !crate::scenes::test_util::has_non_space(&buf, slot),
@@ -532,17 +539,13 @@ fn clean_file_writes_no_badge_cell() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// FINDING 2's regression guard: the badge slot's reservation must be
-/// UNCONDITIONAL, so `fit_path_text`'s available width — and therefore the
-/// rendered path text itself — never changes when a diagnostic
-/// appears/clears. Uses a SINGLE scene/file path throughout (the file path
-/// itself never changes as the user types into the instructions body) and
-/// decodes the REAL buffer before and after, so the only variable between
-/// the two captures is whether a diagnostic exists. (Iteration 1 compared
-/// `split_path_row(x) == split_path_row(x)` on the same input — a
-/// tautology; see validator.md.)
+/// The top-left badge and the file-path row are independent: the path text is
+/// full-width and identical whether or not a diagnostic exists, while the
+/// badge appears in its own top-left slot only when flagged. Decodes the REAL
+/// buffer before and after, so the only variable between the two captures is
+/// whether a diagnostic exists.
 #[test]
-fn path_text_rect_does_not_move_when_a_diagnostic_appears() {
+fn path_text_unaffected_by_top_left_badge() {
     let base = temp_base_dir("editor-path-stable");
     crate::instructions::write_instructions_in(&base, CREATURE_0, CLEAN_TEXT)
         .expect("seed write should succeed");
@@ -550,15 +553,15 @@ fn path_text_rect_does_not_move_when_a_diagnostic_appears() {
     open_editor_popup(&mut scene, &base);
 
     let layout = prompt_editor::PromptEditor::compute_layout(Rect::new(0, 0, W, H), 1);
-    let row = diagnostics_ui::split_path_row(layout.file_path);
-    let badge_slot = row.badge.expect("the badge slot must exist at 80 columns");
+    let badge_slot = layout.badge.to_cell_rect();
+    let path_rect = layout.file_path.to_cell_rect();
 
     let clean_buf = render_to_buffer(&scene, W, H);
     assert!(
         !crate::scenes::test_util::has_non_space(&clean_buf, badge_slot),
         "setup: the clean file must write no cell in the badge slot"
     );
-    let clean_path_text = rect_text(&clean_buf, row.path);
+    let clean_path_text = rect_text(&clean_buf, path_rect);
 
     for c in " @Volt_Scorpion.".chars() {
         scene.handle_input(key_event(KeyCode::Char(c)));
@@ -569,15 +572,15 @@ fn path_text_rect_does_not_move_when_a_diagnostic_appears() {
     let flagged_buf = render_to_buffer(&scene, W, H);
     assert!(
         crate::scenes::test_util::has_non_space(&flagged_buf, badge_slot),
-        "setup: the now-flagged file must write the badge into its slot"
+        "setup: the now-flagged file must write the badge into its top-left slot"
     );
-    let flagged_path_text = rect_text(&flagged_buf, row.path);
+    let flagged_path_text = rect_text(&flagged_buf, path_rect);
 
     assert_eq!(
         clean_path_text, flagged_path_text,
-        "the file-path text rendered into the reserved `path` rect must be identical before \
-         and after a diagnostic appears — the badge slot's width must not grow/shrink and \
-         shift the path text: clean={clean_path_text:?} flagged={flagged_path_text:?}"
+        "the full-width file-path text must be identical before and after a diagnostic \
+         appears — the top-left badge must not touch the path row: \
+         clean={clean_path_text:?} flagged={flagged_path_text:?}"
     );
 
     let _ = std::fs::remove_dir_all(&base);
@@ -628,7 +631,9 @@ fn hovering_editor_badge_shows_clamped_card() {
         );
     }
 
-    assert_eq!(layout.card.x, 0, "at this anchor the card must be left-clamped (unclamped x = -50)");
+    // The badge is top-left, so the up-left-anchored card clamps on BOTH axes.
+    assert_eq!(layout.card.x, 0, "top-left badge: the card must clamp to x = 0");
+    assert_eq!(layout.card.y, 0, "top-left badge: the card must clamp to y = 0");
     let mid_dot_row = layout.card.y + layout.card.h / 2;
     assert_eq!(
         lit_dot_color(&buf, 0, mid_dot_row).map(|c| (c.r, c.g, c.b)),

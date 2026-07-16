@@ -59,9 +59,17 @@ pub(super) fn draw_badge(
     Some(rect)
 }
 
-/// The `BADGE_TEXT`-wide cell run immediately right of `label` inside
-/// `header`'s cell rect. `None` when the slot cannot hold `label` + the
-/// badge (< 80 terminal columns — research.md b4-t1 FINDING 1), so the
+/// Preferred one-cell gap between the header label and the badge, so it reads
+/// as `Instructions [!!]` rather than flush against the label. The gap is
+/// dropped (badge sits flush) when the header is too narrow to hold it — at
+/// the 80-column floor the header is exactly `label + badge` wide (FINDING 1),
+/// so a gap there would push the badge into the Edit button.
+pub(super) const HEADER_BADGE_GAP_CELLS: u16 = 1;
+
+/// The `BADGE_TEXT`-wide cell run just right of `label` inside `header`'s cell
+/// rect, offset by [`HEADER_BADGE_GAP_CELLS`] when the header can hold it and
+/// flush otherwise. `None` when the header cannot hold even `label` + the
+/// badge flush (< 80 terminal columns — research.md b4-t1 FINDING 1), so the
 /// badge is omitted rather than overwriting the header label. b4-t1.
 pub(super) fn header_badge_slot(header: DotRect, label: &str) -> Option<Rect> {
     let hc = header.to_cell_rect();
@@ -70,7 +78,13 @@ pub(super) fn header_badge_slot(header: DotRect, label: &str) -> Option<Rect> {
     if hc.height == 0 || hc.width < label_w + badge_w {
         return None;
     }
-    Some(Rect::new(hc.x + label_w, hc.y, badge_w, hc.height))
+    // Take the gap only if it fits; otherwise sit flush at the label's end.
+    let gap = if hc.width >= label_w + HEADER_BADGE_GAP_CELLS + badge_w {
+        HEADER_BADGE_GAP_CELLS
+    } else {
+        0
+    };
+    Some(Rect::new(hc.x + label_w + gap, hc.y, badge_w, hc.height))
 }
 
 /// Mirrors `tooltip/mod.rs:319`'s `text_style()` — the codebase's Rgba ->
@@ -224,35 +238,6 @@ pub(super) fn decorations_for(
 /// row. NEVER re-declare `SELECTION_BG`'s literal game-side (spec:152) — it
 /// is imported and compared.
 pub(super) const DIAGNOSTIC_BG: Color = Color::Rgb(0x5f, 0x2f, 0x2f);
-
-/// Blank cells between the reserved badge slot and the path text
-/// (research.md b4-t2 blueprint).
-const PATH_BADGE_GAP_CELLS: u16 = 1;
-
-/// The prompt editor's file-path row split into a leading, unconditionally
-/// reserved badge slot and the remaining path-text rect (research.md b4-t2
-/// blueprint FINDING 2). The slot is reserved UNCONDITIONALLY — badge drawn
-/// or not — so the path never shifts 5 cells when a diagnostic appears/clears.
-pub(super) struct PathRow {
-    pub(super) badge: Option<Rect>,
-    pub(super) path: Rect,
-}
-
-/// Splits `row` into the leading badge slot and the remaining path-text
-/// rect. `badge` is `None` when the row cannot hold badge + gap + at least 1
-/// path cell; then `path` keeps the whole row.
-pub(super) fn split_path_row(row: DotRect) -> PathRow {
-    let rc = row.to_cell_rect();
-    let badge_w = BADGE_TEXT.chars().count() as u16;
-    let reserved = badge_w + PATH_BADGE_GAP_CELLS;
-    if rc.height == 0 || rc.width <= reserved {
-        return PathRow { badge: None, path: rc };
-    }
-    PathRow {
-        badge: Some(Rect::new(rc.x, rc.y, badge_w, rc.height)),
-        path: Rect::new(rc.x + reserved, rc.y, rc.width - reserved, rc.height),
-    }
-}
 
 /// The prompt editor's diagnostics: lint cache, `[!!]` badge hit-rect, and
 /// hover state (research.md b4-t2 blueprint). Lives here, not on

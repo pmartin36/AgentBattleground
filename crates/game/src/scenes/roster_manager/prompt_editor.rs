@@ -22,7 +22,7 @@ use engine_render::{
     TextEditorConfig,
 };
 
-use super::diagnostics_ui::{split_path_row, DiagnosticsState};
+use super::diagnostics_ui::DiagnosticsState;
 use super::RosterManager;
 
 /// Fraction of the screen width/height the popup occupies (b2-t1).
@@ -52,6 +52,12 @@ const CLOSE_TOP_INSET_CELLS: u16 = 0;
 const CLOSE_RIGHT_INSET_CELLS: u16 = 2;
 /// Reserves the close button's rows (inset + button) so the body clears them.
 const POPUP_TOP_BAND_CELLS: u16 = CLOSE_TOP_INSET_CELLS + CLOSE_H_CELLS;
+/// `[!!]` diagnostics badge inset from the popup's top-left, mirroring the
+/// close (X) button on the opposite corner. Left inset matches the X's right
+/// inset; the 1-cell top inset drops the 1-cell-tall text badge to align with
+/// the X glyph (whose circle top-half is clipped, landing it ~1 cell down).
+const BADGE_LEFT_INSET_CELLS: u16 = 2;
+const BADGE_TOP_INSET_CELLS: u16 = 1;
 /// Spec's explicit 1-cell margin between the agent input and the
 /// instructions editor (b2-t1 layout).
 const AGENT_MARGIN_CELLS: u16 = 1;
@@ -404,7 +410,15 @@ impl PromptEditor {
             h: close_h,
         };
 
-        PopupLayout { popup, close, agent_input, instructions, file_path }
+        // Diagnostics badge: top-left, mirroring the close (X) top-right.
+        let badge = DotRect {
+            x: popup.x + BADGE_LEFT_INSET_CELLS as i32 * 2,
+            y: popup.y + BADGE_TOP_INSET_CELLS as i32 * 4,
+            w: super::diagnostics_ui::BADGE_TEXT.chars().count() as i32 * 2,
+            h: 4,
+        };
+
+        PopupLayout { popup, close, badge, agent_input, instructions, file_path }
     }
 
     /// Method wrapper around [`Self::compute_layout`]: resolves the agent
@@ -455,18 +469,18 @@ impl PromptEditor {
         self.instructions.borrow_mut().set_focused(self.focus == PopupFocus::Instructions);
         self.instructions.borrow_mut().render(buf, Self::field_content(layout.instructions));
 
-        // File-path row: plain text, beneath the instructions editor. Long
-        // paths (e.g. a deep base dir) are front-truncated, not tail-
-        // truncated like `label`'s own clipping, so the file name (and its
-        // `.md` extension) always stays visible rather than the dir prefix.
-        // The row's leading badge slot is reserved unconditionally (b4-t2
-        // research.md FINDING 2) so the path never shifts when a diagnostic
-        // appears/clears.
-        let path_row = split_path_row(layout.file_path);
-        let path_text = Self::fit_path_text(&self.display_path().to_string_lossy(), path_row.path.width);
+        // Diagnostics badge: top-left of the popup, mirroring the close (X).
+        self.diagnostics.draw_badge_in(buf, Some(layout.badge.to_cell_rect()));
+
+        // File-path row: plain text, beneath the instructions editor, full
+        // width. Long paths (e.g. a deep base dir) are front-truncated, not
+        // tail-truncated like `label`'s own clipping, so the file name (and
+        // its `.md` extension) always stays visible rather than the dir prefix.
+        let path_rect = layout.file_path.to_cell_rect();
+        let path_text = Self::fit_path_text(&self.display_path().to_string_lossy(), path_rect.width);
         label(
             buf,
-            path_row.path,
+            path_rect,
             &path_text,
             TextAlign::Left,
             Style::default().fg(Color::Rgb(
@@ -475,7 +489,6 @@ impl PromptEditor {
                 POPUP_PATH_COLOR.b,
             )),
         );
-        self.diagnostics.draw_badge_in(buf, path_row.badge);
 
         // Topmost overlay within the modal: the editor's warning card,
         // hover-only.
@@ -574,6 +587,8 @@ pub(super) struct PopupLayout {
     pub(super) popup: DotRect,
     /// Close (X) hit-rect, top-right of `popup`.
     pub(super) close: DotRect,
+    /// `[!!]` diagnostics badge slot, top-left of `popup` (mirrors `close`).
+    pub(super) badge: DotRect,
     /// Agent-input editor body; `h` tracks `agent_rows` cells.
     pub(super) agent_input: DotRect,
     /// Instructions editor body; fills the remaining interior height.
