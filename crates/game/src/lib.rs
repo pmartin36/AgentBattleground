@@ -3,7 +3,10 @@ pub mod app;
 pub mod assets;
 pub mod braille_name;
 pub mod creatures;
+pub mod diagnostics;
 pub mod instructions;
+#[cfg(test)]
+mod lint_test_fixture;
 pub mod mention;
 pub mod scene_id;
 pub mod scenes;
