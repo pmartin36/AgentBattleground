@@ -190,7 +190,7 @@ Selection becomes one caller of the pass, diagnostics another. The *mechanism* i
 
 ## Constants (placeholders — tunable)
 
-- `WORD_LIMIT: usize = 500`
+- `WORD_LIMIT: usize = 500` — the RECOMMENDED count, advisory only; never enforced (hence a warning, not an error). Message reads "over the recommended 500", never "limit".
 - `BADGE_TEXT: &str = "[!!]"`
 - `WARNING_COLOR: Rgba = Rgba::rgb(0xff, 0xbf, 0x00)` (the existing amber)
 - `DIAGNOSTIC_BG: Color` — distinct from `SELECTION_BG` so a selected bad span stays distinguishable.
@@ -227,7 +227,7 @@ Lint is a scan of ~1k words; cost is not a concern, but it must not run per-rend
 
 `Ember_Wolf.md` is gitignored, so **no automated test may depend on it** — every test uses a temp base dir. Its validation value is therefore a **manual check by the owner**, recorded here so it isn't mistaken for covered:
 
-> Open the roster on Ember Wolf. The `[!!]` badge is present in the Instructions header. Hovering it shows `PromptTooLong` (1004 words / limit 500) alongside the mention diagnostics its text triggers.
+> Open the roster on Ember Wolf. The `[!!]` badge is present in the Instructions header. Hovering it shows `PromptTooLong` (1004 words, over the recommended 500) alongside the mention diagnostics its text triggers.
 
 ## Open Questions / TBDs
 

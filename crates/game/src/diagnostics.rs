@@ -9,14 +9,16 @@ use std::ops::Range;
 
 use crate::mention::{resolve_mention, ResolveError, Vocabulary};
 
-/// The prompt word budget. A deliberate PROXY for directive count (spec:29)
-/// — tunable; `PromptTooLong.limit` is always fed from here.
+/// The RECOMMENDED prompt word count — advisory, never enforced (that is why
+/// exceeding it is a warning, not an error). A deliberate PROXY for directive
+/// count (spec:29) — tunable; `PromptTooLong.limit` is always fed from here.
 pub const WORD_LIMIT: usize = 500;
 
 /// Exactly six — spec:47-54. Do not extend without a spec change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiagnosticKind {
-    /// The whole-prompt word-count budget was exceeded. Whole-file: no span.
+    /// The prompt exceeds the RECOMMENDED word count (advisory, not enforced).
+    /// Whole-file: no span.
     PromptTooLong { words: usize, limit: usize },
     /// `<x>:<y>` shape whose `<x>` is not `self`/`ally`/`enemy`.
     UnknownTarget { token: String },
@@ -37,7 +39,7 @@ impl DiagnosticKind {
     pub fn message(&self) -> String {
         match self {
             DiagnosticKind::PromptTooLong { words, limit } => {
-                format!("Instructions are {words} words, over the {limit}-word limit.")
+                format!("Instructions are {words} words, over the recommended {limit}.")
             }
             DiagnosticKind::UnknownTarget { token } => {
                 if token.is_empty() {
