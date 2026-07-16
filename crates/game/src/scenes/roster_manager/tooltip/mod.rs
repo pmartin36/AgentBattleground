@@ -1,25 +1,24 @@
-//! Ability hover tooltip (spec 49). Composition root: owns the card layout
+//! Ability hover tooltip (spec 49). Composition root: owns the card content
 //! ([`layout_tooltip`]/[`present_rows`]) and the overlay render
 //! ([`render_tooltip`] + the per-row fillers), and pulls the pill capsule
-//! ([`pills`]) and its color palette ([`palette`]) from sibling submodules.
+//! ([`pills`]), its color palette ([`palette`]), and the card chrome
+//! ([`shell`]: anchor math, edge clamping, frame) from sibling submodules.
 #![allow(dead_code)]
 
 mod palette;
 mod pills;
+pub(super) mod shell;
 
 use crate::ability::{Ability, StatusKind};
 use engine_core::color::Rgba;
-use engine_render::dots::Dot;
-use engine_render::{
-    draw_dots, flex, label, ui_primitives, wrapped_text, Align, Basis, Direction, DotRect,
-    FlexChild, FlexStyle, Justify, TextAlign,
-};
+use engine_render::{flex, label, wrapped_text, Align, Basis, Direction, DotRect, FlexChild, FlexStyle, Justify, TextAlign};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 
 use palette::{ability_type_color, class_color, element_color};
 use pills::{pill, pill_width_dots, INTER_PILL_GAP_CELLS, PILL_HEIGHT_CELLS};
+use shell::{draw_shell_frame, layout_shell, ShellRow};
 
 /// Tooltip card width (spec:26). Placeholder — tunable. Wide enough that the
 /// full three-pill row (ability_type/element/class, each padded
@@ -119,82 +118,35 @@ fn row_height_cells(row: TooltipRow, ability: &Ability) -> u16 {
 }
 
 /// Computes the tooltip card's outer `DotRect` (fixed width, content-driven
-/// height) and each present row's rect, laid out via `engine_render::flex`
-/// (Column) over a 1-cell-inset interior, anchored so the card's
-/// bottom-right corner sits `ANCHOR_GAP_CELLS` cells above-left of
-/// `hovered_cell`'s top-left corner — no clamp. A single `Fixed` spacer
-/// child of `PRE_FLAVOR_GAP_CELLS*4` dots is inserted before Flavor when
-/// Flavor is present and at least one row precedes it; the spacer never
-/// appears in the returned `rows`.
+/// height) and each present row's rect via [`shell::layout_shell`], anchored
+/// so the card's bottom-right corner sits `ANCHOR_GAP_CELLS` cells above-left
+/// of `hovered_cell`'s top-left corner, clamped to the screen origin. A
+/// `gap_above_cells` of `PRE_FLAVOR_GAP_CELLS` is attached to Flavor when
+/// Flavor is present and at least one row precedes it; the gap never appears
+/// in the returned `rows`.
 pub(super) fn layout_tooltip(ability: &Ability, hovered_cell: DotRect) -> TooltipLayout {
     let rows = present_rows(ability);
     // Flavor is always the last present row (fixed order); the gap only
     // applies when at least one row precedes it.
     let pre_flavor_gap = rows.len() > 1 && matches!(rows.last(), Some(TooltipRow::Flavor));
-    let content_dots: i32 = rows.iter().map(|&r| row_height_cells(r, ability) as i32 * 4).sum::<i32>()
-        + if pre_flavor_gap { PRE_FLAVOR_GAP_CELLS as i32 * 4 } else { 0 };
 
-    let card_w = TOOLTIP_WIDTH_CELLS as i32 * 2;
-    let card_h = content_dots + 2 * INTERIOR_PADDING_CELLS as i32 * 4;
-    let dx = ANCHOR_GAP_CELLS as i32 * 2;
-    let dy = ANCHOR_GAP_CELLS as i32 * 4;
-
-    // Anchor the card's bottom-right to the hovered cell's horizontal CENTER
-    // (the ability name is centered in its cell), so the card hugs the visible
-    // text rather than the cell's far-left edge. Vertical is unchanged.
-    let anchor_x = hovered_cell.x + hovered_cell.w / 2;
-
-    let card = DotRect {
-        x: anchor_x - dx - card_w,
-        y: hovered_cell.y - dy - card_h,
-        w: card_w,
-        h: card_h,
-    };
-
-    let interior = card.inset(
-        INTERIOR_PADDING_H_CELLS as i32 * 2,
-        INTERIOR_PADDING_H_CELLS as i32 * 2,
-        INTERIOR_PADDING_CELLS as i32 * 4,
-        INTERIOR_PADDING_CELLS as i32 * 4,
-    );
-
-    // A parallel `Option<TooltipRow>` marker per flex child — `None` for the
-    // pre-flavor spacer — so the flex result can be zipped back and the
-    // spacer dropped without ever appearing in the returned `rows`.
-    let mut markers: Vec<Option<TooltipRow>> = Vec::with_capacity(rows.len() + 1);
-    let mut children: Vec<FlexChild> = Vec::with_capacity(rows.len() + 1);
-    for &row in &rows {
-        if pre_flavor_gap && row == TooltipRow::Flavor {
-            children.push(FlexChild {
-                basis: Basis::Fixed(PRE_FLAVOR_GAP_CELLS as i32 * 4),
-                grow: 0.0,
-                shrink: 0.0,
-            });
-            markers.push(None);
-        }
-        children.push(FlexChild {
-            basis: Basis::Fixed(row_height_cells(row, ability) as i32 * 4),
-            grow: 0.0,
-            shrink: 0.0,
-        });
-        markers.push(Some(row));
-    }
-
-    let style = FlexStyle {
-        direction: Direction::Column,
-        justify_content: Justify::Start,
-        align_items: Align::Start,
-        gap: 0,
-    };
-    let rects = flex(interior, style, &children);
-
-    let rows_out = markers
-        .into_iter()
-        .zip(rects)
-        .filter_map(|(marker, rect)| marker.map(|row| (row, rect)))
+    let shell_rows: Vec<ShellRow> = rows
+        .iter()
+        .map(|&row| ShellRow {
+            height_cells: row_height_cells(row, ability),
+            gap_above_cells: if pre_flavor_gap && row == TooltipRow::Flavor {
+                PRE_FLAVOR_GAP_CELLS
+            } else {
+                0
+            },
+        })
         .collect();
 
-    TooltipLayout { card, rows: rows_out }
+    let layout = layout_shell(hovered_cell, &shell_rows);
+
+    let rows_out = rows.into_iter().zip(layout.rows).collect();
+
+    TooltipLayout { card: layout.card, rows: rows_out }
 }
 
 /// Draws the whole tooltip overlay — chamfered `Occlude` frame plus every
@@ -203,20 +155,9 @@ pub(super) fn layout_tooltip(ability: &Ability, hovered_cell: DotRect) -> Toolti
 /// does not panic.
 pub(super) fn render_tooltip(buf: &mut Buffer, ability: &Ability, hovered_cell: DotRect) {
     let layout = layout_tooltip(ability, hovered_cell);
-    let card_cell_rect = layout.card.to_cell_rect();
-    if card_cell_rect.width == 0 || card_cell_rect.height == 0 {
+    if !draw_shell_frame(buf, layout.card) {
         return;
     }
-
-    let frame = ui_primitives::rounded_rect(
-        layout.card.w as usize,
-        layout.card.h as usize,
-        CARD_BORDER_THICKNESS_DOTS,
-        CARD_CORNER_RADIUS_DOTS,
-        CARD_BORDER_COLOR,
-        Dot::Occlude,
-    );
-    draw_dots(buf, card_cell_rect, &frame);
 
     for &(row, rect) in &layout.rows {
         match row {

@@ -521,6 +521,7 @@ impl Scene for RosterManager {
 mod borders;
 mod chrome;
 mod details_panel;
+mod diagnostics_ui;
 mod dot_row;
 mod layout;
 mod panel_layout;
@@ -549,3 +550,5 @@ mod ability_hover_tests;
 mod tooltip_integration_tests;
 #[cfg(test)]
 mod prompt_editor_modal_tests;
+#[cfg(test)]
+mod diagnostics_ui_tests;
