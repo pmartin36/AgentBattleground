@@ -511,6 +511,51 @@ fn popup_border_renders_in_distinct_color() {
     );
 }
 
+// --- b4-t2 (iteration 2 delta): both mention-accept paths bump `revision` ---
+// RED (compile-stub): `revision()` panics via the `unimplemented!()` stub
+// (mod.rs) until the code-writer wires the real field.
+
+#[test]
+fn tab_accepting_a_mention_changes_revision() {
+    let (mut editor, _log) = editor_with_provider();
+    type_str(&mut editor, "@most");
+    let r0 = editor.revision();
+
+    editor.handle_key(key(KeyCode::Tab));
+
+    assert_ne!(
+        editor.revision(),
+        r0,
+        "Tab-accepting a mention candidate must change the revision"
+    );
+}
+
+#[test]
+fn click_accepting_a_mention_changes_revision() {
+    // The case the whole finding turns on: `handle_mouse` returns `bool`, so
+    // the accept's `EditorEvent::Changed` is destroyed inside the engine
+    // before any caller can observe it. `revision` is the only channel.
+    let (mut editor, _log) = editor_with_provider();
+    type_str(&mut editor, "@least"); // FakeProvider -> terminal "@least-hp"
+
+    let rect = popup_test_rect();
+    let mut buf = Buffer::empty(rect);
+    editor.render(&mut buf, rect);
+    let (cx, cy) =
+        find_candidate_row(&buf, rect, "least-hp").expect("candidate 'least-hp' must be drawn");
+    let r0 = editor.revision();
+
+    let handled = editor.handle_mouse(&mouse_at(MouseEventKind::Down(MouseButton::Left), cx, cy));
+
+    assert!(handled, "sanity: the click must be handled");
+    assert_eq!(editor.text(), "@least-hp", "sanity: the click must accept the candidate");
+    assert_ne!(
+        editor.revision(),
+        r0,
+        "click-accepting a mention candidate must change the revision"
+    );
+}
+
 #[test]
 fn no_popup_render_and_mouse_click_are_unaffected() {
     let mut editor = TextEditor::new(config());

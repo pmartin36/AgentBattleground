@@ -1,6 +1,11 @@
 use super::*;
 
 impl RosterManager {
+    /// The "Instructions" header label text — single source of truth so the
+    /// badge slot (`diagnostics_ui::header_badge_slot`, b4-t1) measures the
+    /// SAME width `draw_section_header` renders below.
+    pub(super) const INSTRUCTIONS_HEADER_TEXT: &'static str = "Instructions";
+
     /// Stamina status text colour (b2-t4) — white, matching
     /// `LEVEL_COLOR`.
     const STAMINA_COLOR: engine_core::color::Rgba = engine_core::color::Rgba::rgb(0xff, 0xff, 0xff);
@@ -272,7 +277,7 @@ impl RosterManager {
         header: engine_render::DotRect,
         preview: engine_render::DotRect,
     ) {
-        Self::draw_section_header(buf, header, "Instructions");
+        Self::draw_section_header(buf, header, Self::INSTRUCTIONS_HEADER_TEXT);
         engine_render::wrapped_text(
             buf,
             preview.to_cell_rect(),

@@ -121,6 +121,14 @@ pub struct TextEditor {
     /// (which wins on overlap by render-order); e.g. diagnostic markers.
     /// b2-t1.
     decorations: Vec<Decoration>,
+    /// Opaque monotonic buffer-revision token. INVARIANT: bumped by every
+    /// primitive that writes `lines` — `set_text`, `insert_char`,
+    /// `insert_newline`, `backspace`, `delete` (this file), `delete_selection`
+    /// (selection.rs), `restore` (history.rs) — and by nothing else. Anything
+    /// that mutates text must go through one of those, so every entry point
+    /// inherits it; a NEW primitive that writes `lines` directly must bump it
+    /// too. Read via `revision()`. b4-t2.
+    revision: u64,
 }
 
 /// One display row produced by wrapping a logical line: `[start, end)` are
@@ -159,6 +167,7 @@ impl TextEditor {
             redo_stack: Vec::new(),
             last_edit_kind: None,
             decorations: Vec::new(),
+            revision: 0,
         }
     }
 
@@ -211,12 +220,39 @@ impl TextEditor {
         self.lines = text.split('\n').map(String::from).collect();
         self.cursor_line = self.lines.len() - 1;
         self.cursor_col = self.lines[self.cursor_line].chars().count();
+        self.bump_revision();
     }
 
     /// Join the logical lines back into a single string with `'\n'`.
     /// Exact inverse of [`Self::set_text`].
     pub fn text(&self) -> String {
         self.lines.join("\n")
+    }
+
+    /// Opaque token identifying the current buffer contents' revision.
+    /// Changes whenever the buffer is written, and only then.
+    ///
+    /// **Compare successive values for equality; never subtract them or read
+    /// meaning into the delta.**
+    ///
+    /// This exists because `EditorEvent::Changed` cannot reach every
+    /// embedder: `handle_mouse` returns `bool`, so a mention accepted by
+    /// CLICK (`mention_mouse_accept`) mutates the buffer with no event any
+    /// caller could observe, and `handle_key`'s event is trivially dropped by
+    /// a caller that forgets to check it. An embedder that polls
+    /// `revision()` at ONE place catches every mutation path — typing,
+    /// paste, undo, and both mention-accept paths — instead of wiring
+    /// `Changed` at each call site and silently missing the ones that
+    /// structurally cannot report it.
+    ///
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Record that `lines` was written. Called by every primitive that
+    /// writes it; see the `revision` field's invariant.
+    fn bump_revision(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
     }
 
     /// Feed a key event into the editor: printable chars insert, Backspace/
@@ -427,6 +463,7 @@ impl TextEditor {
             .unwrap_or(line.len());
         line.insert(byte, c);
         self.cursor_col += 1;
+        self.bump_revision();
     }
 
     /// Split the current line at the caret into two logical lines, moving
@@ -443,6 +480,7 @@ impl TextEditor {
         self.lines.insert(self.cursor_line + 1, tail);
         self.cursor_line += 1;
         self.cursor_col = 0;
+        self.bump_revision();
     }
 
     /// Remove the char before the caret, or join with the previous line at
@@ -459,12 +497,14 @@ impl TextEditor {
                 .unwrap();
             line.remove(byte);
             self.cursor_col -= 1;
+            self.bump_revision();
             true
         } else if self.cursor_line > 0 {
             let cur = self.lines.remove(self.cursor_line);
             self.cursor_line -= 1;
             self.cursor_col = self.lines[self.cursor_line].chars().count();
             self.lines[self.cursor_line].push_str(&cur);
+            self.bump_revision();
             true
         } else {
             false
@@ -598,10 +638,12 @@ impl TextEditor {
                 .map(|(b, _)| b)
                 .unwrap();
             line.remove(byte);
+            self.bump_revision();
             true
         } else if self.cursor_line + 1 < self.lines.len() {
             let next = self.lines.remove(self.cursor_line + 1);
             self.lines[self.cursor_line].push_str(&next);
+            self.bump_revision();
             true
         } else {
             false
@@ -615,3 +657,6 @@ mod text_editor_tests;
 
 #[cfg(test)]
 mod mention_tests;
+
+#[cfg(test)]
+mod revision_tests;

@@ -87,6 +87,30 @@ pub struct RosterManager {
     /// reason as the button fields.
     #[inspect(hidden)]
     ability_hit_rects: RefCell<[Option<Rect>; 4]>,
+    /// Cached lint output for `current_instructions` (b4-t1). Refreshed
+    /// exactly when `current_instructions` reloads (construction,
+    /// slide-settle, popup-close) via `reload_instructions` — never during
+    /// `render(&self, ..)`.
+    #[inspect(hidden)]
+    diagnostics: Vec<crate::diagnostics::Diagnostic>,
+    /// Number of times `reload_instructions` has run the lint (b4-t1,
+    /// spec:223's explicit call-count assertion). Test-only observation
+    /// point; not read by production logic.
+    #[inspect(hidden)]
+    lint_runs: usize,
+    /// The current frame's `[!!]` badge hit-test rect (b4-t1), in cell
+    /// space, refreshed each `render(&self, ..)` from
+    /// `diagnostics_ui::header_badge_slot`. `None` when no badge was drawn
+    /// (clean instructions, too-narrow terminal, or a slide in flight).
+    /// `RefCell` for the same immutable-render-mutates-hit-rect reason as
+    /// `ability_hit_rects`.
+    #[inspect(hidden)]
+    badge_hit_rect: RefCell<Option<Rect>>,
+    /// Whether the cursor is currently over the drawn `[!!]` badge (b4-t1);
+    /// hover-only, mirrors `hovered_ability`. Mutated in
+    /// `handle_input(&mut self, ..)`, so a plain field.
+    #[inspect(hidden)]
+    hovered_badge: bool,
 }
 
 /// Transient bookkeeping for an in-flight slide transition: the group that is
@@ -215,6 +239,10 @@ impl RosterManager {
             prompt_editor: None,
             hovered_ability: None,
             ability_hit_rects: RefCell::new([None; 4]),
+            diagnostics: Vec::new(),
+            lint_runs: 0,
+            badge_hit_rect: RefCell::new(None),
+            hovered_badge: false,
         };
         scene.reload_instructions();
         scene
@@ -236,6 +264,10 @@ impl RosterManager {
         let read =
             crate::instructions::read_instructions_maybe(self.instructions_base.as_deref(), &name);
         self.current_instructions = read.unwrap_or_default();
+
+        let vocab = crate::mention::Vocabulary::new(&self.creatures[self.current_index], &self.creatures);
+        self.diagnostics = crate::diagnostics::lint(&self.current_instructions, &vocab);
+        self.lint_runs += 1;
     }
 
     /// Advances/retreats `current_index` with wraparound. The sole place
@@ -280,6 +312,7 @@ impl RosterManager {
             Some(sel) => {
                 self.creatures.swap(sel, self.current_index);
                 self.selected_index = None;
+                self.reload_instructions();
             }
         }
     }
@@ -377,6 +410,15 @@ impl Scene for RosterManager {
             self.render_instructions(frame.buffer_mut(), regions.instructions_header, regions.preview);
 
             {
+                let slot = diagnostics_ui::header_badge_slot(
+                    regions.instructions_header,
+                    Self::INSTRUCTIONS_HEADER_TEXT,
+                );
+                let drawn = slot.and_then(|s| diagnostics_ui::draw_badge(frame.buffer_mut(), s, &self.diagnostics));
+                *self.badge_hit_rect.borrow_mut() = drawn;
+            }
+
+            {
                 let state = {
                     let mut edit = self.edit_button.borrow_mut();
                     edit.set_rect(regions.edit_button.to_cell_rect());
@@ -392,6 +434,7 @@ impl Scene for RosterManager {
             }
         } else {
             *self.ability_hit_rects.borrow_mut() = [None; 4];
+            *self.badge_hit_rect.borrow_mut() = None;
         }
         self.render_dot_row(frame.buffer_mut(), Self::top_bands_dots(area)[4]);
 
@@ -427,6 +470,19 @@ impl Scene for RosterManager {
                     let cell = Self::panel_interior_regions(area).ability_cells[hi];
                     tooltip::render_tooltip(frame.buffer_mut(), &abilities[hi], cell);
                 }
+            }
+        }
+
+        // Diagnostics warning-card overlay (spec 60, b4-t1) — topmost overlay,
+        // hover-only, same suppression guards as the ability tooltip plus
+        // `hovered_badge`.
+        if self.prompt_editor.is_none() && self.active_slide().is_none() && self.hovered_badge {
+            if let Some(badge) = *self.badge_hit_rect.borrow() {
+                diagnostics_ui::render_warning_card(
+                    frame.buffer_mut(),
+                    Self::cell_rect_to_dots(badge),
+                    &self.diagnostics,
+                );
             }
         }
 
@@ -471,6 +527,7 @@ impl Scene for RosterManager {
                         .borrow()
                         .iter()
                         .position(|r| r.is_some_and(|rc| rc.contains(pos)));
+                    self.hovered_badge = self.badge_hit_rect.borrow().is_some_and(|r| r.contains(pos));
                 }
                 if hit_home {
                     return Some(Transition {
@@ -552,3 +609,5 @@ mod tooltip_integration_tests;
 mod prompt_editor_modal_tests;
 #[cfg(test)]
 mod diagnostics_ui_tests;
+#[cfg(test)]
+mod diagnostics_integration_tests;

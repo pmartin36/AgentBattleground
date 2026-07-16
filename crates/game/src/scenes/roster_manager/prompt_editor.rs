@@ -22,6 +22,7 @@ use engine_render::{
     TextEditorConfig,
 };
 
+use super::diagnostics_ui::{split_path_row, DiagnosticsState};
 use super::RosterManager;
 
 /// Fraction of the screen width/height the popup occupies (b2-t1).
@@ -93,6 +94,11 @@ pub(super) struct PromptEditor {
     /// Time remaining until the pending edit flushes to disk — meaningful
     /// only while `dirty` (b3-t2).
     debounce: Duration,
+    /// Buffer revision of `instructions` as of the last `poll_instructions`
+    /// call (research.md b4-t2 iteration 2). Seeded from
+    /// `TextEditor::revision()` AFTER `set_text` in `new()` so opening on an
+    /// already-flagged file is not mistaken for an edit.
+    last_revision: u64,
     /// The screen `area` last passed to `render` (b2-t1), cached so
     /// `handle_input`'s mouse branch can recompute `layout` for click-to-
     /// focus hit-testing without `Scene::handle_input`'s fixed signature
@@ -101,6 +107,12 @@ pub(super) struct PromptEditor {
     /// practice (input is only routed here while the popup, itself just
     /// rendered, is open).
     last_area: Cell<Rect>,
+    /// Lint cache + badge hit-rect + hover state for the instructions editor
+    /// (research.md b4-t2 blueprint). `pub(super)` so the sibling
+    /// `diagnostics_integration_tests` can observe it, mirroring the
+    /// established `scene.prompt_editor` reach-in
+    /// (`prompt_editor_modal_tests.rs:43`).
+    pub(super) diagnostics: DiagnosticsState,
 }
 
 impl PromptEditor {
@@ -127,6 +139,12 @@ impl PromptEditor {
             let provider = crate::mention::GameMentionProvider::new(creature, roster);
             instructions.set_mention_provider(Box::new(provider), '@');
         }
+        // b4-t2: opening on an already-flagged file badges + tints
+        // immediately, before the first keystroke.
+        let vocab = roster.get(creature_index).map(|c| crate::mention::Vocabulary::new(c, roster));
+        let mut diagnostics = DiagnosticsState::new(vocab);
+        diagnostics.relint(&seed, &mut instructions);
+        let last_revision = instructions.revision();
 
         let agent_input = TextEditor::new(TextEditorConfig {
             sizing: Sizing::Grow {
@@ -146,7 +164,9 @@ impl PromptEditor {
             focus: PopupFocus::Instructions,
             dirty: false,
             debounce: Duration::ZERO,
+            last_revision,
             last_area: Cell::new(Rect::default()),
+            diagnostics,
         }
     }
 
@@ -195,13 +215,14 @@ impl PromptEditor {
                         }
                     }
                     PopupFocus::Instructions => {
-                        if self.instructions.get_mut().handle_key(*key) == EditorEvent::Changed {
-                            self.mark_dirty();
-                        }
+                        self.instructions.get_mut().handle_key(*key);
                     }
                 },
             },
             InputEvent::Mouse(me) => {
+                if me.kind == MouseEventKind::Moved {
+                    self.diagnostics.set_hover(Position { x: me.column, y: me.row });
+                }
                 if self.close_button.get_mut().handle_mouse(me) {
                     return true;
                 }
@@ -256,13 +277,26 @@ impl PromptEditor {
         self.agent_input.get_mut().set_text("");
     }
 
-    /// Marks the popup dirty and (re)starts the `WRITE_DEBOUNCE` countdown
-    /// (b3-t2). Called on the instructions editor's `EditorEvent::Changed`
-    /// only — every keystroke restarts the timer so a burst of edits
-    /// coalesces into a single trailing-idle write.
-    fn mark_dirty(&mut self) {
-        self.dirty = true;
-        self.debounce = WRITE_DEBOUNCE;
+    /// Raise the pending-write/lint state when the instructions buffer has
+    /// moved since the last poll, restarting the `WRITE_DEBOUNCE` countdown.
+    /// The ONE place `dirty`/`debounce` are raised (research.md b4-t2
+    /// iteration 2, replaces `mark_dirty`).
+    ///
+    /// Polls `TextEditor::revision` rather than capturing
+    /// `EditorEvent::Changed` per call site: the mention popup's Tab-accept
+    /// and click-accept both mutate the buffer with a `Changed` this popup
+    /// cannot observe (`handle_mouse` returns `bool`), so per-call-site
+    /// wiring silently misses them and leaves the decorations tinting stale
+    /// columns. Polling the editor's own source of truth at one choke point
+    /// makes every mutation path — including any added later — mark dirty
+    /// by default.
+    fn poll_instructions(&mut self) {
+        let rev = self.instructions.borrow().revision();
+        if rev != self.last_revision {
+            self.last_revision = rev;
+            self.dirty = true;
+            self.debounce = WRITE_DEBOUNCE;
+        }
     }
 
     /// Scene tick (b3-t2, b2-t2): advances both editors' blink accumulators
@@ -272,6 +306,7 @@ impl PromptEditor {
     pub(super) fn update(&mut self, dt: Duration) {
         self.agent_input.get_mut().tick(dt);
         self.instructions.get_mut().tick(dt);
+        self.poll_instructions();
 
         if !self.dirty {
             return;
@@ -288,6 +323,7 @@ impl PromptEditor {
     /// preview never refreshes from stale disk. No-op while `dirty` is
     /// false.
     pub(super) fn flush_pending(&mut self) {
+        self.poll_instructions();
         if !self.dirty {
             return;
         }
@@ -297,6 +333,7 @@ impl PromptEditor {
             &self.creature_name,
             &text,
         );
+        self.diagnostics.relint(&text, self.instructions.get_mut());
         self.dirty = false;
         self.debounce = Duration::ZERO;
     }
@@ -422,11 +459,14 @@ impl PromptEditor {
         // paths (e.g. a deep base dir) are front-truncated, not tail-
         // truncated like `label`'s own clipping, so the file name (and its
         // `.md` extension) always stays visible rather than the dir prefix.
-        let path_row = layout.file_path.to_cell_rect();
-        let path_text = Self::fit_path_text(&self.display_path().to_string_lossy(), path_row.width);
+        // The row's leading badge slot is reserved unconditionally (b4-t2
+        // research.md FINDING 2) so the path never shifts when a diagnostic
+        // appears/clears.
+        let path_row = split_path_row(layout.file_path);
+        let path_text = Self::fit_path_text(&self.display_path().to_string_lossy(), path_row.path.width);
         label(
             buf,
-            path_row,
+            path_row.path,
             &path_text,
             TextAlign::Left,
             Style::default().fg(Color::Rgb(
@@ -435,6 +475,11 @@ impl PromptEditor {
                 POPUP_PATH_COLOR.b,
             )),
         );
+        self.diagnostics.draw_badge_in(buf, path_row.badge);
+
+        // Topmost overlay within the modal: the editor's warning card,
+        // hover-only.
+        self.diagnostics.render_card(buf);
     }
 
     /// Front-truncates `text` (keeping its tail, prefixed with `…`) so it

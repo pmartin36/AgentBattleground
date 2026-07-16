@@ -77,6 +77,7 @@ impl TextEditor {
         self.cursor_col = snap.cursor_col;
         self.selection = snap.selection;
         self.scroll_to_cursor();
+        self.bump_revision();
     }
 
     /// Record `pre` (the state captured before the just-applied edit) onto

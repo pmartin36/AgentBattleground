@@ -124,6 +124,7 @@ impl TextEditor {
         self.cursor_line = sl;
         self.cursor_col = sc;
         self.collapse();
+        self.bump_revision();
         true
     }
 

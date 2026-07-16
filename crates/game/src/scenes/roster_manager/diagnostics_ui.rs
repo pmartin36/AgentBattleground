@@ -5,22 +5,20 @@
 //! cells); a braille icon at a 2x2-cell budget degenerates (4 wide x 8 tall
 //! dots is not square). Do not "fix" this into braille.
 //!
-//! `badge_rect`/`draw_badge` have no caller yet — b4-t1 (details panel) and
-//! b4-t2 (prompt editor) wire them in. `#![allow(dead_code)]` mirrors
-//! `tooltip/mod.rs:6`'s precedent for this same not-yet-wired-in state.
-#![allow(dead_code)]
-
+use std::cell::Cell;
 use std::ops::Range;
 
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Style};
 
 use super::tooltip::shell::{draw_shell_frame, layout_shell, ShellLayout, ShellRow};
 use super::tooltip::CARD_TEXT_COLOR;
+use super::RosterManager;
 use crate::diagnostics::Diagnostic;
+use crate::mention::Vocabulary;
 use engine_core::color::Rgba;
-use engine_render::{label, wrapped_text, Decoration, DotRect, TextAlign};
+use engine_render::{label, wrapped_text, Decoration, DotRect, TextAlign, TextEditor};
 
 /// spec:117 — ASCII, always exactly 4 cells.
 pub(super) const BADGE_TEXT: &str = "[!!]";
@@ -59,6 +57,20 @@ pub(super) fn draw_badge(
     let rect = badge_rect(clipped)?;
     label(buf, rect, BADGE_TEXT, TextAlign::Left, warning_style());
     Some(rect)
+}
+
+/// The `BADGE_TEXT`-wide cell run immediately right of `label` inside
+/// `header`'s cell rect. `None` when the slot cannot hold `label` + the
+/// badge (< 80 terminal columns — research.md b4-t1 FINDING 1), so the
+/// badge is omitted rather than overwriting the header label. b4-t1.
+pub(super) fn header_badge_slot(header: DotRect, label: &str) -> Option<Rect> {
+    let hc = header.to_cell_rect();
+    let label_w = label.chars().count() as u16;
+    let badge_w = BADGE_TEXT.chars().count() as u16;
+    if hc.height == 0 || hc.width < label_w + badge_w {
+        return None;
+    }
+    Some(Rect::new(hc.x + label_w, hc.y, badge_w, hc.height))
 }
 
 /// Mirrors `tooltip/mod.rs:319`'s `text_style()` — the codebase's Rgba ->
@@ -173,7 +185,10 @@ impl DiagnosticDecorations {
 
     /// Map a `TextEditor::decoration_at` result back to its index in the
     /// `diagnostics` slice `decorations_for` was given. `None` if out of
-    /// range.
+    /// range. Nothing production-side consumes per-span hover yet (b3-t4
+    /// CLEANLINESS); retained so the index-desync is unrepresentable for a
+    /// future consumer.
+    #[allow(dead_code)]
     pub(super) fn diagnostic_index(&self, decoration_index: usize) -> Option<usize> {
         self.entries.get(decoration_index).map(|&(i, _)| i)
     }
@@ -198,4 +213,113 @@ pub(super) fn decorations_for(
         })
         .collect();
     DiagnosticDecorations { entries }
+}
+
+// ── b4-t2: prompt-editor badge/tint/hover-card wiring ──────────────────────
+
+/// spec:196 — the inline bad-span tint. A dark warm red: deliberately clear
+/// of BOTH editor blues, `SELECTION_BG` (0x2f,0x4f,0x6f) and
+/// `MENTION_HIGHLIGHT_BG` (render.rs:30, 0x3a,0x5a,0x8a), so a bad span stays
+/// distinguishable when selected AND under the mention popup's highlighted
+/// row. NEVER re-declare `SELECTION_BG`'s literal game-side (spec:152) — it
+/// is imported and compared.
+pub(super) const DIAGNOSTIC_BG: Color = Color::Rgb(0x5f, 0x2f, 0x2f);
+
+/// Blank cells between the reserved badge slot and the path text
+/// (research.md b4-t2 blueprint).
+const PATH_BADGE_GAP_CELLS: u16 = 1;
+
+/// The prompt editor's file-path row split into a leading, unconditionally
+/// reserved badge slot and the remaining path-text rect (research.md b4-t2
+/// blueprint FINDING 2). The slot is reserved UNCONDITIONALLY — badge drawn
+/// or not — so the path never shifts 5 cells when a diagnostic appears/clears.
+pub(super) struct PathRow {
+    pub(super) badge: Option<Rect>,
+    pub(super) path: Rect,
+}
+
+/// Splits `row` into the leading badge slot and the remaining path-text
+/// rect. `badge` is `None` when the row cannot hold badge + gap + at least 1
+/// path cell; then `path` keeps the whole row.
+pub(super) fn split_path_row(row: DotRect) -> PathRow {
+    let rc = row.to_cell_rect();
+    let badge_w = BADGE_TEXT.chars().count() as u16;
+    let reserved = badge_w + PATH_BADGE_GAP_CELLS;
+    if rc.height == 0 || rc.width <= reserved {
+        return PathRow { badge: None, path: rc };
+    }
+    PathRow {
+        badge: Some(Rect::new(rc.x, rc.y, badge_w, rc.height)),
+        path: Rect::new(rc.x + reserved, rc.y, rc.width - reserved, rc.height),
+    }
+}
+
+/// The prompt editor's diagnostics: lint cache, `[!!]` badge hit-rect, and
+/// hover state (research.md b4-t2 blueprint). Lives here, not on
+/// `PromptEditor` (which is already over the file-size budget).
+pub(super) struct DiagnosticsState {
+    vocab: Option<Vocabulary>,
+    pub(super) diagnostics: Vec<Diagnostic>,
+    pub(super) lint_runs: usize,
+    pub(super) badge_hit_rect: Cell<Option<Rect>>,
+    pub(super) hovered_badge: bool,
+}
+
+impl DiagnosticsState {
+    pub(super) fn new(vocab: Option<Vocabulary>) -> Self {
+        Self {
+            vocab,
+            diagnostics: Vec::new(),
+            lint_runs: 0,
+            badge_hit_rect: Cell::new(None),
+            hovered_badge: false,
+        }
+    }
+
+    /// Re-lints `text` and republishes the editor's decorations. The ONE
+    /// place the editor's lint runs. `text` MUST be the string the editor
+    /// holds (`editor.text()`) or the byte offsets desync (b3-t4 seam
+    /// contract). No-op (and no `lint_runs` bump) when `vocab` is `None`
+    /// (an off-roster creature index).
+    pub(super) fn relint(&mut self, text: &str, editor: &mut TextEditor) {
+        let Some(vocab) = &self.vocab else { return };
+        self.diagnostics = crate::diagnostics::lint(text, vocab);
+        editor.set_decorations(decorations_for(text, &self.diagnostics, DIAGNOSTIC_BG).decorations());
+        self.lint_runs += 1;
+    }
+
+    /// Draws the badge into `slot` (`None` = no room) and records the
+    /// hit-target. Absence stays `draw_badge`'s decision — no caller-side
+    /// `is_empty()`. `slot` sits inside the popup's `Dot::Occlude` pass, so
+    /// it must be cleared to a literal blank space FIRST (unconditionally):
+    /// otherwise an absent badge leaves that reserved run showing the
+    /// occluder's braille-blank glyph rather than "nothing here" (deviation
+    /// from research.md b4-t2's pinned body — a real gap that body did not
+    /// anticipate; see code-writer.md DEVIATIONS).
+    pub(super) fn draw_badge_in(&self, buf: &mut Buffer, slot: Option<Rect>) {
+        if let Some(rect) = slot {
+            for y in rect.top()..rect.bottom() {
+                for x in rect.left()..rect.right() {
+                    if let Some(cell) = buf.cell_mut((x, y)) {
+                        cell.set_symbol(" ");
+                    }
+                }
+            }
+        }
+        self.badge_hit_rect.set(slot.and_then(|s| draw_badge(buf, s, &self.diagnostics)));
+    }
+
+    /// Hit-tests `pos` against the last-drawn badge rect.
+    pub(super) fn set_hover(&mut self, pos: Position) {
+        self.hovered_badge = self.badge_hit_rect.get().is_some_and(|r| r.contains(pos));
+    }
+
+    /// The hover card, anchored on the drawn badge. No-op unless hovered.
+    pub(super) fn render_card(&self, buf: &mut Buffer) {
+        if !self.hovered_badge {
+            return;
+        }
+        let Some(badge) = self.badge_hit_rect.get() else { return };
+        render_warning_card(buf, RosterManager::cell_rect_to_dots(badge), &self.diagnostics);
+    }
 }
