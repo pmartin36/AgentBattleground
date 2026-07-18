@@ -1,0 +1,11 @@
+[package]
+name = "title_logo"
+version = "0.1.0"
+edition = "2021"
+
+# Pure dot-matrix preview of the AGENT BATTLES sword-in-stone title logo.
+# Renders REAL colored braille to the terminal (truecolor ANSI). Set MAP=1 for
+# an extra per-dot ASCII material map (geometry-checking aid).
+[dependencies]
+engine-core = { path = "../../crates/engine/core" }
+engine-render = { path = "../../crates/engine/render" }

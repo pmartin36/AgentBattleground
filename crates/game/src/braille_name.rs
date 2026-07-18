@@ -37,7 +37,7 @@ fn glyph_dots(c: char) -> [&'static str; GLYPH_H] {
         'D' => ["###·", "#··#", "#··#", "#··#", "#··#", "#··#", "###·", "····"],
         'E' => ["####", "#···", "#···", "###·", "#···", "#···", "####", "····"],
         'F' => ["####", "#···", "#···", "###·", "#···", "#···", "#···", "····"],
-        'G' => ["·###", "#···", "#···", "#·##", "#··#", "#··#", "·###", "····"],
+        'G' => ["·###·", "#···#", "#····", "#··##", "#···#", "#···#", "·###·", "·····"],
         'H' => ["#··#", "#··#", "#··#", "####", "#··#", "#··#", "#··#", "····"],
         'I' => ["###", "·#·", "·#·", "·#·", "·#·", "·#·", "###", "···"],
         'J' => ["··##", "···#", "···#", "···#", "#··#", "#··#", "·##·", "····"],
@@ -53,7 +53,7 @@ fn glyph_dots(c: char) -> [&'static str; GLYPH_H] {
             "#·····#",
             "·······",
         ],
-        'N' => ["#··#", "##·#", "#·##", "#··#", "#··#", "#··#", "#··#", "····"],
+        'N' => ["#···#", "##··#", "#·#·#", "#··##", "#···#", "#···#", "#···#", "·····"],
         'O' => ["·##·", "#··#", "#··#", "#··#", "#··#", "#··#", "·##·", "····"],
         'P' => ["###·", "#··#", "#··#", "###·", "#···", "#···", "#···", "····"],
         'Q' => ["·##··", "#··#·", "#··#·", "#··#·", "#··#·", "#··#·", "·##··", "···##"],
@@ -193,5 +193,46 @@ mod tests {
         let area = Rect::new(0, 0, 0, 0);
         let mut buf = Buffer::empty(Rect::new(0, 0, 1, 1));
         draw_name(&mut buf, area, "X", Rgba::rgb(0xff, 0xff, 0xff));
+    }
+
+    /// b1-t1: the ported prototype N/G bases are 5 dot-columns wide (widened
+    /// from the old 4-wide bases), so their bold (smeared) forms must be
+    /// strictly 6 dots wide — the widened-N / redrawn-G deliverable's width
+    /// contract.
+    #[test]
+    fn bold_matrix_n_and_g_are_widened_to_six_dots() {
+        let n_width = bold_matrix('N')[0].len();
+        let g_width = bold_matrix('G')[0].len();
+        assert_eq!(n_width, 6, "bold N must be 6 dots wide (widened 5-wide base), got {n_width}");
+        assert_eq!(g_width, 6, "bold G must be 6 dots wide (widened 5-wide base), got {g_width}");
+    }
+
+    /// b1-t1: pins `bold_matrix('N')`/`('G')` to the exact prototype-locked
+    /// bitmaps (experiments/title_logo/src/main.rs `glyph_dots` lines 90 &
+    /// 92, smeared by this module's own `bold_matrix`) — guards against
+    /// accidental future re-narrowing of N or the G spur re-welding to the
+    /// stem.
+    #[test]
+    fn bold_matrix_n_and_g_match_pinned_prototype_bitmaps() {
+        let expected_n: [&str; GLYPH_H] = [
+            "##··##", "###·##", "######", "##·###", "##··##", "##··##", "##··##", "······",
+        ];
+        let expected_g: [&str; GLYPH_H] = [
+            "·####·", "##··##", "##····", "##·###", "##··##", "##··##", "·####·", "······",
+        ];
+
+        let actual_n = bold_matrix('N');
+        let actual_g = bold_matrix('G');
+
+        for (row, expected_row) in expected_n.iter().enumerate() {
+            let rendered: String =
+                actual_n[row].iter().map(|&lit| if lit { '#' } else { '·' }).collect();
+            assert_eq!(&rendered, expected_row, "bold N row {row} mismatch");
+        }
+        for (row, expected_row) in expected_g.iter().enumerate() {
+            let rendered: String =
+                actual_g[row].iter().map(|&lit| if lit { '#' } else { '·' }).collect();
+            assert_eq!(&rendered, expected_row, "bold G row {row} mismatch");
+        }
     }
 }
