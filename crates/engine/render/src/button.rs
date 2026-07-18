@@ -159,12 +159,13 @@ impl ButtonCore {
 
 /// Border thickness (in dots) of the procedural rounded frame border drawn
 /// for a hollow-interior `background` (see [`background_is_hollow_frame`]).
-const FRAME_BORDER_THICKNESS: usize = 1;
+/// 2 dots: a chunky rounded frame matching the original `FRAME_PANEL` weight
+/// (a thin 1-dot ring read as a different, lighter style — see spec 62 fix).
+const FRAME_BORDER_THICKNESS: usize = 2;
 
 /// Corner chamfer radius (in dots) of the procedural rounded frame border —
-/// matches b2-t1's lock-in tests and the roster Edit button
-/// (`roster_manager/details_panel.rs:321`).
-const FRAME_CORNER_RADIUS: usize = 1;
+/// 4 dots for a clearly rounded corner (the former radius 1 read as near-square).
+const FRAME_CORNER_RADIUS: usize = 4;
 
 /// Detect whether `background`'s decoded image is a hollow frame (alpha-
 /// transparent centre, e.g. `game::assets::FRAME_PANEL`) rather than a solid
@@ -256,11 +257,16 @@ fn render_button(
 
     let is_hollow_frame = background_is_hollow_frame(background);
     let bg_dots_raw = if is_hollow_frame {
+        // Clamp the corner radius to never exceed half the button, so the
+        // rounding can't chamfer a whole corner away (which would re-introduce
+        // the 4-corner gap on small buttons). Real 20×3 buttons keep the full
+        // radius; tiny buttons round proportionally less.
+        let cr = FRAME_CORNER_RADIUS.min(dot_cols / 2).min(content_rows / 2);
         crate::ui_primitives::rounded_rect(
             dot_cols,
             content_rows,
             FRAME_BORDER_THICKNESS,
-            FRAME_CORNER_RADIUS,
+            cr,
             border_override.unwrap_or(Rgba::rgb(0xff, 0xff, 0xff)),
             crate::dots::Dot::Transparent,
         )

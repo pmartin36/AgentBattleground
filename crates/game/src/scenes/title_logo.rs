@@ -120,12 +120,17 @@ impl Beat {
     }
 }
 
-pub(crate) const SWORD_DROP: Beat = Beat::new(0.00, 0.18);
-pub(crate) const IMPACT_SHAKE: Beat = Beat::new(0.18, 0.30);
-pub(crate) const IMPACT_DUST: Beat = Beat::new(0.18, 0.38);
-pub(crate) const BATTLES_IGNITE: Beat = Beat::new(0.18, 0.42);
-pub(crate) const SPARKLE_1: Beat = Beat::new(0.46, 0.74);
-pub(crate) const SPARKLE_2: Beat = Beat::new(0.61, 0.89);
+/// Held-still anticipation before the sword begins to fall: the scene shows
+/// AGEN + the stone + the dark BATTLES etch for this long (sword off-screen),
+/// then the drop. Added into every beat below, so the whole cascade shifts as
+/// one and each beat stays independently tunable relative to it.
+pub(crate) const PREROLL: f32 = 0.5;
+pub(crate) const SWORD_DROP: Beat = Beat::new(PREROLL + 0.00, PREROLL + 0.18);
+pub(crate) const IMPACT_SHAKE: Beat = Beat::new(PREROLL + 0.18, PREROLL + 0.30);
+pub(crate) const IMPACT_DUST: Beat = Beat::new(PREROLL + 0.18, PREROLL + 0.38);
+pub(crate) const BATTLES_IGNITE: Beat = Beat::new(PREROLL + 0.18, PREROLL + 0.42);
+pub(crate) const SPARKLE_1: Beat = Beat::new(PREROLL + 0.46, PREROLL + 0.74);
+pub(crate) const SPARKLE_2: Beat = Beat::new(PREROLL + 0.61, PREROLL + 0.89);
 /// Animation is over after the last beat; hold on the still from here (b3-t2).
 pub(crate) const ANIM_END: f32 = SPARKLE_2.end;
 

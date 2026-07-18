@@ -576,21 +576,20 @@ mod layout_tests {
             align_items: Align::Start,
             gap: 0,
         };
-        let container = MainHub::cell_rect_to_dots(a).inset(0, 0, 4, 0);
+        let container = MainHub::cell_rect_to_dots(a);
         let expected = flex(container, style, std::slice::from_ref(&child))[0].to_cell_rect();
         assert_eq!(MainHub::title_rect(a), expected);
     }
 
-    /// The title box's top edge sits exactly 1 whole text cell below the
-    /// top of `area` (the new top margin), not flush against it.
+    /// The title box's top edge sits flush at the top of `area` — the former
+    /// 1-cell top margin was removed (title moved up 1 cell).
     #[test]
-    fn title_rect_has_one_cell_top_margin() {
+    fn title_rect_is_flush_at_top() {
         let a = area();
         let title = MainHub::title_rect(a);
         assert_eq!(
-            title.y,
-            a.y + 1,
-            "title box top edge must sit exactly 1 cell below the top of area"
+            title.y, a.y,
+            "title box top edge must sit flush at the top of area (no top margin)"
         );
     }
 
@@ -621,8 +620,10 @@ mod layout_tests {
     /// catch an off-by-margin/axis slip in the inset/Justify::End formula.
     #[test]
     fn menu_container_matches_pre_migration_rect() {
-        assert_eq!(MainHub::menu_container(Rect::new(0, 0, 120, 50)), Rect::new(50, 33, 20, 15));
-        assert_eq!(MainHub::menu_container(Rect::new(0, 0, 40, 20)), Rect::new(10, 3, 20, 15));
+        // MENU_BOTTOM_MARGIN is now 4 (was 2): the menu group sits 2 cells
+        // higher, so each y drops by 2 (33->31, 3->1).
+        assert_eq!(MainHub::menu_container(Rect::new(0, 0, 120, 50)), Rect::new(50, 31, 20, 15));
+        assert_eq!(MainHub::menu_container(Rect::new(0, 0, 40, 20)), Rect::new(10, 1, 20, 15));
     }
 
     /// The menu sits near the BOTTOM of the screen (Exit close to the
@@ -719,12 +720,17 @@ mod animation_clock_tests {
         let mut scene = MainHub::default();
         let mut ctx = EngineCtx;
 
-        let buf_start = render_to_buffer(&scene, w, h);
-        scene.update(&mut ctx, Duration::from_secs_f32(0.30));
+        // Sample DURING the animation (after the pre-roll, mid sword-drop) and
+        // then well past ANIM_END — both derived from the constants so this
+        // survives PREROLL tuning.
+        let pre = crate::scenes::title_logo::PREROLL;
+        let anim_end = crate::scenes::title_logo::ANIM_END;
+        let buf_start = render_to_buffer(&scene, w, h); // t=0, pre-roll held
+        scene.update(&mut ctx, Duration::from_secs_f32(pre + 0.10)); // mid sword-drop
         let buf_mid = render_to_buffer(&scene, w, h);
-        scene.update(&mut ctx, Duration::from_secs_f32(0.70)); // total ~1.0s
+        scene.update(&mut ctx, Duration::from_secs_f32(anim_end)); // now well past ANIM_END
         let buf_settled_a = render_to_buffer(&scene, w, h);
-        scene.update(&mut ctx, Duration::from_secs_f32(1.0)); // total ~2.0s
+        scene.update(&mut ctx, Duration::from_secs_f32(1.0)); // further past
         let buf_settled_b = render_to_buffer(&scene, w, h);
 
         assert_ne!(

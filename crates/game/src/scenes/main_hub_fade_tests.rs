@@ -39,7 +39,7 @@ fn any_painted(buf: &Buffer, rect: Rect) -> bool {
 /// invisible — no border, no label, no background dots at all.
 #[test]
 fn buttons_hidden_during_sword_drop() {
-    let scene = hub_at(0.1);
+    let scene = hub_at(crate::scenes::title_logo::SWORD_DROP.start + 0.05); // inside the drop
     let buf = render_to_buffer(&scene, W, H);
     let rects = MainHub::button_rects(Rect::new(0, 0, W, H));
 
@@ -59,7 +59,9 @@ fn buttons_hidden_during_sword_drop() {
 /// blends rather than snapping straight to opaque.
 #[test]
 fn buttons_partial_alpha_mid_fade() {
-    let scene = hub_at(0.46);
+    // Mid of the BTN_FADE window (PREROLL + [0.30, 0.62)) — constant-relative
+    // so it survives PREROLL tuning.
+    let scene = hub_at(crate::scenes::title_logo::PREROLL + 0.46);
     let buf = render_to_buffer(&scene, W, H);
     let rects = MainHub::button_rects(Rect::new(0, 0, W, H));
     let gold = crate::scenes::title_logo::GLOW_COLOR;

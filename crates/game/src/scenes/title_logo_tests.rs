@@ -73,13 +73,15 @@ fn compute_layout_canvas_dims_are_188x94_dots() {
 /// (not durations).
 #[test]
 fn timing_block_matches_spec_table() {
-    assert_eq!((SWORD_DROP.start, SWORD_DROP.end), (0.00, 0.18), "sword drop");
-    assert_eq!((IMPACT_SHAKE.start, IMPACT_SHAKE.end), (0.18, 0.30), "impact shake");
-    assert_eq!((IMPACT_DUST.start, IMPACT_DUST.end), (0.18, 0.38), "impact dust");
-    assert_eq!((BATTLES_IGNITE.start, BATTLES_IGNITE.end), (0.18, 0.42), "battles ignite");
-    assert_eq!((SPARKLE_1.start, SPARKLE_1.end), (0.46, 0.74), "sparkle #1");
-    assert_eq!((SPARKLE_2.start, SPARKLE_2.end), (0.61, 0.89), "sparkle #2");
-    assert_eq!(ANIM_END, 0.89, "ANIM_END must be the last beat's end");
+    // Spec-table deltas, offset by the anticipation PREROLL (each beat is
+    // `PREROLL + <base>`), so this survives PREROLL tuning.
+    assert_eq!((SWORD_DROP.start, SWORD_DROP.end), (PREROLL + 0.00, PREROLL + 0.18), "sword drop");
+    assert_eq!((IMPACT_SHAKE.start, IMPACT_SHAKE.end), (PREROLL + 0.18, PREROLL + 0.30), "impact shake");
+    assert_eq!((IMPACT_DUST.start, IMPACT_DUST.end), (PREROLL + 0.18, PREROLL + 0.38), "impact dust");
+    assert_eq!((BATTLES_IGNITE.start, BATTLES_IGNITE.end), (PREROLL + 0.18, PREROLL + 0.42), "battles ignite");
+    assert_eq!((SPARKLE_1.start, SPARKLE_1.end), (PREROLL + 0.46, PREROLL + 0.74), "sparkle #1");
+    assert_eq!((SPARKLE_2.start, SPARKLE_2.end), (PREROLL + 0.61, PREROLL + 0.89), "sparkle #2");
+    assert_eq!(ANIM_END, PREROLL + 0.89, "ANIM_END must be the last beat's end");
 }
 
 /// `Beat::contains`/`Beat::progress` are half-open `[start,end)`:
@@ -87,14 +89,15 @@ fn timing_block_matches_spec_table() {
 /// 0..1 across the window (verified against the real `SWORD_DROP` window).
 #[test]
 fn beat_contains_and_progress_are_half_open() {
-    assert!(SWORD_DROP.contains(0.0), "contains(start) must be true");
-    assert!(!SWORD_DROP.contains(0.18), "contains(end) must be false (half-open)");
-    assert_eq!(SWORD_DROP.progress(0.0), 0.0, "progress(start) must be 0");
-    assert_eq!(SWORD_DROP.progress(0.18), 1.0, "progress(end) must be 1");
+    let mid = (SWORD_DROP.start + SWORD_DROP.end) / 2.0;
+    assert!(SWORD_DROP.contains(SWORD_DROP.start), "contains(start) must be true");
+    assert!(!SWORD_DROP.contains(SWORD_DROP.end), "contains(end) must be false (half-open)");
+    assert_eq!(SWORD_DROP.progress(SWORD_DROP.start), 0.0, "progress(start) must be 0");
+    assert_eq!(SWORD_DROP.progress(SWORD_DROP.end), 1.0, "progress(end) must be 1");
     assert!(
-        (SWORD_DROP.progress(0.09) - 0.5).abs() < 0.01,
+        (SWORD_DROP.progress(mid) - 0.5).abs() < 0.01,
         "progress(midpoint) must be ~0.5, got {}",
-        SWORD_DROP.progress(0.09)
+        SWORD_DROP.progress(mid)
     );
 }
 
@@ -450,19 +453,20 @@ fn impact_shake_is_even_and_windowed() {
 #[test]
 fn dust_present_only_in_dust_window() {
     let l = compute_layout();
+    let mid = (IMPACT_DUST.start + IMPACT_DUST.end) / 2.0;
     assert!(
-        count_material(&render_frame(&l, 0.28).cv, &l, DUST) > 0,
-        "dust must be present mid-window (t=0.28)"
+        count_material(&render_frame(&l, mid).cv, &l, DUST) > 0,
+        "dust must be present mid-window (t={mid})"
     );
     assert_eq!(
-        count_material(&render_frame(&l, 0.09).cv, &l, DUST),
+        count_material(&render_frame(&l, IMPACT_DUST.start - 0.05).cv, &l, DUST),
         0,
-        "no dust before the window (t=0.09)"
+        "no dust before the window"
     );
     assert_eq!(
-        count_material(&render_frame(&l, 0.50).cv, &l, DUST),
+        count_material(&render_frame(&l, IMPACT_DUST.end + 0.05).cv, &l, DUST),
         0,
-        "no dust after the window (t=0.50)"
+        "no dust after the window"
     );
 }
 
@@ -474,13 +478,13 @@ fn dust_present_only_in_dust_window() {
 fn battles_strictly_between_etch_and_gold_midignite() {
     let l = compute_layout();
 
-    let before = render_frame(&l, 0.10).battles_color;
+    let before = render_frame(&l, BATTLES_IGNITE.start - 0.05).battles_color;
     assert_eq!(before, ETCH_COLOR, "battles_color before ignite starts must be ETCH_COLOR");
 
     let after = render_frame(&l, BATTLES_IGNITE.end).battles_color;
     assert_eq!(after, GLOW_COLOR, "battles_color at/after ignite ends must be GLOW_COLOR");
 
-    let mid = render_frame(&l, 0.30).battles_color;
+    let mid = render_frame(&l, (BATTLES_IGNITE.start + BATTLES_IGNITE.end) / 2.0).battles_color;
     assert_ne!(mid, ETCH_COLOR, "battles_color mid-ignite must not equal ETCH_COLOR");
     assert_ne!(mid, GLOW_COLOR, "battles_color mid-ignite must not equal GLOW_COLOR");
     assert!(
@@ -505,18 +509,20 @@ fn battles_strictly_between_etch_and_gold_midignite() {
 #[test]
 fn sparkle_present_in_each_sparkle_window() {
     let l = compute_layout();
+    let mid1 = (SPARKLE_1.start + SPARKLE_1.end) / 2.0;
+    let mid2 = (SPARKLE_2.start + SPARKLE_2.end) / 2.0;
     assert!(
-        count_material(&render_frame(&l, 0.60).cv, &l, SPARK) > 0,
-        "sparkle #1 window must draw SPARK material (t=0.60)"
+        count_material(&render_frame(&l, mid1).cv, &l, SPARK) > 0,
+        "sparkle #1 window must draw SPARK material (t={mid1})"
     );
     assert!(
-        count_material(&render_frame(&l, 0.80).cv, &l, SPARK) > 0,
-        "sparkle #2 window must draw SPARK material (t=0.80)"
+        count_material(&render_frame(&l, mid2).cv, &l, SPARK) > 0,
+        "sparkle #2 window must draw SPARK material (t={mid2})"
     );
     assert_eq!(
-        count_material(&render_frame(&l, 0.30).cv, &l, SPARK),
+        count_material(&render_frame(&l, SPARKLE_1.start - 0.05).cv, &l, SPARK),
         0,
-        "no sparkle outside either window (t=0.30)"
+        "no sparkle before either window"
     );
 }
 

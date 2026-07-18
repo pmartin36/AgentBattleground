@@ -62,11 +62,14 @@ impl Default for MainHub {
 
 impl MainHub {
     /// First-run fade window (Decision 6) for the nav buttons: begins after
-    /// `title_logo::SWORD_DROP` seats (0.18) and ramps 0..1 across
-    /// `[BTN_FADE.start, BTN_FADE.end)`. Drives both the buttons' alpha
-    /// (`render`) and their input gate (`handle_input`/`buttons_interactive`).
-    const BTN_FADE: crate::scenes::title_logo::Beat =
-        crate::scenes::title_logo::Beat::new(0.30, 0.62);
+    /// `title_logo::SWORD_DROP` seats (`PREROLL + 0.18`) and ramps 0..1 across
+    /// `[BTN_FADE.start, BTN_FADE.end)`. Offset by `title_logo::PREROLL` so it
+    /// tracks the pre-roll delay. Drives both the buttons' alpha (`render`) and
+    /// their input gate (`handle_input`/`buttons_interactive`).
+    const BTN_FADE: crate::scenes::title_logo::Beat = crate::scenes::title_logo::Beat::new(
+        crate::scenes::title_logo::PREROLL + 0.30,
+        crate::scenes::title_logo::PREROLL + 0.62,
+    );
 
     /// One menu button's size and the vertical gap between stacked buttons.
     const BUTTON_W: u16 = 20;
@@ -80,8 +83,9 @@ impl MainHub {
     const MENU_H: u16 = 4 * Self::BUTTON_H + 3 * Self::MENU_GAP;
 
     /// Gap kept clear between the bottom of the menu (Exit) and the very
-    /// bottom edge of the screen.
-    const MENU_BOTTOM_MARGIN: u16 = 2;
+    /// bottom edge of the screen. (4 cells: the menu sits 2 cells higher than
+    /// the former margin of 2.)
+    const MENU_BOTTOM_MARGIN: u16 = 4;
 
     /// The procedural logo's own cell dims — `div_ceil` of
     /// `title_logo::compute_layout()`'s dot canvas (188×94 dots), matching
@@ -118,10 +122,9 @@ impl MainHub {
             align_items: Align::Start,
             gap: 0,
         };
-        // Top margin: inset the container by 1 whole text cell (4 dots) off
-        // its top edge before running the flex call, so the title box sits
-        // 1 cell lower than a zero-margin `Align::Start` would place it.
-        let container = Self::cell_rect_to_dots(area).inset(0, 0, 4, 0);
+        // No top margin: the title box sits flush at the top of `area` (moved
+        // up 1 cell from the former 1-cell / 4-dot top inset).
+        let container = Self::cell_rect_to_dots(area);
         flex(container, style, std::slice::from_ref(&child))[0].to_cell_rect()
     }
 
