@@ -94,6 +94,70 @@ pub(crate) const POMMEL_H: i32 = SCALE;
 pub(crate) const NECK: i32 = SCALE / 2;
 pub(crate) const HILT_ABOVE: i32 = NECK + GUARD_H + GRIP_LEN + POMMEL_H;
 
+// ---- animation timing (seconds) — ONE per-beat block; each beat its own
+//      [start,end); no global speed multiplier (Decision 8) ----------------
+/// One animation beat: half-open time window `[start, end)` in seconds.
+pub(crate) struct Beat {
+    pub(crate) start: f32,
+    pub(crate) end: f32,
+}
+
+impl Beat {
+    pub(crate) const fn new(start: f32, end: f32) -> Self {
+        Beat { start, end }
+    }
+
+    /// `t` is inside this beat's half-open window.
+    pub(crate) fn contains(&self, t: f32) -> bool {
+        t >= self.start && t < self.end
+    }
+
+    /// 0..1 progress across the beat, clamped (0 before start, 1 at/after end).
+    pub(crate) fn progress(&self, t: f32) -> f32 {
+        ((t - self.start) / (self.end - self.start)).clamp(0.0, 1.0)
+    }
+}
+
+pub(crate) const SWORD_DROP: Beat = Beat::new(0.00, 0.18);
+pub(crate) const IMPACT_SHAKE: Beat = Beat::new(0.18, 0.30);
+pub(crate) const IMPACT_DUST: Beat = Beat::new(0.18, 0.38);
+pub(crate) const BATTLES_IGNITE: Beat = Beat::new(0.18, 0.42);
+pub(crate) const SPARKLE_1: Beat = Beat::new(0.46, 0.74);
+pub(crate) const SPARKLE_2: Beat = Beat::new(0.61, 0.89);
+/// Animation is over after the last beat; hold on the still from here (b3-t2).
+pub(crate) const ANIM_END: f32 = SPARKLE_2.end;
+
+/// Shifts the WHOLE composition DOWN within the title area (Decision 3b). v1=0
+/// (prototype had none). The fall start is DERIVED from it (see
+/// `fall_dist_for_offset`), so the sword is always fully off-screen at t=0 for
+/// ANY value.
+pub(crate) const VERTICAL_OFFSET: i32 = 0;
+
+// layout constants — the shared source of truth compute_layout consumes.
+const CAP_H: i32 = 7 * SCALE; // caps are 7 shape-rows tall (28)
+const MARGIN: i32 = SCALE; // (4)
+const STONE_GAP: i32 = SCALE / 2; // (2)
+const BODY_REACH: i32 = CAP_H + STONE_GAP + SCALE; // blade extent below cap (34)
+
+/// Seated cap line (top of AGEN) in dots for a given vertical offset.
+pub(crate) fn word_top_for(offset: i32) -> i32 {
+    HILT_ABOVE + MARGIN + offset
+}
+
+/// Fall distance (dots the cap line travels from off-screen start to seat) for
+/// a given offset. DERIVED (Decision 3b) from the seated cap line + the
+/// sword's full below-cap height (blade body + tapering tip), so the tip
+/// clears the top edge for ANY offset.
+pub(crate) fn fall_dist_for_offset(offset: i32) -> i32 {
+    word_top_for(offset) + BODY_REACH + BLADE_W / 2
+}
+
+/// Bottommost sword dot (blade tip) at t=0 for a given offset. Guaranteed < 0
+/// (above the canvas top edge) for ANY offset — the off-screen-start invariant.
+pub(crate) fn sword_tip_start_y(offset: i32) -> i32 {
+    (word_top_for(offset) - fall_dist_for_offset(offset)) + BODY_REACH + BLADE_W / 2 - 1
+}
+
 /// Pinned layout anchors, all in dot units. Derived by `compute_layout`.
 pub(crate) struct Layout {
     pub(crate) canvas_w: i32,
@@ -138,10 +202,10 @@ fn word_width(word: &str, gap: i32) -> i32 {
 /// `SCALE`, per-glyph widths, and the sword-geometry constants.
 pub(crate) fn compute_layout() -> Layout {
     let gap = SCALE;
-    let cap_h = 7 * SCALE;
+    let cap_h = CAP_H;
     let hpad = SCALE;
     let vpad = SCALE;
-    let margin = SCALE;
+    let margin = MARGIN;
 
     let agen_w = glyph_w('A') + gap + glyph_w('G') + gap + glyph_w('E') + gap + glyph_w('N');
     let blade_left0 = agen_w + gap;
@@ -163,16 +227,16 @@ pub(crate) fn compute_layout() -> Layout {
     let right = (ml + sword_right0).max(stone_x + stone_w);
     let canvas_w = right + margin;
 
-    let word_top = HILT_ABOVE + margin; // ~6 cells of hilt headroom above AGEN
+    let word_top = word_top_for(VERTICAL_OFFSET); // ~6 cells of hilt headroom above AGEN
     let baseline = word_top + cap_h;
-    let stone_gap = SCALE / 2;
+    let stone_gap = STONE_GAP;
     let stone_top = baseline + stone_gap;
     let stone_bottom = stone_top + stone_h;
     let canvas_h = stone_bottom + margin;
 
     let bl = ml + blade_left0;
     let slot_bottom = stone_top + SCALE;
-    let body_reach = cap_h + stone_gap + SCALE; // cap_y+body_reach == slot_bottom when seated
+    let body_reach = BODY_REACH; // cap_y+body_reach == slot_bottom when seated
 
     let mut battles_x = stone_cx - battles_w / 2;
     battles_x -= battles_x.rem_euclid(2);
@@ -194,7 +258,7 @@ pub(crate) fn compute_layout() -> Layout {
         battles_y,
         slot_bottom,
         body_reach,
-        fall_dist: word_top + body_reach + 2, // tip starts just above the top edge
+        fall_dist: fall_dist_for_offset(VERTICAL_OFFSET), // tip starts fully off-screen
         spark_x: bl + BLADE_W / 2,
         spark_y: word_top + cap_h / 2, // mid-blade
     }
@@ -400,16 +464,7 @@ pub(crate) fn draw_sword(cv: &mut Canvas, bl: i32, cap_y: i32, body_end: i32, cl
 /// the prototype `render_frame` (462-481, `p==1`).
 pub(crate) fn still_canvas(l: &Layout) -> Canvas {
     let mut cv = Canvas::new(l.canvas_w, l.canvas_h);
-
-    // AGEN (static)
-    let mut cx = l.ml;
-    for c in ['A', 'G', 'E', 'N'] {
-        cx += cv.letter(cx, l.word_top, c, WHITE) + l.gap;
-    }
-    // stone
-    draw_stone(&mut cv, l.stone_x, l.stone_top, l.stone_w, l.stone_h);
-    // BATTLES
-    draw_battles(&mut cv, l);
+    draw_static_base(&mut cv, l);
     // sword, seated (cap at word_top, tip buried at slot_bottom)
     draw_sword(&mut cv, l.bl, l.word_top, l.word_top + l.body_reach, l.slot_bottom);
 
@@ -459,328 +514,128 @@ pub(crate) fn compose_still() -> (Grid, DotRect) {
     (grid, DotRect { x: 0, y: 0, w: l.canvas_w, h: l.canvas_h })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use engine_render::dots::{dots_to_grid, dots_to_grid_tinted};
-    use engine_render::Cell;
+// ---- b3-t2: animation-only additions (stub bodies — filled in by the
+//      code-writer per research.md's blueprint) --------------------------
 
-    /// Counts total lit dot bits across every `Cell::Glyph` in `g` (sum of
-    /// `count_ones` on each glyph's braille mask, `ch - U+2800`).
-    fn count_lit_dots(g: &Grid) -> u32 {
-        let mut n = 0u32;
-        for r in 0..g.rows() {
-            for c in 0..g.cols() {
-                if let Cell::Glyph { ch, .. } = g.get(c, r) {
-                    n += (ch as u32 - 0x2800).count_ones();
-                }
-            }
-        }
-        n
-    }
+/// Sparkle ray reach, in dots (b3-t2).
+pub(crate) const SPARK_MAX: f32 = 9.0;
+/// Total sparkle rotation across its window, in radians (b3-t2).
+pub(crate) const SPARK_ROT: f32 = 2.0;
 
-    /// DELIVERABLE: `compute_layout()` produces the prototype's verbatim-
-    /// ported canvas size — 188×94 dots, which floors to 94×23 cells (NOT
-    /// 96 dots / 24 rows; see research.md's REFINED verdict). The spec's
-    /// "≈94×24" is satisfied at 94×23 — assert `cols == 94` exactly and
-    /// `rows` within `23..=24`, never `rows == 24` exactly.
-    #[test]
-    fn compute_layout_canvas_dims_are_188x94_dots() {
-        let layout = compute_layout();
-        assert_eq!(layout.canvas_w, 188, "canvas width must be 188 dots");
-        assert_eq!(layout.canvas_h, 94, "canvas height must be 94 dots");
+/// One animation frame's authored canvas + its per-frame BATTLES color +
+/// even-dot horizontal shake. Prototype's `Frame` (main.rs:439-443).
+pub(crate) struct Frame {
+    pub(crate) cv: Canvas,
+    pub(crate) battles_color: Rgba,
+    pub(crate) shake: (i32, i32),
+}
 
-        let cols = layout.canvas_w / 2;
-        let rows = layout.canvas_h / 4;
-        assert_eq!(cols, 94, "canvas width must floor to 94 cells");
-        assert!(
-            (23..=24).contains(&rows),
-            "canvas height must floor to ~24 cells (94 dots -> 23), got {rows}"
-        );
-    }
-
-    /// DELIVERABLE: pinned anchor positions land where the prototype ported
-    /// them, including the cell-grid snap invariants on the BATTLES origin
-    /// (Decision-pinned: battles_x even, battles_y a multiple of 4).
-    #[test]
-    fn compute_layout_pinned_anchors() {
-        let layout = compute_layout();
-        assert_eq!(layout.gap, 4);
-        assert_eq!(layout.word_top, 24);
-        assert_eq!(layout.stone_top, 54);
-        assert_eq!(layout.stone_h, 36);
-        assert_eq!(layout.slot_bottom, 58);
-
-        assert_eq!(layout.battles_x % 2, 0, "battles_x must be cell-grid snapped (even)");
-        assert_eq!(
-            layout.battles_y.rem_euclid(4),
-            0,
-            "battles_y must be cell-grid snapped (multiple of 4)"
-        );
-
-        // Animation-only fields must also be populated with sane, in-canvas
-        // values (exercised here; exact values are b3's contract).
-        assert!(layout.fall_dist > 0, "fall_dist must be positive");
-        assert!(
-            layout.spark_x >= 0 && layout.spark_x < layout.canvas_w,
-            "spark_x must land inside the canvas"
-        );
-        assert!(
-            layout.spark_y >= 0 && layout.spark_y < layout.canvas_h,
-            "spark_y must land inside the canvas"
-        );
-    }
-
-    /// Font-reuse guard: the scaled glyph stamping must consume b1-t1's
-    /// widened N through `braille_name::bold_matrix`, not a stale local
-    /// copy — stamping "AGEN" must actually light cells, and glyph_w('N')
-    /// must reflect the widened (5-wide base -> 6-wide bold -> 24 dots at
-    /// SCALE=4) letterform.
-    #[test]
-    fn font_reuse_stamps_widened_n_through_bold_matrix() {
-        let mut cv = Canvas::new(200, 100);
-        cv.letter(0, 0, 'A', WHITE);
-        cv.letter(30, 0, 'G', WHITE);
-        cv.letter(60, 0, 'E', WHITE);
-        cv.letter(90, 0, 'N', WHITE);
-
-        let mut any_lit = false;
-        'outer: for y in 0..100 {
-            for x in 0..200 {
-                if cv.at(x, y) != EMPTY {
-                    any_lit = true;
-                    break 'outer;
-                }
-            }
-        }
-        assert!(any_lit, "stamping AGEN must light at least one canvas cell");
-        assert_eq!(
-            glyph_w('N'),
-            24,
-            "widened N (b1-t1) must be 24 dots wide at SCALE=4"
-        );
-    }
-
-    /// DELIVERABLE (b2-t2): the stone rect is textured, not a solid fill —
-    /// contains lit stone-body material cells AND sparse EMPTY grain/crack
-    /// holes (grain authored as unlit dots, not skipped).
-    #[test]
-    fn stone_slab_is_textured_and_holed() {
-        let l = compute_layout();
-        let mut cv = Canvas::new(l.canvas_w, l.canvas_h);
-        draw_stone(&mut cv, l.stone_x, l.stone_top, l.stone_w, l.stone_h);
-
-        let mut stone_body = 0;
-        let mut empty_holes = 0;
-        for y in l.stone_top..(l.stone_top + l.stone_h) {
-            for x in l.stone_x..(l.stone_x + l.stone_w) {
-                match cv.at(x, y) {
-                    S_HI | S_MD | S_SH => stone_body += 1,
-                    EMPTY => empty_holes += 1,
-                    _ => {}
-                }
-            }
-        }
-        assert!(stone_body > 0, "stone rect must contain textured stone-body cells");
-        assert!(
-            empty_holes > 0,
-            "stone rect must contain sparse EMPTY grain/crack holes (not a solid fill)"
-        );
-    }
-
-    /// DELIVERABLE (b2-t2): BATTLES is stamped in gold (`G_GLOW` -> `GLOW_COLOR`)
-    /// at the layout's cell-grid-snapped origin.
-    #[test]
-    fn battles_is_stamped_gold_and_cell_snapped() {
-        let l = compute_layout();
-        assert_eq!(l.battles_x % 2, 0, "battles_x must be cell-grid snapped (even)");
-        assert_eq!(
-            l.battles_y.rem_euclid(4),
-            0,
-            "battles_y must be cell-grid snapped (multiple of 4)"
-        );
-
-        let mut cv = Canvas::new(l.canvas_w, l.canvas_h);
-        draw_battles(&mut cv, &l);
-
-        let mut glow_cells = 0;
-        for y in l.battles_y..(l.battles_y + 7 * SCALE) {
-            for x in 0..l.canvas_w {
-                if cv.at(x, y) == G_GLOW {
-                    glow_cells += 1;
-                }
-            }
-        }
-        assert!(
-            glow_cells > 0,
-            "draw_battles must light G_GLOW cells on the BATTLES rows"
-        );
-        assert_eq!(
-            color_of(G_GLOW),
-            GLOW_COLOR,
-            "G_GLOW must map to gold in the static still"
-        );
-    }
-
-    /// Guard on the ported edge rule: the slab's top edge stays straight
-    /// (not hewn away) across the mid-span, so it cleanly swallows the blade.
-    #[test]
-    fn stone_top_edge_is_straight_across_mid_span() {
-        let l = compute_layout();
-        let mid_lo = l.stone_w / 4;
-        let mid_hi = l.stone_w - l.stone_w / 4;
-        let mut any_intact = false;
-        for lx in mid_lo..mid_hi {
-            if stone_edge(l.stone_w, l.stone_h, lx, 0) {
-                any_intact = true;
-            }
-        }
-        assert!(
-            any_intact,
-            "stone top edge must remain intact (straight) across the mid-span"
-        );
-    }
-
-    /// DELIVERABLE (b2-t3): with the sword seated (cap at the final letter
-    /// line), no sword material is drawn at or below the stone-surface clip
-    /// line (`slot_bottom`) — every dot is clipped as the tip buries.
-    #[test]
-    fn sword_clipped_at_stone_surface() {
-        let l = compute_layout();
-        let mut cv = Canvas::new(l.canvas_w, l.canvas_h);
-        draw_sword(&mut cv, l.bl, l.word_top, l.word_top + l.body_reach, l.slot_bottom);
-
-        for y in l.slot_bottom..l.canvas_h {
-            for x in 0..l.canvas_w {
-                assert_eq!(
-                    cv.at(x, y),
-                    EMPTY,
-                    "sword material must not appear at/below the stone-surface clip line (x={x}, y={y})"
-                );
-            }
-        }
-    }
-
-    /// DELIVERABLE (b2-t3): the guard renders as a wide horizontal crossbar
-    /// above the caps, while the blade body within the word rows is the
-    /// narrow stem — the T shape.
-    #[test]
-    fn guard_is_crossbar_above_caps() {
-        let l = compute_layout();
-        let mut cv = Canvas::new(l.canvas_w, l.canvas_h);
-        draw_sword(&mut cv, l.bl, l.word_top, l.word_top + l.body_reach, l.slot_bottom);
-
-        let mut max_lit_above_caps = 0;
-        for y in 0..l.word_top {
-            let count = (0..l.canvas_w).filter(|&x| cv.at(x, y) != EMPTY).count() as i32;
-            max_lit_above_caps = max_lit_above_caps.max(count);
-        }
-        assert!(
-            max_lit_above_caps >= GUARD_W,
-            "guard crossbar must span at least GUARD_W ({GUARD_W}) lit dots on some row above the caps (word_top), got {max_lit_above_caps}"
-        );
-
-        let stem_row = l.word_top + SCALE;
-        let stem_count = (0..l.canvas_w).filter(|&x| cv.at(x, stem_row) != EMPTY).count() as i32;
-        assert!(
-            stem_count > 0 && stem_count <= BLADE_W,
-            "blade stem row inside the word body must be narrow (<= BLADE_W = {BLADE_W}), got {stem_count}"
-        );
-    }
-
-    /// DELIVERABLE (b2-t3): blade cross-section material is present within
-    /// the word-body rows — the T stem.
-    #[test]
-    fn blade_material_present_in_word_body() {
-        let l = compute_layout();
-        let mut cv = Canvas::new(l.canvas_w, l.canvas_h);
-        draw_sword(&mut cv, l.bl, l.word_top, l.word_top + l.body_reach, l.slot_bottom);
-
-        let cap_h = 7 * SCALE;
-        let mut blade_material_found = false;
-        for y in l.word_top..(l.word_top + cap_h) {
-            for x in 0..l.canvas_w {
-                if matches!(cv.at(x, y), B_HI | B_LT | B_DK | B_SH) {
-                    blade_material_found = true;
-                }
-            }
-        }
-        assert!(
-            blade_material_found,
-            "blade cross-section material must be present within the word-body rows [word_top, word_top+7*SCALE)"
-        );
-    }
-
-    /// DELIVERABLE (b2-t4): the tinted conversion (uniform-white shape +
-    /// per-dot color) preserves every authored dot exactly — no luma-halo
-    /// culling — while the same color buffer run through plain
-    /// `dots_to_grid` culls some of the dark blade-shadow / dark-stone dots
-    /// that share a 2x4 block with brighter dots. This is the direct guard
-    /// against the bug Decision 6 calls out.
-    #[test]
-    fn still_dark_dot_survives_tinted_conversion() {
-        let l = compute_layout();
-        let cv = still_canvas(&l);
-
-        let mut authored = 0u32;
-        for y in 0..l.canvas_h {
-            for x in 0..l.canvas_w {
-                if cv.at(x, y) != EMPTY {
-                    authored += 1;
-                }
-            }
-        }
-        assert!(authored > 0, "still_canvas must author at least one lit dot");
-
-        let (shape, color) = build_buffers(&cv, GLOW_COLOR, (0, 0));
-        let tinted = dots_to_grid_tinted(&shape, &color);
-        let plain = dots_to_grid(&color);
-
-        let lit_tinted = count_lit_dots(&tinted);
-        let lit_plain = count_lit_dots(&plain);
-
-        assert_eq!(
-            lit_tinted, authored,
-            "tinted conversion must preserve every authored dot (no luma culling)"
-        );
-        assert!(
-            lit_plain < lit_tinted,
-            "plain dots_to_grid must cull some dark dots that the tinted path preserves (tinted={lit_tinted}, plain={lit_plain})"
-        );
-    }
-
-    /// DELIVERABLE (b2-t4): `compose_still` returns the logo's genuine
-    /// dot-precise extent (188x94), never reconstructed from the floored
-    /// or ceiling-rounded grid — the CLAUDE.md #5 unfloored-DotRect
-    /// invariant b4-t1 depends on.
-    #[test]
-    fn compose_still_returns_unfloored_dotprecise_rect() {
-        let (grid, rect) = compose_still();
-
-        assert_eq!(rect, DotRect { x: 0, y: 0, w: 188, h: 94 });
-        assert_eq!(grid.cols(), 94);
-        assert_eq!(grid.rows(), 24);
-        assert_ne!(
-            rect.h,
-            grid.rows() as i32 * 4,
-            "rect.h must be the genuine dot extent (94), not grid-reconstructed (96)"
-        );
-    }
-
-    /// Sanity: the composed still actually renders something (not an
-    /// all-transparent grid).
-    #[test]
-    fn compose_still_grid_nonempty() {
-        let (grid, _rect) = compose_still();
-        let mut any_glyph = false;
-        'outer: for r in 0..grid.rows() {
-            for c in 0..grid.cols() {
-                if matches!(grid.get(c, r), Cell::Glyph { .. }) {
-                    any_glyph = true;
-                    break 'outer;
-                }
-            }
-        }
-        assert!(any_glyph, "compose_still must render at least one lit glyph cell");
+/// Even-dot (2-dot / 1-cell) horizontal rattle during IMPACT_SHAKE, decaying;
+/// (0,0) outside the window. Prototype `shake_offset` (main.rs:445-457).
+pub(crate) fn shake_offset(t: f32) -> (i32, i32) {
+    if IMPACT_SHAKE.contains(t) {
+        let s = IMPACT_SHAKE.progress(t);
+        let step = ((t - IMPACT_SHAKE.start) / 0.03) as i32;
+        let amp = if s < 0.65 { 2 } else { 0 };
+        let dir = if step % 2 == 0 { 1 } else { -1 };
+        (dir * amp, 0)
+    } else {
+        (0, 0)
     }
 }
+
+/// White 4-point star (rotating+scaling). Prototype `draw_sparkle` (259-273).
+fn draw_sparkle(cv: &mut Canvas, cx: i32, cy: i32, size: f32, angle: f32) {
+    if size < 1.0 {
+        return;
+    }
+    cv.rect(cx, cy, 2, 2, SPARK); // core
+    for k in 0..4 {
+        let a = angle + k as f32 * std::f32::consts::FRAC_PI_2;
+        let (dc, ds) = (a.cos(), a.sin());
+        let mut r = 1.0;
+        while r <= size {
+            cv.set(cx + (dc * r).round() as i32, cy + (ds * r).round() as i32, SPARK);
+            r += 1.0;
+        }
+    }
+}
+
+/// Dust puff rising from the entry point, `d` in 0..1. Prototype `draw_dust`
+/// (276-288).
+fn draw_dust(cv: &mut Canvas, ex: i32, ey: i32, d: f32) {
+    let dirs = [(-3, -1), (-2, -3), (-1, -4), (1, -4), (2, -3), (3, -1), (-4, 0), (4, 0)];
+    let spread = 0.5 + d * 1.4;
+    for (i, &(dx, dy)) in dirs.iter().enumerate() {
+        // stagger a little so it isn't a perfect ring
+        if (i as f32) / dirs.len() as f32 > d + 0.15 {
+            continue;
+        }
+        let x = ex + (dx as f32 * spread).round() as i32;
+        let y = ey + (dy as f32 * spread).round() as i32;
+        cv.set(x, y, DUST);
+    }
+}
+
+/// AGEN + stone + BATTLES (the static base shared by the still and every
+/// frame). Extracted from `still_canvas` so it is not duplicated by
+/// `render_frame` (see research.md's duplicate/reuse check).
+fn draw_static_base(cv: &mut Canvas, l: &Layout) {
+    // AGEN (static)
+    let mut cx = l.ml;
+    for c in ['A', 'G', 'E', 'N'] {
+        cx += cv.letter(cx, l.word_top, c, WHITE) + l.gap;
+    }
+    // stone
+    draw_stone(cv, l.stone_x, l.stone_top, l.stone_w, l.stone_h);
+    // BATTLES
+    draw_battles(cv, l);
+}
+
+/// The animated canvas at time `t`. Prototype `render_frame` (459-507),
+/// driven by the `Beat` windows; ignite easing via
+/// `engine_render::tween::ease_in_out`; fall ease `p*p`.
+pub(crate) fn render_frame(l: &Layout, t: f32) -> Frame {
+    let mut cv = Canvas::new(l.canvas_w, l.canvas_h);
+    draw_static_base(&mut cv, l);
+    // sword: falling (ease-in p*p) -> seated at word_top
+    let p = SWORD_DROP.progress(t);
+    let pe = p * p;
+    let cap_y = l.word_top - ((1.0 - pe) * l.fall_dist as f32).round() as i32;
+    draw_sword(&mut cv, l.bl, cap_y, cap_y + l.body_reach, l.slot_bottom);
+    // impact dust
+    if IMPACT_DUST.contains(t) {
+        draw_dust(&mut cv, l.bl + BLADE_W / 2, l.stone_top, IMPACT_DUST.progress(t));
+    }
+    // two staggered, counter-spinning sparkles
+    let sparks = [
+        (&SPARKLE_1, l.spark_x - 3, l.spark_y - 2 * SCALE, SPARK_ROT),
+        (&SPARKLE_2, l.spark_x + 3, l.spark_y + 2 * SCALE, -SPARK_ROT),
+    ];
+    for (beat, sx, sy, rot) in sparks {
+        if beat.contains(t) {
+            let sp = beat.progress(t);
+            let size = (sp * std::f32::consts::PI).sin() * SPARK_MAX;
+            draw_sparkle(&mut cv, sx, sy, size, sp * rot);
+        }
+    }
+    // BATTLES ignite: dark etch -> gold, smoothstep (reuse tween::ease_in_out)
+    let battles_color =
+        ETCH_COLOR.lerp(GLOW_COLOR, engine_render::tween::ease_in_out(BATTLES_IGNITE.progress(t)));
+    Frame { cv, battles_color, shake: shake_offset(t) }
+}
+
+/// Public consumable entry (b4's hub clock calls this): the composed grid at
+/// time `t` + the unfloored dot-precise `DotRect`. `t >= ANIM_END` yields the
+/// held still.
+pub(crate) fn frame(elapsed_secs: f32) -> (Grid, DotRect) {
+    let l = compute_layout();
+    let f = render_frame(&l, elapsed_secs);
+    let grid = canvas_to_grid(&f.cv, f.battles_color, f.shake);
+    (grid, DotRect { x: 0, y: 0, w: l.canvas_w, h: l.canvas_h })
+}
+
+
+#[cfg(test)]
+#[path = "title_logo_tests.rs"]
+mod tests;
