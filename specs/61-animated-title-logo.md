@@ -103,12 +103,18 @@ Out of scope:
   dots. All of this is **game-side** content under `crates/game/`; nothing in
   `crates/engine/` changes.
 
-- **Decision 7 — Plays on first run only; no skip.** The intro animation runs
-  **once, on the first-ever hub entry** (first run). On every subsequent hub
-  entry the hub shows the held final still immediately — no re-animation. There
-  is **no skip** control; the animation is short and unskippable by design.
-  ("First run" state persists across launches — same persistence the onboarding
-  flow, `01-onboarding-first-run`, already relies on.)
+- **Decision 7 — Plays once per app launch; no skip.** The intro runs **once
+  when the experience is launched** — the first time the hub is shown in a given
+  process — and does **not** replay when returning to the hub from another scene
+  (roster / battle / etc.) in the same session. **Every fresh launch plays it
+  again.** The gate is a **session-scoped, per-process flag** (e.g. a process
+  `static` "intro played this launch" the hub checks-and-sets on first entry) —
+  **not** a persisted first-run-ever marker and **no `first_run_complete`-style
+  file** (the earlier persisted-first-run implementation was wrong for this and
+  is replaced; any stray marker file is deleted). There is **no skip** control;
+  the animation is short and unskippable by design. *(The first pass shipped a
+  persisted first-run flag — a mis-spec — and also left a title-frame border
+  around the logo; both are corrected by `63-title-intro-fixes`.)*
 
 - **Decision 8 — Per-beat timing, independently tunable.** There is **no** global
   speed multiplier. Instead every beat is defined by its own **start and end**

@@ -8,7 +8,6 @@ use std::ops::{Deref, DerefMut};
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Color, Style};
 use engine_core::color::Rgba;
 
 /// Visual/interaction state of a [`Button`].
@@ -158,6 +157,30 @@ impl ButtonCore {
     }
 }
 
+/// Border thickness (in dots) of the procedural rounded frame border drawn
+/// for a hollow-interior `background` (see [`background_is_hollow_frame`]).
+const FRAME_BORDER_THICKNESS: usize = 1;
+
+/// Corner chamfer radius (in dots) of the procedural rounded frame border —
+/// matches b2-t1's lock-in tests and the roster Edit button
+/// (`roster_manager/details_panel.rs:321`).
+const FRAME_CORNER_RADIUS: usize = 1;
+
+/// Detect whether `background`'s decoded image is a hollow frame (alpha-
+/// transparent centre, e.g. `game::assets::FRAME_PANEL`) rather than a solid
+/// panel (opaque centre, e.g. `game::assets::BUTTON_PANEL`). Samples the
+/// centre pixel's alpha via the shared decode cache — cheap on a hit, never
+/// re-decodes (`asset_cache::decoded`).
+fn background_is_hollow_frame(background: &'static [u8]) -> bool {
+    use image::GenericImageView;
+    let img = crate::asset_cache::decoded(background);
+    let (w, h) = img.dimensions();
+    if w == 0 || h == 0 {
+        return false;
+    }
+    img.get_pixel(w / 2, h / 2).0[3] < 128
+}
+
 /// Multiply-tint applied to the background/panel layer before compositing,
 /// giving every button a warm gold body instead of `BUTTON_PANEL`/
 /// `FRAME_PANEL`'s native near-white. Applied to `Button`'s background layer,
@@ -196,6 +219,7 @@ const ICON_AMBER_TINT: Rgba = Rgba::rgb(0x8a, 0x4a, 0x00);
 /// changes which dots are `Lit`, so both composites share identical lit-dot
 /// topology — only their colors differ — which is what keeps
 /// `dots_to_grid_tinted`'s mask immune to per-state rounding.
+#[allow(clippy::too_many_arguments)] // private fn, single call site (`Button::render`); b2-t3 added `border_override` to an already-large param list rather than introduce a params struct for one internal helper.
 fn render_button(
     buf: &mut Buffer,
     rect: Rect,
@@ -204,6 +228,7 @@ fn render_button(
     bg_state_tint: Rgba,
     icon_state_tint: Rgba,
     dot_down: i32,
+    border_override: Option<Rgba>,
 ) {
     let dot_cols = rect.width as usize * 2;
     let content_rows = rect.height as usize * 4;
@@ -229,9 +254,31 @@ fn render_button(
     };
     let target_rect = Rect::new(rect.x, target_y, rect.width, rect.height + extra_cells as u16);
 
-    let bg_dots_raw = crate::asset_cache::sprite_to_dots(background, dot_cols as u32, content_rows as u32);
-    let bg_fixed = crate::dots::tint(&bg_dots_raw, PANEL_GOLD_TINT);
-    let bg_colored = crate::dots::tint(&bg_fixed, bg_state_tint);
+    let is_hollow_frame = background_is_hollow_frame(background);
+    let bg_dots_raw = if is_hollow_frame {
+        crate::ui_primitives::rounded_rect(
+            dot_cols,
+            content_rows,
+            FRAME_BORDER_THICKNESS,
+            FRAME_CORNER_RADIUS,
+            border_override.unwrap_or(Rgba::rgb(0xff, 0xff, 0xff)),
+            crate::dots::Dot::Transparent,
+        )
+    } else {
+        crate::asset_cache::sprite_to_dots(background, dot_cols as u32, content_rows as u32)
+    };
+    // Absolute border override (b2-t3): bypass PANEL_GOLD_TINT + the
+    // per-state tint entirely for the hollow-frame border layer, so its
+    // alpha survives untouched into `dots_to_grid_tinted`'s color buffer
+    // (`dots::tint` always forces `a=255`). Mask and color share the same
+    // override-colored buffer — a flat border is uniformly lit either way.
+    let (bg_fixed, bg_colored) = if is_hollow_frame && border_override.is_some() {
+        (bg_dots_raw.clone(), bg_dots_raw)
+    } else {
+        let bg_fixed = crate::dots::tint(&bg_dots_raw, PANEL_GOLD_TINT);
+        let bg_colored = crate::dots::tint(&bg_fixed, bg_state_tint);
+        (bg_fixed, bg_colored)
+    };
 
     let (mask_composed, color_composed) = match icon {
         Some(icon_bytes) => {
@@ -310,6 +357,16 @@ fn render_button(
     crate::grid::draw_grid(buf, target_rect, &grid);
 }
 
+/// Per-render absolute color override for a [`Button`]'s frame border +
+/// label, bypassing the gold/state tint entirely (b2-t3). Each color carries
+/// its own alpha, so a caller can drive both an active/inactive palette
+/// (opaque colors) and a fade (alpha ramp) through the same mechanism.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActiveStyle {
+    pub border: Rgba,
+    pub label: Rgba,
+}
+
 /// A clickable, hoverable on-screen button. Owns its interaction [`ButtonCore`]
 /// (accessed via `Deref`/`DerefMut` — `state()`/`set_rect()`/`handle_mouse()`
 /// all resolve there) and its decoded panel/icon images for rendering;
@@ -327,6 +384,9 @@ pub struct Button {
     /// or above the rect respectively. Positioning-only: the hit-test rect
     /// (`core.rect()`) is unaffected.
     dot_down: i32,
+    /// Per-render absolute color override for the frame border + label
+    /// (b2-t3). `None` (the default) renders exactly as before.
+    active_style: Option<ActiveStyle>,
 }
 
 impl Button {
@@ -349,6 +409,7 @@ impl Button {
             label: None,
             colors: ButtonColors::default(),
             dot_down: 0,
+            active_style: None,
         }
     }
 
@@ -388,6 +449,14 @@ impl Button {
         self.dot_down = dots;
     }
 
+    /// Set (or clear) a per-render [`ActiveStyle`] override for the frame
+    /// border + label, bypassing the gold/state tint (b2-t3). `&mut` setter
+    /// (not a consuming builder) because callers recompute this every frame
+    /// from live selection/fade state, mirroring [`Self::set_dot_offset_down`].
+    pub fn set_active_style(&mut self, style: Option<ActiveStyle>) {
+        self.active_style = style;
+    }
+
     /// Paint the composed, per-state-tinted background layer (always),
     /// optional icon layer (iff `.icon()` was set), and optional label (iff
     /// `.label()` was set) onto `self.rect` in `buf`. Driving
@@ -398,6 +467,17 @@ impl Button {
     pub fn render(&self, buf: &mut Buffer) {
         let rect = self.core.rect();
         let sc = self.colors.for_state(self.core.state());
+
+        // Full-transparent guard (b2-t3): an active-style override whose
+        // border AND label are both fully transparent paints nothing at
+        // all — not merely a blend-to-invisible color.
+        if let Some(style) = &self.active_style {
+            if style.border.a == 0 && style.label.a == 0 {
+                return;
+            }
+        }
+
+        let border_override = self.active_style.as_ref().map(|style| style.border);
         render_button(
             buf,
             rect,
@@ -406,10 +486,11 @@ impl Button {
             sc.background,
             sc.icon,
             self.dot_down,
+            border_override,
         );
         if let Some(text) = &self.label {
-            let style = Style::default().fg(Color::Rgb(sc.label.r, sc.label.g, sc.label.b));
-            crate::label(buf, rect, text, crate::TextAlign::Center, style);
+            let label_color = self.active_style.as_ref().map_or(sc.label, |style| style.label);
+            crate::label_blended(buf, rect, text, crate::TextAlign::Center, label_color);
         }
     }
 }

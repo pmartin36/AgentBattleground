@@ -122,3 +122,169 @@ fn frame_button_handle_mouse_completes_click() {
     assert!(fired, "Up inside while Pressed must report a completed click");
     assert_eq!(b.state(), ButtonState::Hover);
 }
+
+/// Render a frame `Button` at `rect` into a buffer with a 1-cell margin on
+/// every side, so cells just outside the button rect are addressable.
+fn render_frame_button(rect: Rect) -> Buffer {
+    let b = Button::new(rect, frame_bytes());
+    let mut buf = make_buf(rect.x + rect.width + 2, rect.y + rect.height + 2);
+    b.render(&mut buf);
+    buf
+}
+
+/// Decision 1: the procedural border must light every corner cell of the
+/// button rect — no 4-corner gap — at multiple sizes, verified on decoded
+/// dots (not `Rect` field comparison). `(20, 3)` is the hub-representative
+/// size (already gap-free even under today's stretched raster); `(20, 10)`
+/// is a taller, near-square dot-aspect size where today's stretch-fit
+/// raster genuinely loses the extreme corner dot to Lanczos3 downscale
+/// blending (empirically confirmed against current `render_button`) — the
+/// procedural border must stay corner-complete there too.
+#[test]
+fn frame_button_border_lights_all_four_corner_cells() {
+    for rect in [Rect::new(1, 1, 20, 3), Rect::new(1, 1, 20, 10), Rect::new(1, 1, 4, 1)] {
+        let buf = render_frame_button(rect);
+        let corners = [
+            (rect.x, rect.y),
+            (rect.x + rect.width - 1, rect.y),
+            (rect.x, rect.y + rect.height - 1),
+            (rect.x + rect.width - 1, rect.y + rect.height - 1),
+        ];
+        for (cx, cy) in corners {
+            let decoded = crate::decode_braille_cell(&buf, cx, cy);
+            assert!(
+                decoded.is_some(),
+                "corner cell ({cx},{cy}) of rect {rect:?} must have a lit dot"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// b2-t3: active-style override (border + label recolor, alpha fade)
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Distinct sentinel colors for the override — deliberately NOT the spec's
+/// real active-white (b4 wires the real palette); only distinctness from
+/// the default gold border / `#f0f0f0` label matters here.
+const OVERRIDE_BORDER: Rgba = Rgba::rgb(0x11, 0x22, 0x33);
+const OVERRIDE_LABEL: Rgba = Rgba::rgb(0x44, 0x55, 0x66);
+
+/// Top-center border cell + label first-char cell coordinates for
+/// `frame_rect()`, matching `render_top_border_fg`'s / the centered-label
+/// test's own math.
+fn border_cell(rect: Rect) -> (u16, u16) {
+    (rect.x + rect.width / 2, rect.y)
+}
+fn label_cell(rect: Rect) -> (u16, u16) {
+    let text_len: u16 = 2; // "Go"
+    (rect.x + (rect.width - text_len) / 2, rect.y + rect.height / 2)
+}
+
+/// `set_active_style` must recolor BOTH the frame border and the label to
+/// the override's absolute colors while `ButtonState::Idle` — bypassing the
+/// gold border tint and the default `#f0f0f0` label.
+#[test]
+fn active_style_overrides_border_and_label_color_while_idle() {
+    let rect = frame_rect();
+    let mut b = Button::new(rect, frame_bytes()).label("Go");
+    assert_eq!(b.state(), ButtonState::Idle, "test setup must stay Idle");
+    b.set_active_style(Some(ActiveStyle {
+        border: OVERRIDE_BORDER,
+        label: OVERRIDE_LABEL,
+    }));
+
+    let mut buf = make_buf(16, 8);
+    b.render(&mut buf);
+
+    let (bx, by) = border_cell(rect);
+    let (_, decoded_border) = crate::decode_braille_cell(&buf, bx, by)
+        .expect("top-border cell must still be lit under an active-style override");
+    assert_eq!(
+        decoded_border, OVERRIDE_BORDER,
+        "border must paint the override color, bypassing the gold/state tint"
+    );
+
+    let (lx, ly) = label_cell(rect);
+    let label_fg = buf.cell((lx, ly)).unwrap().fg;
+    assert_eq!(
+        label_fg,
+        Color::Rgb(OVERRIDE_LABEL.r, OVERRIDE_LABEL.g, OVERRIDE_LABEL.b),
+        "label must paint the override color, bypassing StateColors.label"
+    );
+}
+
+/// An override border with `a < 255` renders TRANSLUCENT: the border glyph
+/// keeps the same lit-dot mask as the fully-opaque override (alpha reduces
+/// color, not coverage), but its decoded color is `border.over(black)` — the
+/// backdrop-blended color, not the opaque override color.
+#[test]
+fn active_style_translucent_border_keeps_mask_but_blends_color() {
+    let rect = frame_rect();
+
+    let mut b_opaque = Button::new(rect, frame_bytes());
+    b_opaque.set_active_style(Some(ActiveStyle {
+        border: OVERRIDE_BORDER,
+        label: OVERRIDE_LABEL,
+    }));
+    let mut buf_opaque = make_buf(16, 8);
+    b_opaque.render(&mut buf_opaque);
+
+    let translucent_border = Rgba::new(OVERRIDE_BORDER.r, OVERRIDE_BORDER.g, OVERRIDE_BORDER.b, 0x80);
+    let mut b_translucent = Button::new(rect, frame_bytes());
+    b_translucent.set_active_style(Some(ActiveStyle {
+        border: translucent_border,
+        label: OVERRIDE_LABEL,
+    }));
+    let mut buf_translucent = make_buf(16, 8);
+    b_translucent.render(&mut buf_translucent);
+
+    let (bx, by) = border_cell(rect);
+    let (mask_opaque, _) = crate::decode_braille_cell(&buf_opaque, bx, by)
+        .expect("opaque override border cell must be lit");
+    let (mask_translucent, color_translucent) = crate::decode_braille_cell(&buf_translucent, bx, by)
+        .expect("translucent override border cell must still be lit — alpha reduces color, not coverage");
+
+    assert_eq!(
+        mask_translucent, mask_opaque,
+        "alpha must not change which dots are lit"
+    );
+
+    // `decode_braille_cell` reads back a `ratatui::Color::Rgb`, which carries
+    // no alpha — its returned `Rgba` is always opaque (`a==255`) regardless
+    // of the alpha that was blended upstream. Compare only the blended RGB.
+    let blended = translucent_border.over(Rgba::new(0, 0, 0, 0xFF));
+    let expected = Rgba::rgb(blended.r, blended.g, blended.b);
+    assert_eq!(
+        color_translucent, expected,
+        "translucent border must blend toward the backdrop via Rgba::over, not paint the opaque override color"
+    );
+}
+
+/// An override whose border AND label alpha are both `0` must paint NO
+/// visible dots and NO label glyph at all (not merely blend to invisible).
+#[test]
+fn active_style_full_transparent_paints_nothing() {
+    let rect = frame_rect();
+    let mut b = Button::new(rect, frame_bytes()).label("Go");
+    b.set_active_style(Some(ActiveStyle {
+        border: Rgba::new(OVERRIDE_BORDER.r, OVERRIDE_BORDER.g, OVERRIDE_BORDER.b, 0),
+        label: Rgba::new(OVERRIDE_LABEL.r, OVERRIDE_LABEL.g, OVERRIDE_LABEL.b, 0),
+    }));
+
+    let mut buf = make_buf(16, 8);
+    b.render(&mut buf);
+
+    let (bx, by) = border_cell(rect);
+    assert!(
+        crate::decode_braille_cell(&buf, bx, by).is_none(),
+        "border must paint no dots when the active-style override is fully transparent"
+    );
+
+    let (lx, ly) = label_cell(rect);
+    assert_eq!(
+        buf.cell((lx, ly)).unwrap().symbol(),
+        " ",
+        "label must paint no glyph when the active-style override is fully transparent"
+    );
+}

@@ -351,4 +351,68 @@ mod tests {
         assert_eq!(buf.get(4, 4), Dot::Transparent, "interior hollow");
         assert_eq!(buf.get(0, 0), Dot::Transparent, "corner outside the circle");
     }
+
+    // ── Lock-in: rounded + Dot::Transparent hollow border, button-representative
+    // size (16×8, thickness 1, radius 1 — matches the Edit button). Extends the
+    // single-corner Occlude-fill regression at `chamfer_lights_the_corner_connecting_dot`
+    // to all four corners of the hollow variant `Button` (b2-t2) depends on.
+    // Contract locked by menu-button-cleanup b2-t1 (see research.md/test-writer.md).
+
+    /// At a button-representative size, all four corners connect without a
+    /// gap: each extreme corner dot is the intended `Transparent` round-off
+    /// and both its near-corner edge neighbours stay `Lit(border)`.
+    #[test]
+    fn rounded_border_all_four_corners_connect() {
+        let (w, h) = (16usize, 8usize);
+        let buf = rounded_rect(w, h, 1, 1, BORDER, Dot::Transparent);
+
+        // top-left
+        assert_eq!(buf.get(0, 0), Dot::Transparent, "top-left corner dot chamfered off");
+        assert_eq!(buf.get(1, 0), Dot::Lit(BORDER), "top-left: top-edge neighbour lit");
+        assert_eq!(buf.get(0, 1), Dot::Lit(BORDER), "top-left: left-edge neighbour lit");
+
+        // top-right
+        assert_eq!(buf.get(w - 1, 0), Dot::Transparent, "top-right corner dot chamfered off");
+        assert_eq!(buf.get(w - 2, 0), Dot::Lit(BORDER), "top-right: top-edge neighbour lit");
+        assert_eq!(buf.get(w - 1, 1), Dot::Lit(BORDER), "top-right: right-edge neighbour lit");
+
+        // bottom-left
+        assert_eq!(buf.get(0, h - 1), Dot::Transparent, "bottom-left corner dot chamfered off");
+        assert_eq!(buf.get(1, h - 1), Dot::Lit(BORDER), "bottom-left: bottom-edge neighbour lit");
+        assert_eq!(buf.get(0, h - 2), Dot::Lit(BORDER), "bottom-left: left-edge neighbour lit");
+
+        // bottom-right
+        assert_eq!(buf.get(w - 1, h - 1), Dot::Transparent, "bottom-right corner dot chamfered off");
+        assert_eq!(buf.get(w - 2, h - 1), Dot::Lit(BORDER), "bottom-right: bottom-edge neighbour lit");
+        assert_eq!(buf.get(w - 1, h - 2), Dot::Lit(BORDER), "bottom-right: right-edge neighbour lit");
+    }
+
+    /// At a button-representative size, sweeping the whole buffer: every lit
+    /// dot lies within `thickness` of an edge (the ring), every interior dot
+    /// is fully `Transparent` (hollow) — the "no stray dot" guarantee b2-t2
+    /// relies on when it blits this buffer dot-precise into a button rect.
+    #[test]
+    fn rounded_border_hollow_interior_and_no_stray_dots() {
+        let (w, h) = (16usize, 8usize);
+        let thickness = 1usize;
+        let buf = rounded_rect(w, h, thickness, 1, BORDER, Dot::Transparent);
+
+        for row in 0..h {
+            for col in 0..w {
+                let dot = buf.get(col, row);
+                if let Dot::Lit(_) = dot {
+                    let near_edge = col < thickness
+                        || col >= w - thickness
+                        || row < thickness
+                        || row >= h - thickness;
+                    assert!(near_edge, "lit dot ({col},{row}) must lie within {thickness} of an edge");
+                }
+                let interior =
+                    col >= thickness && col < w - thickness && row >= thickness && row < h - thickness;
+                if interior {
+                    assert_eq!(dot, Dot::Transparent, "interior dot ({col},{row}) must be hollow");
+                }
+            }
+        }
+    }
 }

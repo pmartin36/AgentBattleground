@@ -102,6 +102,49 @@ pub fn label(buf: &mut Buffer, area: Rect, text: &str, align: TextAlign, style: 
     buf.set_stringn(x, y, text, max_width, style);
 }
 
+/// Alpha-aware variant of [`label`] (b2-t3): composites `color` over each
+/// written cell's destination fg (`Rgba::over`) instead of overwriting it
+/// outright, so a caller can fade a label's own color independent of the
+/// backdrop. Uses `label`'s exact centering formula. `color.a == 0` must
+/// write no cell at all (destination untouched); `color.a == 255` must be
+/// byte-identical to calling `label` with the opaque color.
+///
+/// `a == 0` writes no cell at all (destination untouched); `a == 255` is
+/// byte-identical to calling `label` with the opaque color.
+pub fn label_blended(buf: &mut Buffer, area: Rect, text: &str, align: TextAlign, color: Rgba) {
+    if color.a == 0 {
+        return;
+    }
+    let inter = area.intersection(buf.area);
+    if inter.is_empty() {
+        return;
+    }
+    let text_w = text.chars().count() as u16;
+    let y = inter.top() + inter.height / 2;
+    let x = match align {
+        TextAlign::Left => inter.left(),
+        TextAlign::Center => inter.left() + inter.width.saturating_sub(text_w) / 2,
+        TextAlign::Right => inter.right().saturating_sub(text_w).max(inter.left()),
+    };
+    let max_width = inter.right().saturating_sub(x) as usize;
+    for (i, ch) in text.chars().enumerate() {
+        if i >= max_width {
+            break;
+        }
+        let cx = x + i as u16;
+        let Some(cell) = buf.cell_mut((cx, y)) else {
+            continue;
+        };
+        let dest = match cell.fg {
+            Color::Rgb(r, g, b) => Rgba::new(r, g, b, 0xFF),
+            _ => Rgba::new(0, 0, 0, 0xFF),
+        };
+        let blended = color.over(dest);
+        cell.set_char(ch);
+        cell.set_fg(Color::Rgb(blended.r, blended.g, blended.b));
+    }
+}
+
 /// Word-wrap `text` to `area` width and draw it top-down, one wrapped row per
 /// line, each row placed horizontally per `align`; clipped to `area` height.
 /// An over-long single token is broken by character. When `ellipsis` is true
@@ -552,6 +595,54 @@ mod tests {
                 assert_eq!(buf.cell((x, y)).unwrap().symbol(), " ");
             }
         }
+    }
+
+    // -------------------------------------------------------------- label_blended (b2-t3)
+
+    /// `label_blended` at `color.a == 0` must leave the destination cells
+    /// completely untouched — no glyph, no fg change — not merely blend to
+    /// an invisible color.
+    #[test]
+    fn label_blended_zero_alpha_is_noop() {
+        let rect = Rect::new(1, 1, 6, 3);
+        let mut buf = make_buf(10, 6);
+        // "Hi" centered in `rect` lands its first char at (3, 2) — same
+        // centering formula `label` uses.
+        let (sx, sy) = (3u16, 2u16);
+        buf.cell_mut((sx, sy)).unwrap().set_char('X');
+        buf.cell_mut((sx, sy)).unwrap().set_fg(Color::Rgb(0x01, 0x02, 0x03));
+
+        label_blended(&mut buf, rect, "Hi", TextAlign::Center, Rgba::new(0x11, 0x22, 0x33, 0));
+
+        let cell = buf.cell((sx, sy)).unwrap();
+        assert_eq!(cell.symbol(), "X", "a==0 must leave the destination glyph untouched");
+        assert_eq!(
+            cell.fg,
+            Color::Rgb(0x01, 0x02, 0x03),
+            "a==0 must leave the destination fg untouched"
+        );
+    }
+
+    /// `label_blended` at a mid alpha must composite `color` over the
+    /// destination cell's PRE-EXISTING fg via `Rgba::over`, not overwrite it
+    /// with the opaque override color.
+    #[test]
+    fn label_blended_mid_alpha_blends_over_destination_fg() {
+        let rect = Rect::new(1, 1, 6, 3);
+        let mut buf = make_buf(10, 6);
+        let (sx, sy) = (3u16, 2u16);
+        buf.cell_mut((sx, sy)).unwrap().set_fg(Color::Rgb(0, 0, 0));
+
+        let color = Rgba::new(0x80, 0x40, 0x20, 0x80);
+        label_blended(&mut buf, rect, "Hi", TextAlign::Center, color);
+
+        let expected = color.over(Rgba::new(0, 0, 0, 0xFF));
+        let cell = buf.cell((sx, sy)).unwrap();
+        assert_eq!(
+            cell.fg,
+            Color::Rgb(expected.r, expected.g, expected.b),
+            "mid-alpha label_blended must composite the color over the destination fg via Rgba::over"
+        );
     }
 }
 

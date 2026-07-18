@@ -1,4 +1,4 @@
-# Main Hub golden fixtures (b1-t2, re-baselined b4-t1)
+# Main Hub golden fixtures (b1-t2, re-baselined b4-t1, b2-t2)
 
 Braille-dot render freeze for `MainHub`, captured from
 `crates/game/src/scenes/main_hub.rs`'s
@@ -6,7 +6,9 @@ Braille-dot render freeze for `MainHub`, captured from
 test. b4-t1 re-baselined all 3 fixtures to the procedural sword-in-stone logo
 (`title_logo::frame`), held on its SETTLED still (`elapsed = 2.0`, past
 `title_logo::ANIM_END`) — the bundled PNG logo render they used to freeze is
-retired.
+retired. b2-t2 re-baselined the 3 button-border shapes to `Button`'s
+procedural dotted rounded border (spec 62 Decision 1), replacing the
+pre-migration stretched-`FRAME_PANEL`-raster border.
 
 ## Scenarios
 
@@ -34,8 +36,8 @@ represented in these fixtures.
 
 ## Manual visual confirmation
 
-All 3 `*.preview.txt` files were visually reviewed before these fixtures were
-re-baselined (b4-t1): the procedural sword-in-stone logo (stone slab, gold
+All 3 `*.preview.txt` files were visually reviewed before the current
+fixtures were committed. The procedural sword-in-stone logo (stone slab, gold
 "BATTLES", seated sword forming the "AGEN...T" T-cross) fills the title box,
 centered top, with three stacked menu-button frames (Roster/Battle/Exit, top
 to bottom) near the bottom of the screen. `narrow_40x20` shows the fixed-size
@@ -43,5 +45,7 @@ logo overflowing the small viewport and overlapping the menu (expected — see
 Scenarios above); the button labels still render legibly inside their own
 rects. `cursor_exit_120x50` shows the cursor arrow (`⠰⠆`) to the left of the
 Exit button only, versus left of the Roster button in `rest_120x50` —
-confirming `button_rects()[2]`'s geometry. Confirmed correct; no divergence
-found before commit.
+confirming `button_rects()[2]`'s geometry. Each button frame is a fully
+corner-connected rounded rectangle (`⡎...⢱` top, `⢇...⡸` bottom, no
+corner gaps) — `Button`'s procedural border (b2-t2). Confirmed correct; no
+divergence found before commit.
