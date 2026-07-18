@@ -323,7 +323,7 @@ mod tests {
         let prev_hook = panic::take_hook();
         panic::set_hook(Box::new(|_| {}));
         let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
-            resolve_boot(args(&["--scene", "Settings"]))
+            resolve_boot(args(&["--scene", "Onboarding"]))
         }));
         panic::set_hook(prev_hook);
 
@@ -333,7 +333,7 @@ mod tests {
         );
         assert_eq!(
             outcome.unwrap(),
-            Err(CliError::NotImplemented("Settings".to_string()))
+            Err(CliError::NotImplemented("Onboarding".to_string()))
         );
     }
 
@@ -342,7 +342,7 @@ mod tests {
     fn resolve_boot_state_file_unimplemented_scene_errors_without_panicking() {
         use std::panic::{self, AssertUnwindSafe};
 
-        let path = write_temp_json("resolve-not-implemented", r#"{"scene": "Settings"}"#);
+        let path = write_temp_json("resolve-not-implemented", r#"{"scene": "Onboarding"}"#);
 
         let prev_hook = panic::take_hook();
         panic::set_hook(Box::new(|_| {}));
@@ -358,7 +358,7 @@ mod tests {
         );
         assert_eq!(
             outcome.unwrap(),
-            Err(CliError::NotImplemented("Settings".to_string()))
+            Err(CliError::NotImplemented("Onboarding".to_string()))
         );
     }
 

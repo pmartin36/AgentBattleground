@@ -11,6 +11,7 @@ pub mod leaderboard;
 pub mod main_hub;
 pub mod roster_manager;
 pub mod post_battle;
+pub mod settings;
 
 pub(crate) mod bars;
 pub(crate) mod close_button;
@@ -25,6 +26,7 @@ pub use leaderboard::Leaderboard;
 pub use main_hub::MainHub;
 pub use roster_manager::RosterManager;
 pub use post_battle::PostBattle;
+pub use settings::Settings;
 
 /// Shared render helper: fills `area` with `color` then draws `name` centered.
 /// Called by every example scene's `render` implementation.

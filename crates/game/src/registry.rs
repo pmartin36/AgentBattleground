@@ -3,11 +3,11 @@ use engine_core::{Inspectable, SceneCatalog, SceneKey};
 
 use crate::scene_id::SceneId;
 
-use crate::scenes::{BattleViewer, Leaderboard, MainHub, RosterManager, PostBattle};
+use crate::scenes::{BattleViewer, Leaderboard, MainHub, RosterManager, PostBattle, Settings};
 use engine_core::scene::Scene;
 
 /// Build a fresh boxed instance of the scene for `id` (spec 14: fresh-construct
-/// on switch, state resets). M1 implements four scenes; the other five catalog
+/// on switch, state resets). M1 implements six scenes; the other three catalog
 /// variants are not yet built and panic via `unimplemented!`.
 pub fn construct(id: SceneId) -> Box<dyn Scene> {
     match id {
@@ -16,6 +16,7 @@ pub fn construct(id: SceneId) -> Box<dyn Scene> {
         SceneId::RosterManager => Box::new(RosterManager::new()),
         SceneId::Leaderboard => Box::new(Leaderboard),
         SceneId::PostBattle => Box::new(PostBattle::new()),
+        SceneId::Settings => Box::new(Settings::default()),
         other => unimplemented!("scene {:?} is not implemented in M1", other),
     }
 }
@@ -32,6 +33,7 @@ pub fn schema_for(id: SceneId) -> FieldSchema {
         SceneId::RosterManager => <RosterManager as Inspectable>::schema(),
         SceneId::Leaderboard => <Leaderboard as Inspectable>::schema(),
         SceneId::PostBattle => <PostBattle as Inspectable>::schema(),
+        SceneId::Settings => <Settings as Inspectable>::schema(),
         other => unimplemented!("scene {:?} is not implemented in M1", other),
     }
 }
@@ -44,6 +46,7 @@ const IMPLEMENTED_SCENES: &[SceneId] = &[
     SceneId::RosterManager,
     SceneId::Leaderboard,
     SceneId::PostBattle,
+    SceneId::Settings,
 ];
 
 /// Whether `construct(id)` will succeed (vs. panic) for `id`. Derived from
@@ -114,10 +117,16 @@ mod tests {
     }
 
     #[test]
+    fn construct_settings_id_roundtrip() {
+        let scene = construct(SceneId::Settings);
+        assert_eq!(scene.id(), SceneId::Settings.into());
+    }
+
+    #[test]
     #[should_panic]
     fn construct_unimplemented_scene_panics() {
-        // Five catalog ids are not implemented in M1; they must panic.
-        let _ = construct(SceneId::Settings);
+        // Three catalog ids are not implemented in M1; they must panic.
+        let _ = construct(SceneId::Onboarding);
     }
 
     #[test]
@@ -130,6 +139,7 @@ mod tests {
             SceneId::RosterManager,
             SceneId::Leaderboard,
             SceneId::PostBattle,
+            SceneId::Settings,
         ]
         .into_iter()
         .collect();
@@ -137,7 +147,6 @@ mod tests {
             SceneId::Onboarding,
             SceneId::Matchmaking,
             SceneId::ReplayBrowser,
-            SceneId::Settings,
         ]
         .into_iter()
         .collect();
@@ -159,10 +168,11 @@ mod tests {
     // ------------------------------------------------------------ schema_for (b5-t3)
 
     /// `schema_for(id)` must return exactly `<T as Inspectable>::schema()` for
-    /// each of the 4 implemented scenes — not a placeholder — since it is the
+    /// each of the 6 implemented scenes — not a placeholder — since it is the
     /// sole source of every `CatalogEntry.schema` (b5-t3).
     #[test]
     fn schema_for_returns_each_scene_type_schema() {
+        use crate::scenes::Settings;
         use engine_core::Inspectable;
 
         assert_eq!(
@@ -190,6 +200,11 @@ mod tests {
             <PostBattle as Inspectable>::schema(),
             "schema_for(PostBattle) must equal <PostBattle as Inspectable>::schema()"
         );
+        assert_eq!(
+            schema_for(SceneId::Settings),
+            <Settings as Inspectable>::schema(),
+            "schema_for(Settings) must equal <Settings as Inspectable>::schema()"
+        );
     }
 
     /// `schema_for` must panic for an unimplemented id, mirroring `construct`'s
@@ -197,7 +212,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn schema_for_panics_for_unimplemented() {
-        let _ = schema_for(SceneId::Settings);
+        let _ = schema_for(SceneId::Onboarding);
     }
 
     #[test]
@@ -256,6 +271,7 @@ mod tests {
             SceneId::RosterManager,
             SceneId::Leaderboard,
             SceneId::PostBattle,
+            SceneId::Settings,
         ] {
             let key: SceneKey = id.into();
             let scene = catalog.construct(&key);
@@ -265,6 +281,8 @@ mod tests {
 
     #[test]
     fn game_catalog_schema_for_matches_inspectable() {
+        use crate::scenes::Settings;
+
         let catalog = GameCatalog;
         assert_eq!(
             catalog.schema_for(&SceneKey::from(SceneId::MainHub)),
@@ -286,13 +304,17 @@ mod tests {
             catalog.schema_for(&SceneKey::from(SceneId::PostBattle)),
             <PostBattle as Inspectable>::schema()
         );
+        assert_eq!(
+            catalog.schema_for(&SceneKey::from(SceneId::Settings)),
+            <Settings as Inspectable>::schema()
+        );
     }
 
     #[test]
     #[should_panic]
     fn game_catalog_construct_panics_for_valid_unbuilt_key() {
         let catalog = GameCatalog;
-        let _ = catalog.construct(&SceneKey::from(SceneId::Settings));
+        let _ = catalog.construct(&SceneKey::from(SceneId::Onboarding));
     }
 
     #[test]
@@ -314,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn game_catalog_catalog_keys_are_four_in_catalog_order() {
+    fn game_catalog_catalog_keys_are_six_in_catalog_order() {
         let catalog = GameCatalog;
         let expected: Vec<SceneKey> = vec![
             SceneId::MainHub.into(),
@@ -322,17 +344,18 @@ mod tests {
             SceneId::RosterManager.into(),
             SceneId::Leaderboard.into(),
             SceneId::PostBattle.into(),
+            SceneId::Settings.into(),
         ];
         assert_eq!(catalog.catalog_keys(), expected);
     }
 
-    /// Pins `IMPLEMENTED_SCENES` directly: exactly the 4 M1 scenes, in
+    /// Pins `IMPLEMENTED_SCENES` directly: exactly the 6 M1 scenes, in
     /// catalog order — not the digit order of `SceneId::all()`, and not a
     /// subset/superset. A silently wrong list here breaks
     /// `is_implemented`/`catalog_keys` and the debug-inspector's scene-switch
     /// validation that consumes them.
     #[test]
-    fn implemented_scenes_const_is_four_in_catalog_order() {
+    fn implemented_scenes_const_is_six_in_catalog_order() {
         assert_eq!(
             IMPLEMENTED_SCENES,
             &[
@@ -341,6 +364,7 @@ mod tests {
                 SceneId::RosterManager,
                 SceneId::Leaderboard,
                 SceneId::PostBattle,
+                SceneId::Settings,
             ]
         );
     }
