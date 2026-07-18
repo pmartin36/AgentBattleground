@@ -1,7 +1,8 @@
-//! RED test for b3-t1: `MainHub` must route `FRAME_PANEL`/`LOGO`/
+//! RED test for b3-t1: `MainHub` must route `FRAME_PANEL`/
 //! `ICON_ARROW_RIGHT` through the SHARED `engine_render::asset_cache`
 //! rasterize cache (b1-t2) every render, instead of decoding once into its
-//! own fields and re-rasterizing them itself per frame.
+//! own fields and re-rasterizing them itself per frame. The title logo
+//! itself is procedural (`title_logo::frame()`, b4-t1), not a cached raster.
 //!
 //! Kept in its OWN test binary (not inside `main_hub.rs`'s `#[cfg(test)]`
 //! unit-test module, which shares a process with `creatures.rs`/
@@ -51,14 +52,24 @@ fn has_non_space(buf: &Buffer, rect: Rect) -> bool {
 }
 
 /// A second `MainHub` render at the SAME area must be pure cache hits (no
-/// additional rasterizations) — proves `FRAME_PANEL`/`LOGO`/
-/// `ICON_ARROW_RIGHT` are routed through the shared cache, not re-rasterized
-/// per frame, and shared across renders (not a per-instance cache: both
-/// renders use a fresh `MainHub::default()`).
+/// additional rasterizations) — proves `FRAME_PANEL`/`ICON_ARROW_RIGHT` are
+/// routed through the shared cache, not re-rasterized per frame, and shared
+/// across renders (not a per-instance cache: both renders use a fresh
+/// `MainHub::default()`).
+///
+/// The title box is a FIXED 96x26-cell frame (b4-t1, procedural logo — no
+/// longer an area-dependent aspect-fit); `flex`'s `clip_to_container` only
+/// shrinks that box's rasterized dims when the render area's width is
+/// narrower than 96 cols. This test's width (68) is chosen distinct from
+/// every other width this binary's other test uses (85, 75) so the resulting
+/// `FRAME_PANEL`-for-title cache key is guaranteed never-seen-before
+/// regardless of which of this file's two tests the process runs first
+/// (`TEST_LOCK` only serializes each test's own before/after window, not
+/// their relative order).
 #[test]
 fn main_hub_second_render_reuses_cached_rasterization() {
     let _guard = test_lock();
-    let (w, h) = (118u16, 48u16);
+    let (w, h) = (68u16, 30u16);
 
     let before_warm = asset_cache::rasterize_recompute_count();
     let _ = render_to_buffer(&MainHub::default(), w, h);
@@ -67,7 +78,7 @@ fn main_hub_second_render_reuses_cached_rasterization() {
         after_warm > before_warm,
         "first MainHub render must perform at least one real rasterization via \
          the shared cache (before={before_warm}, after={after_warm}) — MainHub \
-         must route FRAME_PANEL/LOGO/ICON_ARROW_RIGHT through \
+         must route FRAME_PANEL/ICON_ARROW_RIGHT through \
          engine_render::asset_cache, not decode+rasterize them itself"
     );
 
@@ -81,16 +92,19 @@ fn main_hub_second_render_reuses_cached_rasterization() {
     );
 }
 
-/// A resized area yields different fit dims for `FRAME_PANEL`/`LOGO`,
+/// A resized area yields different clipped dims for the title `FRAME_PANEL`,
 /// forcing a fresh rasterization (a new cache key) — and the new size must
 /// still paint real content, not a stale/blank cached buffer at the wrong
-/// dims. Uses dims disjoint from the sibling test's so the two tests' cache
-/// keys never collide.
+/// dims. Both widths are narrower than the fixed 96-col title box (so each
+/// is genuinely clipped to a distinct rasterized width by `flex`'s
+/// `clip_to_container`) and distinct from every width the sibling test uses
+/// (68), so this test's cache keys never collide with the sibling's
+/// regardless of which test the process runs first.
 #[test]
 fn main_hub_resize_recomputes_and_repaints() {
     let _guard = test_lock();
-    let (w1, h1) = (130u16, 54u16);
-    let (w2, h2) = (90u16, 38u16);
+    let (w1, h1) = (85u16, 30u16);
+    let (w2, h2) = (75u16, 30u16);
 
     let _ = render_to_buffer(&MainHub::default(), w1, h1); // warm this test's own key set
     let before = asset_cache::rasterize_recompute_count();

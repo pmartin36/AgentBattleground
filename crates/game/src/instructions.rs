@@ -15,7 +15,7 @@ const DATA_DIR_ENV: &str = "AGENTBATTLEGROUND_DATA_DIR";
 /// Resolves the base data dir: `explicit` arg wins; else the
 /// `AGENTBATTLEGROUND_DATA_DIR` env var; else (debug build) the workspace
 /// root, (release build) the directory containing the running executable.
-fn base_data_dir(explicit: Option<&Path>) -> PathBuf {
+pub(crate) fn base_data_dir(explicit: Option<&Path>) -> PathBuf {
     if let Some(p) = explicit {
         return p.to_path_buf();
     }

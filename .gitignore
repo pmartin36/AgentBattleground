@@ -1,3 +1,4 @@
 target/
 .agent_handoffs/
 creature_instructions/
+first_run_complete

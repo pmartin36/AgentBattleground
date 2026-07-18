@@ -34,6 +34,12 @@ pub struct MainHub {
     /// not editable state.
     #[inspect(hidden)]
     quit_requested: bool,
+
+    /// Accumulated animation clock for the procedural title logo
+    /// (`title_logo::frame`), advanced by `update(dt)` and read by
+    /// `render()`. Transient engine state, not editable.
+    #[inspect(hidden)]
+    elapsed: f32,
 }
 
 impl Default for MainHub {
@@ -46,26 +52,12 @@ impl Default for MainHub {
             ],
             cursor_index: 0,
             quit_requested: false,
+            elapsed: 0.0,
         }
     }
 }
 
 impl MainHub {
-    /// The bundled logo's own aspect ratio (width/height in dots — the same
-    /// space `engine_render::convert`'s aspect-preserving fit operates in), used to
-    /// size the title box's interior so the fit doesn't leave large empty
-    /// margins. `crates/render/src/assets/logo.png` is 1212×481 ≈ 2.52:1.
-    /// Measured directly against the bundled asset in a test below rather
-    /// than trusted as a magic number.
-    const LOGO_ASPECT: f32 = 1212.0 / 481.0;
-
-    /// Fraction of the render area the title box's width/height occupy.
-    /// Deliberately large — the previous fixed 40×8 size rendered the logo
-    /// illegibly small on any real terminal (confirmed by rendering it and
-    /// looking at the result).
-    const TITLE_W_FRAC: f32 = 0.8;
-    const TITLE_H_MAX_FRAC: f32 = 0.55;
-
     /// One menu button's size and the vertical gap between stacked buttons.
     const BUTTON_W: u16 = 20;
     const BUTTON_H: u16 = 3;
@@ -86,29 +78,24 @@ impl MainHub {
     const CURSOR_W: u16 = 2;
     const CURSOR_GAP: u16 = 1;
 
-    /// Title box size for `area`: width is `TITLE_W_FRAC` of `area.width`
-    /// (with a sane floor so it's never absurdly small on a tiny terminal),
-    /// height derived from `LOGO_ASPECT` so the logo's own aspect ratio
-    /// fills the interior without large empty margins, capped at
-    /// `TITLE_H_MAX_FRAC` of `area.height` so there's always real room left
-    /// for the menu below.
-    fn title_size(area: Rect) -> (u16, u16) {
-        let w = ((area.width as f32 * Self::TITLE_W_FRAC) as u16).max(20);
-        // Interior (after the 1-cell border inset each side) should match
-        // LOGO_ASPECT in DOT space: (interior_w_cells*2) / (interior_h_cells*4)
-        // == LOGO_ASPECT  =>  interior_h_cells == interior_w_cells / (2*LOGO_ASPECT).
-        let interior_w = w.saturating_sub(2).max(1) as f32;
-        let interior_h = (interior_w / (2.0 * Self::LOGO_ASPECT)).max(1.0);
-        let h_from_aspect = (interior_h as u16).saturating_add(2);
-        let h_cap = ((area.height as f32 * Self::TITLE_H_MAX_FRAC) as u16).max(6);
-        // -1 whole cell shorter than the aspect/cap formula would otherwise
-        // produce. Applied AFTER the `.min(h_cap)` (not to `h_from_aspect`
-        // alone) so the shrink is visible even on short terminals where
-        // `h_cap` (not the aspect ratio) is the binding constraint — shaving
-        // `h_from_aspect` there would be silently absorbed by the cap and
-        // produce no visible change. `.max(6)` keeps a sane floor matching
-        // `h_cap`'s own floor.
-        (w, h_from_aspect.min(h_cap).saturating_sub(1).max(6))
+    /// The procedural logo's own cell dims — `div_ceil` of
+    /// `title_logo::compute_layout()`'s dot canvas (188×94 dots), matching
+    /// exactly what `dots_to_grid_tinted` produces (94×24 cells). NOT a
+    /// floored `/2, /4` (that would clip the bottom dot-row — CLAUDE.md #5).
+    fn logo_cell_size() -> (u16, u16) {
+        let l = crate::scenes::title_logo::compute_layout();
+        ((l.canvas_w as usize).div_ceil(2) as u16, (l.canvas_h as usize).div_ceil(4) as u16)
+    }
+
+    /// Title box size — FIXED: the logo's own cell dims plus a 1-cell
+    /// border each side. `area` is accepted for call-site symmetry with the
+    /// rest of the layout functions but is otherwise unused — no aspect-fit,
+    /// no dependence on the render area — the procedural logo is a fixed
+    /// SCALE=4 composition (Decision 3), unlike the old PNG's
+    /// aspect-preserving fit.
+    fn title_size(_area: Rect) -> (u16, u16) {
+        let (c, r) = Self::logo_cell_size();
+        (c + 2, r + 2)
     }
 
     /// Title box rect for `area` — sole place its position/size is
@@ -263,9 +250,17 @@ impl Scene for MainHub {
         SceneId::MainHub.into()
     }
 
-    fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {}
+    fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {
+        if crate::first_run::is_first_run() {
+            self.elapsed = 0.0;
+            let _ = crate::first_run::mark_first_run_done();
+        } else {
+            self.elapsed = crate::scenes::title_logo::ANIM_END;
+        }
+    }
 
-    fn update(&mut self, _ctx: &mut EngineCtx, _dt: Duration) -> Option<Transition> {
+    fn update(&mut self, _ctx: &mut EngineCtx, dt: Duration) -> Option<Transition> {
+        self.elapsed += dt.as_secs_f32();
         None
     }
 
@@ -274,7 +269,7 @@ impl Scene for MainHub {
         let title = Self::title_rect(area);
         self.draw_title_frame(buf, title);
         let interior = Self::title_interior(title);
-        let grid = engine_render::asset_cache::convert(crate::assets::LOGO, interior);
+        let (grid, _dot_rect) = crate::scenes::title_logo::frame(self.elapsed);
         engine_render::draw_grid(buf, interior, &grid);
 
         let rects = Self::button_rects(area);

@@ -403,20 +403,49 @@ mod layout_tests {
         );
     }
 
-    /// The title box is unmistakably large relative to the screen — a
-    /// regression guard for the "logo renders illegibly tiny" bug: at a
-    /// realistic terminal size, width must be a large majority of the
-    /// screen width, not a small fixed box.
+    /// b4-t1: the title box is now a FIXED size (the procedural logo's own
+    /// cell dims + a 1-cell border each side), independent of the render
+    /// area — supersedes the old aspect-fit "large fraction of the screen"
+    /// contract (LOGO_ASPECT/TITLE_W_FRAC/TITLE_H_MAX_FRAC are retired).
     #[test]
-    fn title_is_a_large_fraction_of_the_screen() {
-        let a = area();
-        let (w, h) = MainHub::title_size(a);
-        assert!(
-            w as f32 >= a.width as f32 * 0.6,
-            "title width {w} must be a large fraction of screen width {}",
-            a.width
+    fn title_size_is_fixed_regardless_of_area() {
+        let small = MainHub::title_size(Rect::new(0, 0, 40, 20));
+        let large = MainHub::title_size(Rect::new(0, 0, 120, 50));
+        assert_eq!(
+            small, large,
+            "title box size must be fixed, independent of the render area"
         );
-        assert!(h >= 10, "title height {h} must be tall enough to read a wordmark logo");
+        assert_eq!(
+            small,
+            (96, 26),
+            "title box size must equal the logo's fixed cell dims (94x24, \
+             div_ceil of compute_layout()'s 188x94 dot canvas) + a 1-cell \
+             border each side"
+        );
+    }
+
+    /// b4-t1 CLAUDE.md #5 guard: the title box's interior (after the 1-cell
+    /// border inset) must land EXACTLY on the composed logo grid's own
+    /// `cols()`/`rows()` (the `div_ceil`, unfloored cell extent) — never a
+    /// naively-floored `canvas_w/2, canvas_h/4`, which would clip the
+    /// logo's bottom dot-row (94x23 instead of 94x24).
+    #[test]
+    fn title_interior_matches_logo_grid_dims() {
+        let a = area();
+        let (grid, _dot_rect) = crate::scenes::title_logo::frame(2.0);
+        let title = MainHub::title_rect(a);
+        let interior = MainHub::title_interior(title);
+        assert_eq!(
+            interior.width as usize,
+            grid.cols(),
+            "title interior width must exactly match the composed logo grid's column count"
+        );
+        assert_eq!(
+            interior.height as usize,
+            grid.rows(),
+            "title interior height must exactly match the composed logo grid's row count \
+             (a naive floor would clip the bottom dot-row: 23 instead of 24)"
+        );
     }
 
     /// `menu_container`'s output for the two b1 fixture geometries (120x50
@@ -510,6 +539,45 @@ mod layout_tests {
 }
 
 #[cfg(test)]
+mod animation_clock_tests {
+    use super::super::*;
+    use crate::scenes::test_util::{render_to_buffer, serialize_braille_buffer};
+    use engine_core::scene::EngineCtx;
+
+    /// b4-t1 deliverable: the rendered logo changes across successive
+    /// `update(dt)` calls over ~0.9s from scene entry (the intro plays),
+    /// then holds on the same still once past `title_logo::ANIM_END`
+    /// (buffers at ~1.0s and ~2.0s must be identical).
+    #[test]
+    fn hub_logo_animates_then_holds() {
+        let (w, h) = (120u16, 50u16);
+        let mut scene = MainHub::default();
+        let mut ctx = EngineCtx;
+
+        let buf_start = render_to_buffer(&scene, w, h);
+        scene.update(&mut ctx, Duration::from_secs_f32(0.30));
+        let buf_mid = render_to_buffer(&scene, w, h);
+        scene.update(&mut ctx, Duration::from_secs_f32(0.70)); // total ~1.0s
+        let buf_settled_a = render_to_buffer(&scene, w, h);
+        scene.update(&mut ctx, Duration::from_secs_f32(1.0)); // total ~2.0s
+        let buf_settled_b = render_to_buffer(&scene, w, h);
+
+        assert_ne!(
+            serialize_braille_buffer(&buf_start),
+            serialize_braille_buffer(&buf_mid),
+            "hub render ~0.30s into entry must differ from the entry frame (t=0) \
+             — the logo must animate, not sit static"
+        );
+        assert_eq!(
+            serialize_braille_buffer(&buf_settled_a),
+            serialize_braille_buffer(&buf_settled_b),
+            "hub render must hold on the same still once past ANIM_END \
+             (~1.0s and ~2.0s renders must be identical)"
+        );
+    }
+}
+
+#[cfg(test)]
 mod render_timing_tests {
     use super::super::*;
     use crate::scenes::test_util::render_to_buffer;
@@ -525,7 +593,9 @@ mod render_timing_tests {
     /// ~4.0ms — both a small fraction of the budget. Pre-spec-32, debug avg was
     /// ~161ms (`engine_render::convert()` re-rasterizing `logo.png` every
     /// frame); spec 32's shared rasterize cache (`asset_cache`) closed that
-    /// gap, so the debug bound is now asserted too.
+    /// gap, so the debug bound is now asserted too. b4-t1 replaced the PNG
+    /// render with `title_logo::frame()`, which recomposes procedurally
+    /// (no `asset_cache` rasterization involved for the logo).
     #[test]
     #[ignore = "timing measurement; run explicitly (see spec 30/32 done-criterion)"]
     fn main_hub_render_is_a_small_fraction_of_frame_budget() {
@@ -585,11 +655,16 @@ mod golden_fixture_tests {
     type Scenario = (&'static str, u16, u16, fn(&mut MainHub));
 
     /// The 3 deterministic scenarios: fixture name, render dims, and the
-    /// mutation applied to a fresh `MainHub::default()` before render.
+    /// mutation applied to a fresh `MainHub::default()` before render. Each
+    /// sets `elapsed` past `title_logo::ANIM_END` so the fixtures freeze the
+    /// SETTLED procedural logo still, not an animation frame.
     fn scenarios() -> Vec<Scenario> {
-        fn rest(_scene: &mut MainHub) {}
+        fn rest(scene: &mut MainHub) {
+            scene.elapsed = 2.0;
+        }
         fn cursor_exit(scene: &mut MainHub) {
             scene.cursor_index = 2;
+            scene.elapsed = 2.0;
         }
 
         vec![
@@ -601,10 +676,9 @@ mod golden_fixture_tests {
 
     /// For each of the 3 scenarios, the CURRENT render must dot-for-dot
     /// match its committed fixture (`diff_dots(&fixture, &actual).is_match()`).
-    /// Pre-migration this is a freeze (green by construction once the
-    /// fixtures are generated); b2/b3 re-run this SAME assertion against the
-    /// `flex()`-migrated code, so this test is the enforced acceptance
-    /// oracle for the whole migration.
+    /// b4-t1 re-baselines these fixtures to the procedural sword-in-stone
+    /// logo held on its SETTLED still (`elapsed = 2.0`, past
+    /// `title_logo::ANIM_END`), replacing the retired PNG render.
     ///
     /// Run with `UPDATE_MAIN_HUB_FIXTURES=1` to (re)generate the 3
     /// `*.fixture` + `*.preview.txt` files from the current render — do the
@@ -651,3 +725,51 @@ mod golden_fixture_tests {
     }
 }
 
+#[cfg(test)]
+mod first_run_gate_tests {
+    use super::super::*;
+    use engine_core::scene::EngineCtx;
+
+    /// b4-t2 deliverable: `MainHub::enter` gates the intro on a persisted
+    /// first-run flag under the `AGENTBATTLEGROUND_DATA_DIR`-resolved data
+    /// dir. Single test owns the env var end-to-end (process-global) so it
+    /// can't race any other test — no other test in this binary reads the
+    /// runtime data-dir resolver or calls `enter`.
+    #[test]
+    fn first_entry_animates_and_persists_then_second_entry_holds_still() {
+        let base = std::env::temp_dir().join(format!(
+            "game-main-hub-first-run-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::env::set_var("AGENTBATTLEGROUND_DATA_DIR", &base);
+
+        // (a) fresh data dir, no flag: entry must play from t=0 and persist
+        // the flag so a later launch won't replay.
+        let mut first = MainHub::default();
+        let mut ctx = EngineCtx;
+        first.enter(&mut ctx, None);
+        assert_eq!(
+            first.elapsed, 0.0,
+            "first-ever entry (no flag file present) must start the intro at t=0"
+        );
+        assert!(
+            crate::first_run::first_run_flag_path_in(&base).exists(),
+            "first-ever entry must persist the first-run flag so later launches don't replay"
+        );
+
+        // (b) same data dir, flag now present: entry must seat straight on
+        // the held final still, no animation.
+        let mut second = MainHub::default();
+        second.enter(&mut ctx, None);
+        assert!(
+            second.elapsed >= crate::scenes::title_logo::ANIM_END,
+            "entry with the first-run flag already present must seat elapsed \
+             at/after ANIM_END (held still), got {}",
+            second.elapsed
+        );
+
+        std::env::remove_var("AGENTBATTLEGROUND_DATA_DIR");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
