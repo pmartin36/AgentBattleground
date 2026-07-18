@@ -1,7 +1,7 @@
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use ratatui::buffer::Buffer;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use engine_core::Inspectable;
@@ -196,35 +196,6 @@ impl MainHub {
         ]
     }
 
-    /// Paint `crate::assets::FRAME_PANEL` stretched to fill `rect` exactly (same
-    /// stretch-fit routine a `Button`'s background render uses), static
-    /// (no `ButtonState` tint). Early-returns on a zero-dim rect.
-    fn draw_title_frame(&self, buf: &mut Buffer, rect: Rect) {
-        let dot_cols = rect.width as usize * 2;
-        let dot_rows = rect.height as usize * 4;
-        if dot_cols == 0 || dot_rows == 0 {
-            return;
-        }
-
-        let dots = engine_render::asset_cache::sprite_to_dots(
-            crate::assets::FRAME_PANEL,
-            dot_cols as u32,
-            dot_rows as u32,
-        );
-        engine_render::draw_dots(buf, rect, &dots);
-    }
-
-    /// `title` inset by 1 cell per side — the interior the logo paints into,
-    /// kept clear of the frame's border thickness.
-    fn title_interior(title: Rect) -> Rect {
-        Rect {
-            x: title.x + 1,
-            y: title.y + 1,
-            width: title.width.saturating_sub(2),
-            height: title.height.saturating_sub(2),
-        }
-    }
-
     /// Sole activation dispatch for a menu index (0 Roster, 1 Battle,
     /// 2 Settings, 3 Exit). Keyboard Enter (b5-t5) and mouse click (b5-t6)
     /// both route here — never a duplicated match. Index is 0..=3 by
@@ -249,18 +220,31 @@ impl MainHub {
     }
 }
 
+/// Process-scoped intro-played latch (b1-t2). Set on the first `MainHub`
+/// `enter` of the process; subsequent entries hold the intro still. Replaces
+/// the previous persisted `first_run` flag-file mechanism.
+static INTRO_PLAYED: AtomicBool = AtomicBool::new(false);
+
+/// Resets the process-scoped intro-played latch (b1-t2) so a gate test can
+/// deterministically observe "first entry of the process" regardless of
+/// execution order.
+#[cfg(test)]
+pub(crate) fn reset_intro_played_for_test() {
+    INTRO_PLAYED.store(false, Ordering::Relaxed);
+}
+
 impl Scene for MainHub {
     fn id(&self) -> SceneKey {
         SceneId::MainHub.into()
     }
 
     fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {
-        if crate::first_run::is_first_run() {
-            self.elapsed = 0.0;
-            let _ = crate::first_run::mark_first_run_done();
+        let already_played = INTRO_PLAYED.swap(true, Ordering::Relaxed);
+        self.elapsed = if already_played {
+            crate::scenes::title_logo::ANIM_END
         } else {
-            self.elapsed = crate::scenes::title_logo::ANIM_END;
-        }
+            0.0
+        };
     }
 
     fn update(&mut self, _ctx: &mut EngineCtx, dt: Duration) -> Option<Transition> {
@@ -271,10 +255,8 @@ impl Scene for MainHub {
     fn render(&self, frame: &mut Frame, area: Rect) {
         let buf = frame.buffer_mut();
         let title = Self::title_rect(area);
-        self.draw_title_frame(buf, title);
-        let interior = Self::title_interior(title);
         let (grid, _dot_rect) = crate::scenes::title_logo::frame(self.elapsed);
-        engine_render::draw_grid(buf, interior, &grid);
+        engine_render::draw_grid(buf, title, &grid);
 
         let fade = Self::BTN_FADE.progress(self.elapsed);
         let alpha = (fade * 255.0).round() as u8;

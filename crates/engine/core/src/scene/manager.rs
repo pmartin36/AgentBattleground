@@ -854,8 +854,10 @@ mod tests {
 
     /// Local in-memory `tracing` collector: a `Fn() -> W: Write` closure over a
     /// shared buffer, installed via `tracing::subscriber::with_default` (thread-local,
-    /// never the process-global `logging::init`) so this test cannot race others'
-    /// subscriber state.
+    /// never the process-global `logging::init`). Dispatch is thread-local, but
+    /// tracing's callsite INTEREST cache is process-global, so a test that asserts
+    /// an event WAS captured must call `tracing::callsite::rebuild_interest_cache()`
+    /// after installing its subscriber to avoid flaking under parallel test runs.
     #[derive(Clone)]
     struct SharedBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
 
@@ -893,6 +895,14 @@ mod tests {
         });
 
         tracing::subscriber::with_default(subscriber, || {
+            // tracing's callsite INTEREST cache is process-global: a callsite first
+            // evaluated under a sibling test's subscriber (running concurrently on
+            // another thread) can be cached as "disabled" for this thread's
+            // subscriber too, even though `with_default` only isolates dispatch, not
+            // interest. Force recomputation under the now-installed subscriber
+            // before triggering the event, or this assertion flakes under a
+            // parallel `cargo test` run.
+            tracing::callsite::rebuild_interest_cache();
             mgr.process_pending();
         });
 

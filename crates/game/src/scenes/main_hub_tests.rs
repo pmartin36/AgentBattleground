@@ -2,6 +2,7 @@
 mod render_tests {
     use super::super::*;
     use crate::scenes::test_util::render_to_buffer;
+    use engine_render::decode_braille_cell;
 
     /// b5-t2 deliverable: the title box paints real content (frame + logo,
     /// non-space cells) and the bare display-name text "Main Hub" appears
@@ -105,6 +106,33 @@ mod render_tests {
             );
         }
     }
+
+    /// b1-t1 deliverable (Decision 1): after the leftover title frame is
+    /// dropped, no rectangular border ring frames the logo — every cell in
+    /// the outermost 1-cell margin band of the title rect (`title_rect`'s
+    /// own edge cells: top/bottom rows, left/right columns) is unlit.
+    #[test]
+    fn no_border_ring_surrounds_the_logo() {
+        let (w, h) = (120u16, 50u16);
+        let area = Rect::new(0, 0, w, h);
+        let scene = MainHub { elapsed: 2.0, ..Default::default() };
+        let buf = render_to_buffer(&scene, w, h);
+        let title = MainHub::title_rect(area);
+
+        let band_cells = (title.left()..title.right())
+            .map(|x| (x, title.top()))
+            .chain((title.left()..title.right()).map(|x| (x, title.bottom() - 1)))
+            .chain((title.top()..title.bottom()).map(|y| (title.left(), y)))
+            .chain((title.top()..title.bottom()).map(|y| (title.right() - 1, y)));
+
+        for (x, y) in band_cells {
+            assert!(
+                decode_braille_cell(&buf, x, y).is_none(),
+                "title margin band cell ({x},{y}) must be unlit — no border ring may \
+                 frame the logo (Decision 1)"
+            );
+        }
+    }
 }
 
 /// b4-t2 deliverable: active button (keyboard-selected via `cursor_index`,
@@ -118,6 +146,7 @@ mod active_color_tests {
     use crate::scenes::test_util::render_to_buffer;
     use engine_core::color::Rgba;
     use engine_render::decode_braille_cell;
+    use ratatui::buffer::Buffer;
     use ratatui::style::Color;
 
     /// Spec-pinned active (white) color — `title_logo`'s `#ECEFF5`.
@@ -586,30 +615,6 @@ mod layout_tests {
         );
     }
 
-    /// b4-t1 CLAUDE.md #5 guard: the title box's interior (after the 1-cell
-    /// border inset) must land EXACTLY on the composed logo grid's own
-    /// `cols()`/`rows()` (the `div_ceil`, unfloored cell extent) — never a
-    /// naively-floored `canvas_w/2, canvas_h/4`, which would clip the
-    /// logo's bottom dot-row (94x23 instead of 94x24).
-    #[test]
-    fn title_interior_matches_logo_grid_dims() {
-        let a = area();
-        let (grid, _dot_rect) = crate::scenes::title_logo::frame(2.0);
-        let title = MainHub::title_rect(a);
-        let interior = MainHub::title_interior(title);
-        assert_eq!(
-            interior.width as usize,
-            grid.cols(),
-            "title interior width must exactly match the composed logo grid's column count"
-        );
-        assert_eq!(
-            interior.height as usize,
-            grid.rows(),
-            "title interior height must exactly match the composed logo grid's row count \
-             (a naive floor would clip the bottom dot-row: 23 instead of 24)"
-        );
-    }
-
     /// `menu_container`'s output for the two b1 fixture geometries (120x50
     /// and 40x20, covering both x-parity paths) — a direct value assertion
     /// beyond the two existing property-only tests below, which would not
@@ -890,46 +895,33 @@ mod first_run_gate_tests {
     use super::super::*;
     use engine_core::scene::EngineCtx;
 
-    /// b4-t2 deliverable: `MainHub::enter` gates the intro on a persisted
-    /// first-run flag under the `AGENTBATTLEGROUND_DATA_DIR`-resolved data
-    /// dir. Single test owns the env var end-to-end (process-global) so it
-    /// can't race any other test — no other test in this binary reads the
-    /// runtime data-dir resolver or calls `enter`.
+    /// b1-t2 deliverable: `MainHub::enter` gates the intro on a process-
+    /// scoped `INTRO_PLAYED` latch, not on persisted filesystem/env-var
+    /// state. Single test owns the latch end-to-end (process-global) so it
+    /// can't race any other test — no other test in this binary calls
+    /// `enter` or `reset_intro_played_for_test`.
     #[test]
-    fn first_entry_animates_and_persists_then_second_entry_holds_still() {
-        let base = std::env::temp_dir().join(format!(
-            "game-main-hub-first-run-test-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&base);
-        std::env::set_var("AGENTBATTLEGROUND_DATA_DIR", &base);
+    fn first_entry_in_process_animates_then_second_entry_holds_still() {
+        reset_intro_played_for_test();
 
-        // (a) fresh data dir, no flag: entry must play from t=0 and persist
-        // the flag so a later launch won't replay.
+        // (a) first entry of the process: intro must play from t=0.
         let mut first = MainHub::default();
         let mut ctx = EngineCtx;
         first.enter(&mut ctx, None);
         assert_eq!(
             first.elapsed, 0.0,
-            "first-ever entry (no flag file present) must start the intro at t=0"
-        );
-        assert!(
-            crate::first_run::first_run_flag_path_in(&base).exists(),
-            "first-ever entry must persist the first-run flag so later launches don't replay"
+            "first entry of the process must start the intro at t=0"
         );
 
-        // (b) same data dir, flag now present: entry must seat straight on
-        // the held final still, no animation.
+        // (b) a later entry in the SAME process: must seat straight on the
+        // held final still, no animation, no filesystem/env-var involved.
         let mut second = MainHub::default();
         second.enter(&mut ctx, None);
         assert!(
             second.elapsed >= crate::scenes::title_logo::ANIM_END,
-            "entry with the first-run flag already present must seat elapsed \
-             at/after ANIM_END (held still), got {}",
+            "a later entry in the same process must seat elapsed at/after \
+             ANIM_END (held still), got {}",
             second.elapsed
         );
-
-        std::env::remove_var("AGENTBATTLEGROUND_DATA_DIR");
-        let _ = std::fs::remove_dir_all(&base);
     }
 }

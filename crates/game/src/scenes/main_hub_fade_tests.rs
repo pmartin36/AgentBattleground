@@ -6,6 +6,7 @@
 use super::*;
 use crate::scenes::test_util::{mouse_event, render_to_buffer};
 use engine_render::decode_braille_cell;
+use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{MouseButton, MouseEventKind};
 
 const W: u16 = 120;
@@ -76,6 +77,45 @@ fn buttons_partial_alpha_mid_fade() {
     assert_ne!(
         color, gold,
         "mid-fade border color must be a translucent blend, not opaque gold {gold:?}"
+    );
+}
+
+/// Decision 3 (b1-t3): a return-to-hub entry starts at
+/// `elapsed == title_logo::ANIM_END` (t2's per-process gating on a non-first
+/// entry). The VERY FIRST rendered frame — no `update` calls — must paint
+/// all 4 nav buttons at full opacity (border color == the opaque base color)
+/// and the input gate must already be open. Guards against the "buttons
+/// stuck hidden after returning to the hub" regression.
+#[test]
+fn return_to_hub_first_frame_is_fully_opaque_and_interactive() {
+    let scene = hub_at(crate::scenes::title_logo::ANIM_END);
+    let buf = render_to_buffer(&scene, W, H);
+    let rects = MainHub::button_rects(Rect::new(0, 0, W, H));
+    let white = crate::scenes::title_logo::WHITE_COLOR;
+    let gold = crate::scenes::title_logo::GLOW_COLOR;
+
+    for (i, rect) in rects.iter().enumerate() {
+        let (bx, by) = (rect.x + rect.width / 2, rect.y);
+        let (_, color) = decode_braille_cell(&buf, bx, by).unwrap_or_else(|| {
+            panic!(
+                "button {i} border cell ({bx},{by}) must be lit on the very \
+                 first return-to-hub frame (elapsed={})",
+                scene.elapsed
+            )
+        });
+        let expected = if i == 0 { white } else { gold };
+        assert_eq!(
+            color, expected,
+            "button {i} must be fully opaque on the very first return-to-hub \
+             frame (elapsed={})",
+            scene.elapsed
+        );
+    }
+
+    assert!(
+        scene.buttons_interactive(),
+        "return-to-hub first frame (elapsed={}) must already be interactive",
+        scene.elapsed
     );
 }
 
