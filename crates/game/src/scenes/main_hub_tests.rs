@@ -36,16 +36,25 @@ mod render_tests {
         );
     }
 
-    /// b5-t3 deliverable: the 3 menu buttons render their exact label text
+    /// b4-t1 deliverable: the 4 menu buttons render their exact label text
     /// on the center row of their respective `button_rects`, top-to-bottom
-    /// in order Roster, Battle, Exit.
+    /// in order Roster, Battle, Settings, Exit. `elapsed` is pinned past
+    /// `title_logo::ANIM_END` (b4-t3's fade window has completed) since
+    /// buttons paint no dots at all during the first-run fade-in.
     #[test]
-    fn main_hub_renders_three_menu_button_labels() {
+    fn main_hub_renders_four_menu_button_labels() {
         let (w, h) = (120u16, 50u16);
         let area = Rect::new(0, 0, w, h);
-        let buf = render_to_buffer(&MainHub::default(), w, h);
-        let rects = MainHub::button_rects(area);
-        let labels = ["Roster", "Battle", "Exit"];
+        let scene = MainHub { elapsed: 2.0, ..Default::default() };
+        let buf = render_to_buffer(&scene, w, h);
+        let rects = MainHub::button_rects(area).to_vec();
+        let labels = ["Roster", "Battle", "Settings", "Exit"];
+        assert_eq!(
+            rects.len(),
+            labels.len(),
+            "button_rects() must return exactly one rect per label (4: Roster, \
+             Battle, Settings, Exit)"
+        );
 
         for (rect, label) in rects.iter().zip(labels.iter()) {
             let y = rect.y + rect.height / 2;
@@ -59,17 +68,17 @@ mod render_tests {
         }
 
         assert!(
-            rects[0].y < rects[1].y && rects[1].y < rects[2].y,
-            "button rects must be strictly ordered top-to-bottom Roster, Battle, Exit"
+            rects.windows(2).all(|w| w[0].y < w[1].y),
+            "button rects must be strictly ordered top-to-bottom Roster, Battle, Settings, Exit"
         );
     }
 
-    /// b5-t4 deliverable: with `cursor_index = 1`, the selection-cursor arrow
-    /// paints in the column band immediately left of the Battle button's
-    /// rect, and that same band is untouched (all spaces) to the left of the
-    /// Roster and Exit rects.
+    /// b4-t1 Decision 5: the selection arrow is removed — no dots may paint
+    /// in the column band immediately left of ANY button rect, regardless of
+    /// `cursor_index` (`cursor_index` still exists as pure selection state,
+    /// it just has no visual effect until b4-t2 recolors the active button).
     #[test]
-    fn cursor_appears_left_of_focused_button() {
+    fn no_cursor_arrow_paints_left_of_any_button() {
         let scene = MainHub {
             cursor_index: 1,
             ..Default::default()
@@ -88,18 +97,87 @@ mod render_tests {
                 .any(|y| (x0..x1).any(|x| buf.cell((x, y)).unwrap().symbol() != " "))
         };
 
-        assert!(
-            band_painted(rects[1]),
-            "left-of-Battle band must contain a painted cursor cell when cursor_index == 1"
-        );
-        assert!(
-            !band_painted(rects[0]),
-            "left-of-Roster band must be empty when cursor_index == 1"
-        );
-        assert!(
-            !band_painted(rects[2]),
-            "left-of-Exit band must be empty when cursor_index == 1"
-        );
+        for rect in rects {
+            assert!(
+                !band_painted(rect),
+                "no arrow dots may paint left of button rect {rect:?} — the selection \
+                 arrow is removed (Decision 5)"
+            );
+        }
+    }
+}
+
+/// b4-t2 deliverable: active button (keyboard-selected via `cursor_index`,
+/// or mouse-hovered — both collapse to `cursor_index`) paints border+label
+/// white; every other button paints border+label gold. Opaque throughout
+/// (fade is b4-t3's concern; `elapsed` is pinned past `ANIM_END` here so
+/// this test is fade-independent).
+#[cfg(test)]
+mod active_color_tests {
+    use super::super::*;
+    use crate::scenes::test_util::render_to_buffer;
+    use engine_core::color::Rgba;
+    use engine_render::decode_braille_cell;
+    use ratatui::style::Color;
+
+    /// Spec-pinned active (white) color — `title_logo`'s `#ECEFF5`.
+    const WHITE: Rgba = Rgba::rgb(0xEC, 0xEF, 0xF5);
+
+    fn rgb(c: Rgba) -> Color {
+        Color::Rgb(c.r, c.g, c.b)
+    }
+
+    /// Top-center border cell of `rect`, matching the engine's own
+    /// `button_frame_tests.rs::border_cell` convention.
+    fn border_cell(rect: Rect) -> (u16, u16) {
+        (rect.x + rect.width / 2, rect.y)
+    }
+
+    /// The fg color of the first non-space cell on `rect`'s center row (the
+    /// label glyph), panicking if the button painted no label there.
+    fn label_fg(buf: &Buffer, rect: Rect) -> Color {
+        let y = rect.y + rect.height / 2;
+        (rect.left()..rect.right())
+            .find_map(|x| {
+                let cell = buf.cell((x, y)).unwrap();
+                (cell.symbol() != " ").then_some(cell.fg)
+            })
+            .unwrap_or_else(|| panic!("button rect {rect:?} must paint a label glyph on its center row"))
+    }
+
+    #[test]
+    fn active_button_border_and_label_white_others_gold() {
+        let scene = MainHub {
+            cursor_index: 2,
+            elapsed: 2.0,
+            ..Default::default()
+        };
+        let (w, h) = (120u16, 50u16);
+        let buf = render_to_buffer(&scene, w, h);
+        let rects = MainHub::button_rects(Rect::new(0, 0, w, h));
+        let gold = crate::scenes::title_logo::GLOW_COLOR;
+
+        for (i, rect) in rects.iter().enumerate() {
+            let (bx, by) = border_cell(*rect);
+            let (_, border_color) = decode_braille_cell(&buf, bx, by)
+                .unwrap_or_else(|| panic!("button {i} top-border cell ({bx},{by}) must be lit"));
+            let label_color = label_fg(&buf, *rect);
+
+            let expected = if i == scene.cursor_index { WHITE } else { gold };
+            assert_eq!(
+                border_color, expected,
+                "button {i} border must be {}, got {border_color:?} (cursor_index={})",
+                if i == scene.cursor_index { "white" } else { "gold" },
+                scene.cursor_index
+            );
+            assert_eq!(
+                label_color,
+                rgb(expected),
+                "button {i} label must be {}, got {label_color:?} (cursor_index={})",
+                if i == scene.cursor_index { "white" } else { "gold" },
+                scene.cursor_index
+            );
+        }
     }
 }
 
@@ -109,28 +187,32 @@ mod keyboard_input_tests {
     use crate::scenes::test_util::key_event;
     use crossterm::event::KeyCode;
 
+    /// `elapsed` is pinned past `title_logo::ANIM_END` (b4-t3's fade window
+    /// has completed) so keyboard dispatch is interactive — fade gating
+    /// itself is covered in `main_hub_fade_tests.rs`.
     fn hub_at(cursor_index: usize) -> MainHub {
         MainHub {
             cursor_index,
+            elapsed: 2.0,
             ..Default::default()
         }
     }
 
-    /// Up at index 0 wraps to 2.
+    /// Up at index 0 wraps to 3 (last index, now Exit).
     #[test]
-    fn up_wraps_from_zero_to_two() {
+    fn up_wraps_from_zero_to_three() {
         let mut scene = hub_at(0);
         let transition = scene.handle_input(key_event(KeyCode::Up));
-        assert_eq!(scene.cursor_index, 2, "Up at index 0 must wrap to 2");
+        assert_eq!(scene.cursor_index, 3, "Up at index 0 must wrap to 3");
         assert!(transition.is_none(), "arrow-key navigation must not transition");
     }
 
-    /// Down at index 2 wraps to 0.
+    /// Down at index 3 wraps to 0.
     #[test]
-    fn down_wraps_from_two_to_zero() {
-        let mut scene = hub_at(2);
+    fn down_wraps_from_three_to_zero() {
+        let mut scene = hub_at(3);
         let transition = scene.handle_input(key_event(KeyCode::Down));
-        assert_eq!(scene.cursor_index, 0, "Down at index 2 must wrap to 0");
+        assert_eq!(scene.cursor_index, 0, "Down at index 3 must wrap to 0");
         assert!(transition.is_none(), "arrow-key navigation must not transition");
     }
 
@@ -167,10 +249,22 @@ mod keyboard_input_tests {
         assert!(!scene.quit_requested(), "Battle activation must not request quit");
     }
 
-    /// Enter at cursor_index 2 (Exit) requests quit and returns no Transition.
+    /// Enter at cursor_index 2 (Settings) transitions to SceneId::Settings and
+    /// does not request quit.
+    #[test]
+    fn enter_on_settings_transitions_to_settings() {
+        let mut scene = hub_at(2);
+        let transition = scene
+            .handle_input(key_event(KeyCode::Enter))
+            .expect("Enter on Settings must return a Transition");
+        assert_eq!(transition.target, SceneKey::from(SceneId::Settings));
+        assert!(!scene.quit_requested(), "Settings activation must not request quit");
+    }
+
+    /// Enter at cursor_index 3 (Exit) requests quit and returns no Transition.
     #[test]
     fn enter_on_exit_sets_quit_requested_and_no_transition() {
-        let mut scene = hub_at(2);
+        let mut scene = hub_at(3);
         let transition = scene.handle_input(key_event(KeyCode::Enter));
         assert!(transition.is_none(), "Exit activation must not return a Transition");
         assert!(scene.quit_requested(), "Exit activation must set quit_requested");
@@ -216,6 +310,13 @@ mod mouse_input_tests {
         Rect::new(0, 0, W, H)
     }
 
+    /// A hub seated past `title_logo::ANIM_END`, i.e. past b4-t3's fade
+    /// window, so mouse dispatch is interactive for these click/hover
+    /// cases — fade gating itself is covered in `main_hub_fade_tests.rs`.
+    fn interactive_hub() -> MainHub {
+        MainHub { elapsed: 2.0, ..Default::default() }
+    }
+
     fn center(rect: Rect) -> (u16, u16) {
         (rect.x + rect.width / 2, rect.y + rect.height / 2)
     }
@@ -224,7 +325,7 @@ mod mouse_input_tests {
     /// `cursor_index` to 1 and produces no transition.
     #[test]
     fn moved_inside_battle_sets_cursor_index_without_transition() {
-        let mut scene = MainHub::default();
+        let mut scene = interactive_hub();
         let area = render_once(&scene);
         let rects = MainHub::button_rects(area);
         let (cx, cy) = center(rects[1]);
@@ -243,14 +344,37 @@ mod mouse_input_tests {
         );
     }
 
+    /// A completed click (Moved+Down+Up, all inside the Settings button's
+    /// rect) returns the same Transition Enter produces at cursor_index 2.
+    #[test]
+    fn click_on_settings_transitions_to_settings() {
+        let mut scene = interactive_hub();
+        let area = render_once(&scene);
+        let rects = MainHub::button_rects(area);
+        let (cx, cy) = center(rects[2]);
+
+        scene.handle_input(mouse_event(MouseEventKind::Moved, cx, cy));
+        scene.handle_input(mouse_event(
+            MouseEventKind::Down(MouseButton::Left),
+            cx,
+            cy,
+        ));
+        let transition = scene
+            .handle_input(mouse_event(MouseEventKind::Up(MouseButton::Left), cx, cy))
+            .expect("a completed click on Settings must return a Transition");
+
+        assert_eq!(transition.target, SceneKey::from(SceneId::Settings));
+        assert!(!scene.quit_requested(), "Settings activation must not request quit");
+    }
+
     /// A completed click (Moved+Down+Up, all inside the Exit button's rect)
     /// fires the quit signal via `activate`, with no transition.
     #[test]
     fn click_on_exit_requests_quit() {
-        let mut scene = MainHub::default();
+        let mut scene = interactive_hub();
         let area = render_once(&scene);
-        let rects = MainHub::button_rects(area);
-        let (cx, cy) = center(rects[2]);
+        let rects = MainHub::button_rects(area).to_vec();
+        let (cx, cy) = center(*rects.last().expect("button_rects must be non-empty"));
 
         scene.handle_input(mouse_event(MouseEventKind::Moved, cx, cy));
         scene.handle_input(mouse_event(
@@ -278,7 +402,7 @@ mod mouse_input_tests {
     /// Enter produces at cursor_index 0 — the shared `activate` dispatch.
     #[test]
     fn click_on_roster_transitions_to_roster_manager() {
-        let mut scene = MainHub::default();
+        let mut scene = interactive_hub();
         let area = render_once(&scene);
         let rects = MainHub::button_rects(area);
         let (cx, cy) = center(rects[0]);
@@ -301,7 +425,7 @@ mod mouse_input_tests {
     /// Enter produces at cursor_index 1.
     #[test]
     fn click_on_battle_transitions_to_battle_viewer() {
-        let mut scene = MainHub::default();
+        let mut scene = interactive_hub();
         let area = render_once(&scene);
         let rects = MainHub::button_rects(area);
         let (cx, cy) = center(rects[1]);
@@ -320,12 +444,50 @@ mod mouse_input_tests {
         assert!(!scene.quit_requested(), "Battle activation must not request quit");
     }
 
+    /// b4-t2 deliverable: hovering a different button moves the active
+    /// (white) color to the hovered button — `cursor_index` is the single
+    /// active predicate, so a `Moved` sync is enough, no separate hover
+    /// color path. Reuses `active_color_tests`' border-cell convention.
+    #[test]
+    fn hover_moves_white_to_hovered_button() {
+        use engine_core::color::Rgba;
+        use engine_render::decode_braille_cell;
+
+        const WHITE: Rgba = Rgba::rgb(0xEC, 0xEF, 0xF5);
+        fn border_cell(rect: Rect) -> (u16, u16) {
+            (rect.x + rect.width / 2, rect.y)
+        }
+
+        let mut scene = MainHub {
+            elapsed: 2.0,
+            ..Default::default()
+        };
+        let area = render_once(&scene);
+        let rects = MainHub::button_rects(area);
+        let (cx, cy) = center(rects[1]);
+
+        scene.handle_input(mouse_event(MouseEventKind::Moved, cx, cy));
+        assert_eq!(scene.cursor_index, 1, "Moved onto button 1 must set cursor_index to 1");
+
+        let buf = render_to_buffer(&scene, W, H);
+        let (bx0, by0) = border_cell(rects[0]);
+        let (_, color0) = decode_braille_cell(&buf, bx0, by0)
+            .expect("button 0 top-border cell must be lit");
+        let (bx1, by1) = border_cell(rects[1]);
+        let (_, color1) = decode_braille_cell(&buf, bx1, by1)
+            .expect("button 1 top-border cell must be lit");
+
+        assert_eq!(color1, WHITE, "hovered button 1 must be white, got {color1:?}");
+        assert_ne!(color0, WHITE, "non-hovered button 0 must not be white, got {color0:?}");
+    }
+
     /// A click sequence completed at a point outside all 3 button rects is a
     /// no-op: cursor_index unchanged, no transition, no quit.
     #[test]
     fn click_outside_all_buttons_is_noop() {
         let mut scene = MainHub {
             cursor_index: 0,
+            elapsed: 2.0,
             ..Default::default()
         };
         let _area = render_once(&scene);
@@ -454,8 +616,8 @@ mod layout_tests {
     /// catch an off-by-margin/axis slip in the inset/Justify::End formula.
     #[test]
     fn menu_container_matches_pre_migration_rect() {
-        assert_eq!(MainHub::menu_container(Rect::new(0, 0, 120, 50)), Rect::new(50, 37, 20, 11));
-        assert_eq!(MainHub::menu_container(Rect::new(0, 0, 40, 20)), Rect::new(10, 7, 20, 11));
+        assert_eq!(MainHub::menu_container(Rect::new(0, 0, 120, 50)), Rect::new(50, 33, 20, 15));
+        assert_eq!(MainHub::menu_container(Rect::new(0, 0, 40, 20)), Rect::new(10, 3, 20, 15));
     }
 
     /// The menu sits near the BOTTOM of the screen (Exit close to the
@@ -494,7 +656,7 @@ mod layout_tests {
             grow: 0.0,
             shrink: 0.0,
         };
-        let children = [child(), child(), child()];
+        let children = [child(), child(), child(), child()];
         let style = FlexStyle {
             direction: Direction::Column,
             justify_content: Justify::Start,
@@ -506,33 +668,31 @@ mod layout_tests {
         assert_eq!(MainHub::button_rects(a).as_slice(), expected.as_slice());
     }
 
-    /// The 3 button rects are strictly ordered top-to-bottom (index 0
-    /// Roster, 1 Battle, 2 Exit) and non-overlapping.
+    /// The 4 button rects are strictly ordered top-to-bottom (index 0
+    /// Roster, 1 Battle, 2 Settings, 3 Exit) and non-overlapping.
     #[test]
     fn button_rects_are_ordered_and_non_overlapping() {
-        let rects = MainHub::button_rects(area());
+        let rects = MainHub::button_rects(area()).to_vec();
+        assert_eq!(rects.len(), 4, "button_rects() must return exactly 4 rects");
 
-        assert!(rects[0].y < rects[1].y, "rect 0 must be above rect 1");
-        assert!(rects[1].y < rects[2].y, "rect 1 must be above rect 2");
-        assert!(
-            rects[0].bottom() <= rects[1].y,
-            "rect 0 must not overlap rect 1"
-        );
-        assert!(
-            rects[1].bottom() <= rects[2].y,
-            "rect 1 must not overlap rect 2"
-        );
+        for pair in rects.windows(2) {
+            assert!(pair[0].y < pair[1].y, "each rect must be above the next: {pair:?}");
+            assert!(
+                pair[0].bottom() <= pair[1].y,
+                "consecutive rects must not overlap: {pair:?}"
+            );
+        }
     }
 
     /// `menu_container`'s height must be at least the stacked group's total
-    /// height (3 buttons + 2 gaps) — guards against the container being too
+    /// height (4 buttons + 3 gaps) — guards against the container being too
     /// short for the button column.
     #[test]
-    fn menu_container_height_fits_three_buttons() {
+    fn menu_container_height_fits_four_buttons() {
         let container = MainHub::menu_container(area());
         assert!(
-            container.height >= 3 * MainHub::BUTTON_H + 2 * MainHub::MENU_GAP,
-            "menu_container height {} must fit 3 buttons + 2 gaps",
+            container.height >= 4 * MainHub::BUTTON_H + 3 * MainHub::MENU_GAP,
+            "menu_container height {} must fit 4 buttons + 3 gaps",
             container.height
         );
     }
@@ -663,7 +823,7 @@ mod golden_fixture_tests {
             scene.elapsed = 2.0;
         }
         fn cursor_exit(scene: &mut MainHub) {
-            scene.cursor_index = 2;
+            scene.cursor_index = 3;
             scene.elapsed = 2.0;
         }
 

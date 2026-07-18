@@ -57,11 +57,13 @@ pub(crate) const EMPTY: char = ' ';
 pub(crate) const ETCH_COLOR: Rgba = Rgba::rgb(0x2C, 0x2E, 0x38);
 /// Lit gold.
 pub(crate) const GLOW_COLOR: Rgba = Rgba::rgb(0xFF, 0xD8, 0x48);
+/// Lit white.
+pub(crate) const WHITE_COLOR: Rgba = Rgba::rgb(0xEC, 0xEF, 0xF5);
 
 /// Static material glyph -> RGB. (BATTLES' `G_GLOW` is overridden per frame.)
 pub(crate) fn color_of(ch: char) -> Rgba {
     match ch {
-        WHITE => Rgba::rgb(0xEC, 0xEF, 0xF5),
+        WHITE => WHITE_COLOR,
         B_HI => Rgba::rgb(0xF6, 0xFA, 0xFF),
         B_LT => Rgba::rgb(0xC6, 0xD2, 0xE2),
         B_DK => Rgba::rgb(0x6C, 0x7A, 0x8E),

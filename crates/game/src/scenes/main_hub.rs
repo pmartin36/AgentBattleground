@@ -9,7 +9,8 @@ use engine_core::SceneKey;
 use serde_json::Value as JsonValue;
 
 use engine_render::{
-    flex, Align, Basis, Button, ButtonState, Direction, FlexChild, FlexStyle, Justify,
+    flex, ActiveStyle, Align, Basis, Button, ButtonState, Direction, FlexChild, FlexStyle,
+    Justify,
 };
 
 use engine_audio::play_oneshot;
@@ -18,15 +19,16 @@ use crate::scene_id::SceneId;
 
 #[derive(Inspectable)]
 pub struct MainHub {
-    /// The 3 menu buttons (index 0 Roster, 1 Battle, 2 Exit — matches
-    /// `button_rects`' order). `RefCell` because `render(&self, ..)` must
-    /// mutate each button's rect/state through an immutable receiver —
+    /// The 4 menu buttons (index 0 Roster, 1 Battle, 2 Settings, 3 Exit —
+    /// matches `button_rects`' order). `RefCell` because `render(&self, ..)`
+    /// must mutate each button's rect/state through an immutable receiver —
     /// mirrors `RosterManager`'s button fields.
     #[inspect(hidden)]
-    buttons: [RefCell<Button>; 3],
+    buttons: [RefCell<Button>; 4],
 
-    /// Index (0..=2) of the menu item the selection cursor points at.
-    /// Rendering the cursor arrow itself is b5-t4's deliverable.
+    /// Index (0..=3) of the menu item the selection cursor points at.
+    /// Selection state only — has no visual effect until b4-t2 recolors the
+    /// active button.
     cursor_index: usize,
 
     /// Set true when the Exit menu item activates; polled by the engine via
@@ -48,6 +50,7 @@ impl Default for MainHub {
             buttons: [
                 RefCell::new(Button::new(Rect::default(), crate::assets::FRAME_PANEL).label("Roster")),
                 RefCell::new(Button::new(Rect::default(), crate::assets::FRAME_PANEL).label("Battle")),
+                RefCell::new(Button::new(Rect::default(), crate::assets::FRAME_PANEL).label("Settings")),
                 RefCell::new(Button::new(Rect::default(), crate::assets::FRAME_PANEL).label("Exit")),
             ],
             cursor_index: 0,
@@ -58,25 +61,27 @@ impl Default for MainHub {
 }
 
 impl MainHub {
+    /// First-run fade window (Decision 6) for the nav buttons: begins after
+    /// `title_logo::SWORD_DROP` seats (0.18) and ramps 0..1 across
+    /// `[BTN_FADE.start, BTN_FADE.end)`. Drives both the buttons' alpha
+    /// (`render`) and their input gate (`handle_input`/`buttons_interactive`).
+    const BTN_FADE: crate::scenes::title_logo::Beat =
+        crate::scenes::title_logo::Beat::new(0.30, 0.62);
+
     /// One menu button's size and the vertical gap between stacked buttons.
     const BUTTON_W: u16 = 20;
     const BUTTON_H: u16 = 3;
     const MENU_GAP: u16 = 1;
 
     /// Menu container size — width is a single button's width; height MUST
-    /// equal the stacked group's total height (3 buttons + 2 gaps) so
+    /// equal the stacked group's total height (4 buttons + 3 gaps) so
     /// `flex` fills the container exactly rather than leaving slack.
     const MENU_W: u16 = Self::BUTTON_W;
-    const MENU_H: u16 = 3 * Self::BUTTON_H + 2 * Self::MENU_GAP;
+    const MENU_H: u16 = 4 * Self::BUTTON_H + 3 * Self::MENU_GAP;
 
     /// Gap kept clear between the bottom of the menu (Exit) and the very
     /// bottom edge of the screen.
     const MENU_BOTTOM_MARGIN: u16 = 2;
-
-    /// Selection-cursor arrow size and the gap between it and its target
-    /// button.
-    const CURSOR_W: u16 = 2;
-    const CURSOR_GAP: u16 = 1;
 
     /// The procedural logo's own cell dims — `div_ceil` of
     /// `title_logo::compute_layout()`'s dot canvas (188×94 dots), matching
@@ -162,10 +167,10 @@ impl MainHub {
         flex(container, style, std::slice::from_ref(&child))[0].to_cell_rect()
     }
 
-    /// The 3 menu-button rects for `area`, top-to-bottom (index 0 Roster, 1
-    /// Battle, 2 Exit — labels/roles assigned by b5-t3, this fixes geometry
-    /// and order only).
-    fn button_rects(area: Rect) -> [Rect; 3] {
+    /// The 4 menu-button rects for `area`, top-to-bottom (index 0 Roster, 1
+    /// Battle, 2 Settings, 3 Exit — labels/roles assigned by b5-t3, this
+    /// fixes geometry and order only).
+    fn button_rects(area: Rect) -> [Rect; 4] {
         let container = Self::cell_rect_to_dots(Self::menu_container(area));
         let child = || FlexChild {
             // Column: closure returns (main=Y/height, cross=X/width) in dots.
@@ -175,7 +180,7 @@ impl MainHub {
             grow: 0.0,
             shrink: 0.0,
         };
-        let children = [child(), child(), child()];
+        let children = [child(), child(), child(), child()];
         let style = FlexStyle {
             direction: Direction::Column,
             justify_content: Justify::Start,
@@ -183,7 +188,12 @@ impl MainHub {
             gap: Self::MENU_GAP as i32 * 4,
         };
         let rects = flex(container, style, &children);
-        [rects[0].to_cell_rect(), rects[1].to_cell_rect(), rects[2].to_cell_rect()]
+        [
+            rects[0].to_cell_rect(),
+            rects[1].to_cell_rect(),
+            rects[2].to_cell_rect(),
+            rects[3].to_cell_rect(),
+        ]
     }
 
     /// Paint `crate::assets::FRAME_PANEL` stretched to fill `rect` exactly (same
@@ -215,33 +225,27 @@ impl MainHub {
         }
     }
 
-    /// Selection-cursor arrow's paint rect — a `CURSOR_W`-wide,
-    /// `CURSOR_GAP`-gapped band immediately left of `button`, spanning its
-    /// full height. `saturating_sub` guards left-edge underflow (practically
-    /// unreachable — the menu is centered well clear of the left edge).
-    fn cursor_rect(button: Rect) -> Rect {
-        Rect {
-            x: button.x.saturating_sub(Self::CURSOR_GAP + Self::CURSOR_W),
-            y: button.y,
-            width: Self::CURSOR_W,
-            height: button.height,
-        }
-    }
-
     /// Sole activation dispatch for a menu index (0 Roster, 1 Battle,
-    /// 2 Exit). Keyboard Enter (b5-t5) and mouse click (b5-t6) both route
-    /// here — never a duplicated match. Index is 0..=2 by construction;
-    /// other values are inert.
+    /// 2 Settings, 3 Exit). Keyboard Enter (b5-t5) and mouse click (b5-t6)
+    /// both route here — never a duplicated match. Index is 0..=3 by
+    /// construction; other values are inert.
     fn activate(&mut self, index: usize) -> Option<Transition> {
         match index {
             0 => Some(Transition { target: SceneId::RosterManager.into(), params: None }),
             1 => Some(Transition { target: SceneId::BattleViewer.into(), params: None }),
-            2 => {
+            2 => Some(Transition { target: SceneId::Settings.into(), params: None }),
+            3 => {
                 self.quit_requested = true;
                 None
             }
             _ => None,
         }
+    }
+
+    /// Whether the nav buttons are past the first-run fade and accept input
+    /// (Decision 6) — single guard `handle_input` checks before dispatch.
+    fn buttons_interactive(&self) -> bool {
+        self.elapsed >= Self::BTN_FADE.end
     }
 }
 
@@ -272,20 +276,29 @@ impl Scene for MainHub {
         let (grid, _dot_rect) = crate::scenes::title_logo::frame(self.elapsed);
         engine_render::draw_grid(buf, interior, &grid);
 
+        let fade = Self::BTN_FADE.progress(self.elapsed);
+        let alpha = (fade * 255.0).round() as u8;
+
         let rects = Self::button_rects(area);
-        for (button, rect) in self.buttons.iter().zip(rects) {
+        for (i, (button, rect)) in self.buttons.iter().zip(rects).enumerate() {
             let mut b = button.borrow_mut();
             b.set_rect(rect);
+            let base = if i == self.cursor_index {
+                crate::scenes::title_logo::WHITE_COLOR
+            } else {
+                crate::scenes::title_logo::GLOW_COLOR
+            };
+            let color = engine_core::color::Rgba { a: alpha, ..base };
+            b.set_active_style(Some(ActiveStyle { border: color, label: color }));
             b.render(buf);
         }
-
-        let cursor_rect = Self::cursor_rect(rects[self.cursor_index]);
-        let grid = engine_render::asset_cache::convert(crate::assets::ICON_ARROW_RIGHT, cursor_rect);
-        engine_render::draw_grid(buf, cursor_rect, &grid);
     }
 
     fn handle_input(&mut self, ev: InputEvent) -> Option<Transition> {
         use crossterm::event::{KeyCode, MouseEventKind};
+        if !self.buttons_interactive() {
+            return None;
+        }
         match ev {
             InputEvent::Key(key) => match key.code {
                 KeyCode::Up => {
@@ -343,3 +356,7 @@ impl Scene for MainHub {
 #[cfg(test)]
 #[path = "main_hub_tests.rs"]
 mod main_hub_tests;
+
+#[cfg(test)]
+#[path = "main_hub_fade_tests.rs"]
+mod main_hub_fade_tests;
