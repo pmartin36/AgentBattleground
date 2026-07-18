@@ -1,10 +1,11 @@
-# Menu Button Cleanup — Borders, Colors, Settings Button
+# Menu Button Cleanup — Borders, Colors, Settings Button, Intro Fade-in
 
 ## Purpose
-Three cleanups to the main hub's nav buttons: fix the errant border dots, add a
-**Settings** button + a (blank) Settings scene, and recolor the buttons to match
-the new title palette (`61-animated-title-logo`) — gold for inactive, white for
-the active/selected button.
+Polish to the main hub's nav buttons: fix the errant border dots, add a
+**Settings** button + a (blank) Settings scene, recolor the buttons to match the
+new title palette (`61-animated-title-logo`) — gold for inactive, white for the
+active/selected button — and, on the first-run title intro, **hide the buttons
+until the sword seats, then fade them in**.
 
 ## Scope
 - Fix the button border: eliminate the **4 missing dots at the corners** and the
@@ -15,6 +16,8 @@ the active/selected button.
   roster/post-battle home button), navigating back to the hub.
 - Recolor buttons: **inactive = gold, active/selected = white** (border + label),
   matched to the title.
+- On the **first-run title intro**, hide the nav buttons during the sword drop
+  and **fade them in** once the sword seats (coordinated with `61`'s animation).
 
 Out of scope:
 - Any real Settings content (model config etc. is `09-settings-model-config`);
@@ -105,16 +108,41 @@ Out of scope:
   `cursor_index` stays (it still drives which button is active/white and where
   Enter navigates); only the drawn arrow goes away.
 
+- **Decision 6 — Buttons hidden during the drop, then fade in.** During the
+  **first-run title intro** (`61-animated-title-logo`), the nav buttons are
+  **hidden while the sword falls** and **fade in** (opacity 0 → full) only after
+  the sword **seats** (61's sword-drop end, ~`0.18s`). The fade is its own
+  per-beat window `[BTN_FADE_START, BTN_FADE_END]` (default ~`0.30s`–`0.62s`,
+  tunable one-liners in the same spirit as 61's per-beat timing), read off the
+  hub's animation clock that `61` introduces. Implemented as an **alpha ramp** on
+  the button colors (border + label, `a`: 0 → 255) composited via `draw_grid`'s
+  translucent-glyph blending — not a color-lerp toward the backdrop, so it fades
+  cleanly over whatever is behind. Buttons are **non-interactive until the fade
+  completes** (no clicking an invisible button). On **non-first-run** hub entries
+  (where `61` shows the held still, no animation), buttons appear immediately at
+  full opacity — no fade. The Settings button (Decision 2) and the gold/white
+  colors (Decision 4) fade in with the rest.
+
+  Seam note: this depends on `61` having landed first — specifically the hub's
+  `elapsed` animation clock and the sword-seat time constant. `62` reads those;
+  it does not re-implement the title animation.
+
 ## Open Questions / TBDs
-- None outstanding — all four opens resolved (procedural border; active = keyboard
-  or hover; arrow dropped; palette reused from the title logo).
+- Border, active-state, arrow, and palette opens are all resolved (procedural
+  border; active = keyboard or hover; arrow dropped; palette reused from the
+  title logo).
+- **Fade window is a taste call** (Decision 6) — default `~0.30–0.62s` has the
+  buttons rising during BATTLES' ignite; pushing it later (after the sparkles) is
+  a one-line tune once we see it in the real hub.
 
 ## Dependencies
 - `completed/45-button-widget-unification` — the `Button` widget whose border and
   color logic this changes.
 - `completed/25-main-hub-navigation` / `02-main-hub-dashboard` — the hub nav this
   extends (Settings button + 4-button geometry).
-- `61-animated-title-logo` — the palette (gold/white) the buttons align to.
+- `61-animated-title-logo` — the palette (gold/white) the buttons align to, **and**
+  the hub animation clock + sword-seat time that Decision 6's button fade-in reads
+  from. **62 must build after 61 lands** (it consumes 61's hub animation state).
 - `completed/13-rendering` — the dot pipeline + `decode_braille_cell` the border
   fix is verified against.
 - `09-settings-model-config` — the real Settings content this blank shell is a
