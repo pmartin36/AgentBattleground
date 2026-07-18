@@ -84,6 +84,53 @@ pub fn rounded_rect(
     buf
 }
 
+/// A "railroad" frame border in `border`, hollow interior: a SINGLE-dot line
+/// across the top and bottom (inset 1 dot) and a DOUBLE line up each side
+/// (outer + inner rail), with softened corners and — unlike a stretched raster
+/// — no dots poking above/below the frame. This reproduces the culled look of
+/// the original `FRAME_PANEL` sprite border directly, dot-precise at any size.
+/// Falls back to a thin `rounded_rect` when too small to railroad.
+pub fn frame_border(cols: usize, rows: usize, border: Rgba) -> DotBuffer {
+    if cols < 6 || rows < 6 {
+        return rounded_rect(cols, rows, 1, 1, border, Dot::Transparent);
+    }
+    let mut buf = DotBuffer::new(cols, rows);
+    let lit = Dot::Lit(border);
+    // single-line top & bottom rails (inset 1 dot from the edge)
+    for x in 2..cols - 2 {
+        buf.set(x, 1, lit);
+        buf.set(x, rows - 2, lit);
+    }
+    // inner side rails (full height between the top/bottom rails)
+    for y in 1..rows - 1 {
+        buf.set(2, y, lit);
+        buf.set(cols - 3, y, lit);
+    }
+    // outer side rails (inset from the corners so the corner reads rounded)
+    for y in 3..rows - 3 {
+        buf.set(0, y, lit);
+        buf.set(cols - 1, y, lit);
+    }
+    // corner fill linking the outer rail up/down into the rounded corner
+    for &(x, y) in &[
+        (1, 2),
+        (3, 2),
+        (1, 3),
+        (cols - 2, 2),
+        (cols - 4, 2),
+        (cols - 2, 3),
+        (1, rows - 3),
+        (3, rows - 3),
+        (1, rows - 4),
+        (cols - 2, rows - 3),
+        (cols - 4, rows - 3),
+        (cols - 2, rows - 4),
+    ] {
+        buf.set(x, y, lit);
+    }
+    buf
+}
+
 /// A square-cornered rectangle panel — [`rounded_rect`] with no corner
 /// chamfer. Same `border`/`fill` semantics.
 pub fn rect(
