@@ -9,8 +9,6 @@ impl RosterManager {
     const ARROW_W: u16 = 4;
     const ARROW_H: u16 = 2;
 
-    /// Width/height of the top-right home button.
-    const HOME_W: u16 = 6;
     /// Horizontal blank-cell gap between each flanking arrow button and the
     /// dot-cluster group it flanks. The arrows are anchored to the actual
     /// centered dot cluster group (`dot_cluster_rects`), NOT the full-width
@@ -105,27 +103,7 @@ impl RosterManager {
     /// rather than being a separate render-only offset constant — the same
     /// tradeoff `arrow_dot_rects` already makes for the arrow buttons.
     pub(super) fn home_dot_rect(area: Rect) -> engine_render::DotRect {
-        let area_dots = Self::cell_rect_to_dots(area);
-        let home_w = Self::HOME_W as i32 * 2;
-        let home_h = Self::HOME_H as i32 * 4;
-        let edge = Self::EDGE_MARGIN as i32;
-        let inner = area_dots.inset(0, edge * 2, edge * 4 - 1, 0);
-        let x = engine_render::flex(
-            inner,
-            engine_render::FlexStyle {
-                direction: engine_render::Direction::Row,
-                justify_content: engine_render::Justify::End,
-                align_items: engine_render::Align::Start,
-                gap: 0,
-            },
-            &[engine_render::FlexChild {
-                basis: engine_render::Basis::Fixed(home_w),
-                grow: 0.0,
-                shrink: 0.0,
-            }],
-        )[0]
-        .x;
-        engine_render::DotRect { x, y: inner.y, w: home_w, h: home_h }
+        crate::scenes::home_button::home_dot_rect(area)
     }
 
     /// Cell-space view of `home_dot_rect`, for tests only. `render()` needs

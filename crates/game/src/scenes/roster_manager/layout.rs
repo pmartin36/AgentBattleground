@@ -137,7 +137,7 @@ impl RosterManager {
         let home_bottom = area
             .y
             .saturating_add(Self::EDGE_MARGIN)
-            .saturating_add(Self::HOME_H);
+            .saturating_add(crate::scenes::home_button::HOME_H);
         let details_top = home_bottom
             .saturating_add(Self::DETAILS_TOP_GAP)
             .min(dot_row.y);
@@ -201,7 +201,7 @@ impl RosterManager {
         let home_bottom = area
             .y
             .saturating_add(Self::EDGE_MARGIN)
-            .saturating_add(Self::HOME_H);
+            .saturating_add(crate::scenes::home_button::HOME_H);
         let details_top = home_bottom
             .saturating_add(Self::DETAILS_TOP_GAP)
             .min(dot_row.y);

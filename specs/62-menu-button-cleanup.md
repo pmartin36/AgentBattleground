@@ -135,6 +135,31 @@ Out of scope:
   buttons rising during BATTLES' ignite; pushing it later (after the sparkles) is
   a one-line tune once we see it in the real hub.
 
+## Implementation notes (decomposition constraints)
+These guide the task breakdown so the pipeline's file-size and reuse checks pass:
+
+- **Split `button_tests.rs` first.** `crates/engine/render/src/button_tests.rs`
+  is already ~1088 lines — over the 1000-line file-size budget — and Decisions 1
+  and 4 add border-decode and color/alpha test cases to the button suite. The
+  decomposition MUST include a **dedicated, behavior-preserving split of
+  `button_tests.rs`** (mechanically partitioned by concern — state machine /
+  hit-test / render+color — into sibling files, no assertion changes) as its
+  **own task in the first bucket**, with the new border/color/alpha test tasks
+  **depending on it**. New tests land in the post-split files, never back into an
+  over-budget one.
+
+- **Share the home-button geometry — do not duplicate.** The Settings scene's
+  home button (Decision 3) must reuse the roster's placement by **hoisting the
+  shared helper** (`home_dot_rect` / `home_rect`, currently private in
+  `roster_manager`) to a location both scenes call — not by copying the
+  constants. The two home buttons must stay aligned by construction; a duplicated
+  constant drifts the moment either side is retuned.
+
+- **Keep `main_hub_tests.rs` under budget.** It is ~775 lines and several tasks
+  add cases; removing the arrow-cursor test (Decision 5) frees room, but keep the
+  additions lean (split the file if it would cross 1000) so it does not silently
+  breach.
+
 ## Dependencies
 - `completed/45-button-widget-unification` — the `Button` widget whose border and
   color logic this changes.

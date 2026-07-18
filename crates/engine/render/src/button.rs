@@ -427,6 +427,28 @@ impl DerefMut for Button {
     }
 }
 
+// Test modules split from a single over-budget `button_tests.rs` (b1-t1)
+// into concern-partitioned sibling files, sharing `button_test_fixtures`.
 #[cfg(test)]
-#[path = "button_tests.rs"]
-mod button_tests;
+#[path = "button_test_fixtures.rs"]
+mod button_test_fixtures;
+
+#[cfg(test)]
+#[path = "button_state_tests.rs"]
+mod button_state_tests;
+
+#[cfg(test)]
+#[path = "button_icon_contrast_tests.rs"]
+mod button_icon_contrast_tests;
+
+#[cfg(test)]
+#[path = "button_frame_tests.rs"]
+mod button_frame_tests;
+
+#[cfg(test)]
+#[path = "button_glyph_mask_tests.rs"]
+mod button_glyph_mask_tests;
+
+#[cfg(test)]
+#[path = "button_unified_tests.rs"]
+mod button_unified_tests;

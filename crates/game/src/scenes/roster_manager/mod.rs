@@ -140,8 +140,6 @@ struct RosterLayout {
 }
 
 impl RosterManager {
-    const HOME_H: u16 = 3;
-
     /// Inset (in whole terminal cells) of the home/arrow buttons from the
     /// edges of `area` they anchor to (spec `Decisions (v1)`).
     const EDGE_MARGIN: u16 = 1;
