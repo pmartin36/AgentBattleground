@@ -1,8 +1,13 @@
+<img src="logo.svg" alt="" width="104" align="right">
+
 # Engine
 
 A game engine that runs in your terminal. Written in Rust. It draws sprites, animation, shadows,
 cameras, and UI as colored braille dots, so a terminal window behaves like a small graphics display
 instead of a text screen.
+
+The mark on the right is the engine drawing its own name: a lowercase `be` on a braille cell grid,
+same 2×4 dots per cell as everything else here.
 
 ![Left: the source animation in true color. Right: the same frames drawn by the engine as colored braille.](../../experiments/ascii_test/demo.gif)
 
