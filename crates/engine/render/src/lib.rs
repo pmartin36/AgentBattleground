@@ -1,12 +1,26 @@
 //! Render crate — terminal braille rendering.
 //!
-//! ⚠ M1 PLACEHOLDER. The only thing implemented here is a solid-color braille
-//! `fill` plus a centered `label` — just enough to make scene switching
-//! visible on screen. This is NOT the real renderer and NOT the rendering
-//! model to build on. The real braille image/sprite renderer (per-cell luma
-//! threshold, native alpha transparency, depth-sorted multi-sprite
-//! compositing, animation) is specified in `specs/13-rendering.md` and will
-//! replace `fill`/`label` in place. Do not extend the solid-fill approach.
+//! Every non-text visual goes through the dot pipeline: source art or a
+//! procedural shape becomes a [`dots::DotBuffer`] (1 dot = 1 sub-cell pixel,
+//! 2 dots wide × 4 dots tall per braille cell), buffers composite back to
+//! front, then [`dots::dots_to_grid`] folds each 2×4 block into one braille
+//! glyph and [`grid::draw_grid`] blits it. `draw_grid` is the only write into
+//! a `ratatui::Buffer` in the crate.
+//!
+//! Module map:
+//! - [`dots`], [`grid`], [`dot_diff`] — the dot/cell IRs and the dot-level
+//!   decoder tests assert against.
+//! - [`composite`], [`camera`], [`transform`] — world space, depth-sorted
+//!   compositing, per-sprite transforms.
+//! - [`flex`], [`screen_layout`] — dot-precision (`DotRect`) and cell-space
+//!   layout.
+//! - [`convert`], [`anim`], [`asset_cache`], [`shapes`], [`ui_primitives`] —
+//!   image conversion, GIF playback, caching, procedural chrome.
+//! - [`button`], [`text_editor`] — widgets.
+//!
+//! The free functions here ([`fill`], [`label`], [`wrapped_text`],
+//! [`draw_asset`]) are the flat conveniences on top. `label` and friends draw
+//! real terminal characters: text is the one thing that does not become dots.
 
 pub mod anim;
 pub mod asset_cache;
