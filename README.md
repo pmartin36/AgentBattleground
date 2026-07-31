@@ -38,6 +38,8 @@ Pieces evolve over time — upgraded after victories, growing more unique with e
 
 The workspace is two products: `crates/engine/` (`engine-core`, `engine-render`, `engine-derive`, `inspector`) is reusable by any future game and knows nothing about Agent Battleground specifically; `crates/game/` is this game's content (scenes, creature roster, skin assets, digit-hotkey policy) and is the only thing that depends on the engine crates, never the other way around. See `specs/completed/31-engine-game-crate-split.md` and `CLAUDE.md`'s "Engine / Game Boundary" section for the full rule.
 
+The engine has its own overview, with a demo of what it renders: [crates/engine/README.md](crates/engine/README.md).
+
 ## Specs
 
 High-level design specs for each segment of the game live in `/specs`:
