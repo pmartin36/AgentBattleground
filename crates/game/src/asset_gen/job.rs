@@ -51,6 +51,17 @@ pub struct JobHandle<T> {
     slot: Arc<JobSlot<T>>,
 }
 
+impl<T> JobHandle<T> {
+    /// Builds a handle that is already resolved to `status`, for a caller
+    /// whose result is known without going through the queue (a cache hit,
+    /// an import, or a gating failure like no GPU available).
+    pub fn resolved(status: JobStatus<T>) -> Self {
+        let slot = JobSlot::new();
+        slot.resolve(status);
+        JobHandle { slot: Arc::new(slot) }
+    }
+}
+
 impl<T: Clone> JobHandle<T> {
     /// Non-blocking snapshot of the job's current status.
     pub fn poll(&self) -> JobStatus<T> {

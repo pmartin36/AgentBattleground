@@ -26,7 +26,7 @@ pub struct RunOutput {
     pub stdout: String,
 }
 
-/// A terminal run failure.
+/// A terminal run OR gating failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JobError {
     /// Could not find or launch the sd-cli sibling binary.
@@ -37,6 +37,9 @@ pub enum JobError {
     Io(String),
     /// Aborted via `CancelFlag`; the scheduler surfaces this as `TimedOut`.
     Cancelled,
+    /// No GPU was available and the caller supplied no fallback (e.g. no
+    /// import path), so generation could not be attempted.
+    NoGpu,
 }
 
 /// A cooperative cancellation signal a `JobRunner` polls so a timed-out or
