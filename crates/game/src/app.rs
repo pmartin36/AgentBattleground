@@ -219,6 +219,12 @@ mod tests {
 
         for scene in scenes {
             let mut mgr = SceneManager::with_scene(scene, Box::new(GameCatalog));
+            // Settle any scene-entry intro animation (e.g. MainHub's first-run
+            // logo/button fade) so the frame under test renders its settled
+            // content rather than a transient blank/fading-in first frame.
+            mgr.update(Duration::from_secs_f32(
+                crate::scenes::title_logo::ANIM_END + 1.0,
+            ));
 
             let buf_before = render(&mgr);
 

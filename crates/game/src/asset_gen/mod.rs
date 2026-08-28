@@ -8,8 +8,10 @@ pub mod backend_image;
 pub mod bg_removal;
 pub mod cache;
 pub mod capability;
+pub mod compose;
 pub mod job;
 pub mod operations;
+pub mod preset;
 pub mod recipe;
 pub mod runner;
 pub mod types;
@@ -21,8 +23,10 @@ pub use bg_removal::{
 };
 pub use cache::AssetCache;
 pub use capability::{capability, GpuCapability};
+pub use compose::{AnimationSetHandle, ImageWithAnimations};
 pub use job::{JobHandle, JobQueue, JobStatus};
 pub use operations::{resolve_status, AssetError, AssetGen, DEFAULT_JOB_TIMEOUT};
+pub use preset::{CreatureSpec, CREATURE_FRAMING, DEFAULT_CREATURE_ACTIONS};
 pub use recipe::{RecipeBackend, SdCliInvocation};
 pub use runner::{CancelFlag, JobError, JobRunner, RunOutput, SdCliRunner, POLL_INTERVAL};
 pub use types::{
