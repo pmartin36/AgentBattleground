@@ -1,6 +1,6 @@
 # Hatchery Farm / Playpen (needs research)
 
-> **Status: parked pending research/decision.** `65-hatchery`'s roster-full "Add to Roster" case discards the bumped creature as a stopgap for now; this is its planned future replacement, not a current build blocker. The owner has opinions on this but wants it decided as its own pass, not folded into the Hatchery spec. Don't run this through the TDD pipeline as-is.
+> **Status: parked pending research/decision.** `68-hatchery-hatch-sequence`'s roster-full "Add to Roster" case discards the bumped creature as a stopgap for now; this is its planned future replacement, not a current build blocker. The owner has opinions on this but wants it decided as its own pass, not folded into the Hatchery spec. Don't run this through the TDD pipeline as-is.
 
 ## Purpose
 A holding area for hatched creatures that aren't added to the active roster, so hatching doesn't have to discard a creature outright — explicitly not framed as a "kill" action anywhere in the UI, once built.
@@ -14,4 +14,4 @@ A holding area for hatched creatures that aren't added to the active roster, so 
 - Does moving a roster creature here affect its state (in-progress cooldowns, etc.)?
 
 ## Dependencies
-- Referenced by `65-hatchery`'s roster-full "Add to Roster" flow as its future replacement for the current discard stopgap.
+- Referenced by `68-hatchery-hatch-sequence`'s roster-full "Add to Roster" flow as its future replacement for the current discard stopgap.

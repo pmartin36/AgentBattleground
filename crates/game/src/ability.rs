@@ -6,9 +6,10 @@
 //! `StatKind` themselves, so `StatKind` stays the single source of truth.
 
 use crate::stats::{StatKind, Stats};
+use serde::{Deserialize, Serialize};
 
 /// A stat threshold a `Modifier` may require to unlock.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatRequirement {
     pub stat: StatKind,
     pub threshold: u32,
@@ -23,7 +24,7 @@ impl StatRequirement {
 }
 
 /// A single modifier: a name plus an optional gating `StatRequirement`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Modifier {
     pub name: String,
     pub requires: Option<StatRequirement>,
@@ -43,7 +44,7 @@ pub const MAX_MODIFIERS: usize = 4;
 /// A single ability: a description plus up to `MAX_MODIFIERS` modifier tags.
 /// Fields are private — the `modifiers.len() <= MAX_MODIFIERS` invariant is
 /// only guaranteed via `Ability::new`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ability {
     description: String,
     modifiers: Vec<Modifier>,
@@ -163,7 +164,7 @@ impl Ability {
 
 /// The elemental affinity of an ability. `label()` is the single source of
 /// display text — callers must never re-match on the variant themselves.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Element {
     Normal,
     Fire,
@@ -186,7 +187,7 @@ impl Element {
 
 /// Whether an ability attacks, buffs, or debuffs. `label()` is the single
 /// source of display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AbilityType {
     Attack,
     Buff,
@@ -205,7 +206,7 @@ impl AbilityType {
 
 /// Physical vs. magic damage. `label()` is the single source of display
 /// text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DamageClass {
     Physical,
     Magic,
@@ -224,7 +225,7 @@ impl DamageClass {
 /// source of display text — callers must never re-match on the variant.
 /// Kind only; the applied-with-duration instance is spec 10's (reserved
 /// name `StatusEffect`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StatusKind {
     Burn,
     Frozen,
@@ -385,5 +386,45 @@ mod tests {
         assert_eq!(ability.range(), None);
         assert!(ability.status_effects().is_empty());
         assert_eq!(ability.flavor(), None);
+    }
+
+    #[test]
+    fn ability_json_round_trip_preserves_every_populated_field() {
+        let ability = Ability::new(
+            "Roar",
+            vec![Modifier {
+                name: "Gated".to_string(),
+                requires: Some(StatRequirement { stat: StatKind::Strength, threshold: 30 }),
+            }],
+        )
+        .with_ability_type(AbilityType::Debuff)
+        .with_element(Element::Lightning)
+        .with_class(DamageClass::Magic)
+        .with_cost(3)
+        .with_damage(42)
+        .with_range(5)
+        .with_status_effects(vec![StatusKind::Shocked])
+        .with_flavor("A crackling roar.");
+
+        let json = serde_json::to_string(&ability).expect("serialize");
+        let decoded: Ability = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(ability, decoded);
+    }
+
+    #[test]
+    fn element_json_round_trips_by_variant_name_for_every_variant() {
+        let variants = [
+            (Element::Normal, "Normal"),
+            (Element::Fire, "Fire"),
+            (Element::Ice, "Ice"),
+            (Element::Earth, "Earth"),
+            (Element::Lightning, "Lightning"),
+        ];
+        for (variant, label) in variants {
+            let json = serde_json::to_string(&variant).expect("serialize");
+            assert_eq!(json, format!("\"{label}\""));
+            let decoded: Element = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(decoded, variant);
+        }
     }
 }

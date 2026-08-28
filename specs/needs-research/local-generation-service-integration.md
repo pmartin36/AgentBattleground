@@ -4,7 +4,7 @@
 > `stable-diffusion.cpp` (no Python), so there is no runtime or packaging blocker. The one remaining
 > pre-ship item is whether the model weights may be bundled and redistributed inside a shipped game.
 > This gates shipping `64` and anything depending on it for a player-facing capability (e.g.
-> `65-hatchery`); it does not gate continued development.
+> the hatchery, `67`/`68`); it does not gate continued development.
 
 ## The decision
 May the animation stack's weights be bundled/redistributed in a distributed build (free or commercial)?
@@ -31,4 +31,4 @@ is not permitted under the current license.
 - No-GPU fallback and cross-platform/cross-hardware validation are tracked in `64` itself, not here.
 
 ## Dependencies
-- Gates shipping (not development) of `64-creature-animation-pipeline` and dependents (`65-hatchery`).
+- Gates shipping (not development) of `66-asset-generation-api` and dependents (the hatchery, `67`/`68`).

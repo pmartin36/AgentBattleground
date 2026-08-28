@@ -81,7 +81,7 @@ A required step of the image path and of preparing a still for animation. Z-Imag
 `crates/game/`. This API, its lifecycle, its cache, and its generation are specific to Agent Battleground, not engine-level. It drives the native `sd-cli` subprocess via the sibling-binary pattern the game already uses for the inspector.
 
 ## Consumers
-`65-hatchery` (egg still + hatch/attack animation), the battle viewer (`05`, attack/movement animations), roster and detail views (stills), the debug inspector (`19`), and onboarding (`01`, first-run generation). All call this API rather than invoking generation directly.
+the hatchery (`67` egg/creature art, `68` hatch/attack animation), the battle viewer (`05`, attack/movement animations), roster and detail views (stills), the debug inspector (`19`), and onboarding (`01`, first-run generation). All call this API rather than invoking generation directly.
 
 ## Open Questions / TBDs
 - Background-removal method — see `needs-research/creature-background-removal.md`.
@@ -93,4 +93,4 @@ A required step of the image path and of preparing a still for animation. Z-Imag
 - Background-removal method: `needs-research/creature-background-removal.md`.
 - Feeds `13-rendering` — produces the assets its player and sprite path consume.
 - `12-data-model-sync` — how the returned asset handles are stored and referenced.
-- Called by `65-hatchery`, the battle viewer, roster/detail, the inspector, and onboarding.
+- Called by the hatchery (`67`, `68`), the battle viewer, roster/detail, the inspector, and onboarding.

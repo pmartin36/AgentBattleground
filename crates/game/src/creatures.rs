@@ -46,6 +46,7 @@ pub struct Creature {
     xp: u32,
     abilities: Vec<Ability>,
     stamina: Stamina,
+    element: Element,
 }
 
 impl Creature {
@@ -61,6 +62,7 @@ impl Creature {
             xp: 0,
             abilities: Vec::new(),
             stamina: Stamina::default(),
+            element: Element::Normal,
         }
     }
 
@@ -134,6 +136,18 @@ impl Creature {
 
     pub fn stamina(&self) -> &Stamina {
         &self.stamina
+    }
+
+    /// Set this creature's `Element` and return self (builder style).
+    pub fn with_element(mut self, element: Element) -> Self {
+        self.element = element;
+        self
+    }
+
+    /// The creature's elemental affinity (`Element::Normal` for a fresh
+    /// `Creature::new`).
+    pub fn element(&self) -> Element {
+        self.element
     }
 }
 
@@ -237,7 +251,8 @@ pub fn demo_roster() -> Vec<Creature> {
             ],
         )
         .with_xp(65)
-        .with_stamina(Stamina::new(48, 60)),
+        .with_stamina(Stamina::new(48, 60))
+        .with_element(Element::Fire),
         entry(
             frost_lizard(),
             Stats { strength: 14, dexterity: 18, intelligence: 26, vitality: 22 },
@@ -258,7 +273,8 @@ pub fn demo_roster() -> Vec<Creature> {
             ],
         )
         .with_xp(30)
-        .with_stamina(Stamina::new(18, 40)),
+        .with_stamina(Stamina::new(18, 40))
+        .with_element(Element::Ice),
         entry(
             stone_golem(),
             Stats { strength: 22, dexterity: 8, intelligence: 10, vitality: 34 },
@@ -279,7 +295,8 @@ pub fn demo_roster() -> Vec<Creature> {
             ],
         )
         .with_xp(90)
-        .with_stamina(Stamina::new(57, STAMINA_MAX_CAP - 5)),
+        .with_stamina(Stamina::new(57, STAMINA_MAX_CAP - 5))
+        .with_element(Element::Earth),
         entry(
             storm_hawk(),
             Stats { strength: 12, dexterity: 32, intelligence: 24, vitality: 12 },
@@ -305,7 +322,8 @@ pub fn demo_roster() -> Vec<Creature> {
             ],
         )
         .with_xp(15)
-        .with_stamina(Stamina::new(3, 30)),
+        .with_stamina(Stamina::new(3, 30))
+        .with_element(Element::Lightning),
         entry(
             verdant_treant(),
             Stats { strength: 20, dexterity: 10, intelligence: 22, vitality: 30 },
@@ -337,7 +355,8 @@ pub fn demo_roster() -> Vec<Creature> {
                     .with_flavor("Knits wounds shut with rapid new growth."),
             ],
         )
-        .with_stamina(Stamina::new(60, 80)),
+        .with_stamina(Stamina::new(60, 80))
+        .with_element(Element::Earth),
         entry(
             shadow_cat(),
             Stats { strength: 16, dexterity: 34, intelligence: 18, vitality: 12 },
@@ -358,7 +377,8 @@ pub fn demo_roster() -> Vec<Creature> {
                     .with_flavor("Slips out of sight, evading the next attack."),
             ],
         )
-        .with_stamina(Stamina::new(18, 45)),
+        .with_stamina(Stamina::new(18, 45))
+        .with_element(Element::Normal),
     ]
 }
 
@@ -767,6 +787,34 @@ mod tests {
         assert_eq!(
             crossings, 2,
             "expected exactly two of the first four columns to cross XP_TO_NEXT_LEVEL, got {crossings} (xps={xps:?})"
+        );
+    }
+
+    /// A freshly constructed `Creature` defaults to `Element::Normal`.
+    #[test]
+    fn new_creature_element_defaults_to_normal() {
+        let c = Creature::new("Test");
+        assert_eq!(c.element(), Element::Normal);
+    }
+
+    /// `with_element` round-trips through `element()`.
+    #[test]
+    fn with_element_round_trips() {
+        let c = Creature::new("Test").with_element(Element::Fire);
+        assert_eq!(c.element(), Element::Fire);
+    }
+
+    /// `demo_roster()` assigns at least two distinct `Element`s across its
+    /// entries — the type information a hatched egg maps onto downstream.
+    /// Compares via `label()` (a `&'static str`) rather than `Element`
+    /// itself, since `Element` is not required to derive `Hash`.
+    #[test]
+    fn demo_roster_has_at_least_two_distinct_elements() {
+        let roster = demo_roster();
+        let distinct: HashSet<&str> = roster.iter().map(|c| c.element().label()).collect();
+        assert!(
+            distinct.len() >= 2,
+            "expected demo_roster() to span >= 2 distinct elements, got {distinct:?}"
         );
     }
 }

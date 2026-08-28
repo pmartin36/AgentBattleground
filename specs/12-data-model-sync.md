@@ -13,6 +13,7 @@ Defines what data exists, where it lives, and how it moves between client and se
 ## Key Details
 
 ### Local Data (Player's Machine)
+The on-disk *persistence* of this data — the tamper-resistant save file, load/save, and the serializable roster/egg schema — is carved out into `69-player-data-store`. This section defines *what* local data exists; `69` defines *how* it is stored.
 - **Player profile**: username, account credentials (token), model config
 - **Army**: 6 pieces, each with name, visual definition, skill files, upgrade history, and — per `34-creature-attributes-data-model` — stats (STR/DEX/INT/VIT), level, up to 4 abilities (each with up to 4 modifier tags), a stamina/injury state, and its active/bench/reserve squad position (purely positional in the roster ordering, not a separate stored field)
 - **Skill files**: human-readable files on disk, one per piece (or set per piece — TBD)

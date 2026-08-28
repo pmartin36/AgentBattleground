@@ -4,8 +4,10 @@
 //! — and, downstream, by `StatRequirement` (ability gating). There must never
 //! be a second, independently-hardcoded stat list.
 
+use serde::{Deserialize, Serialize};
+
 /// One of the 4 stats every `Stats` tracks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum StatKind {
     Strength,
     Dexterity,
@@ -25,7 +27,7 @@ impl StatKind {
 }
 
 /// A creature's 4 core stats.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Stats {
     pub strength: u32,
     pub dexterity: u32,
@@ -68,5 +70,13 @@ mod tests {
             let expected = named.iter().find(|(k, _)| *k == kind).unwrap().1;
             assert_eq!(stats.value(kind), expected, "{kind:?} diverged from its named field");
         }
+    }
+
+    #[test]
+    fn stats_json_round_trip_preserves_every_field() {
+        let stats = Stats { strength: 11, dexterity: 22, intelligence: 33, vitality: 44 };
+        let json = serde_json::to_string(&stats).expect("serialize");
+        let decoded: Stats = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(stats, decoded);
     }
 }

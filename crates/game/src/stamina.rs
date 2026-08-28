@@ -4,6 +4,7 @@
 //! transitions are pure. No live combat trigger this round — exercised only
 //! by unit tests (see spec `34-creature-attributes-data-model.md`).
 
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// The `percent()` ceiling.
@@ -18,7 +19,7 @@ pub const STAMINA_MAX_CAP: u16 = 100;
 /// 24h, chosen to echo the "one battle per day" pacing. Not balanced design.
 pub const RECOVERY_DURATION: Duration = Duration::from_secs(24 * 60 * 60);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Stamina {
     current: u16,
     // TODO: replace with a prop derived from STR rather than a stored field.
@@ -217,5 +218,22 @@ mod tests {
         let s = Stamina::default().drain_from_damage(100).drain_from_damage(10);
         assert_eq!(s.current(), 0);
         assert!(s.is_injured());
+    }
+
+    #[test]
+    fn stamina_json_round_trips_rested() {
+        let rested = Stamina::new(30, 60);
+        let json = serde_json::to_string(&rested).expect("serialize");
+        let decoded: Stamina = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(rested, decoded);
+    }
+
+    #[test]
+    fn stamina_json_round_trips_injured() {
+        let injured = Stamina::new(0, 40);
+        assert!(injured.injured_until().is_some());
+        let json = serde_json::to_string(&injured).expect("serialize");
+        let decoded: Stamina = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(injured, decoded);
     }
 }
