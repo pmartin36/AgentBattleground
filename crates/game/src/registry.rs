@@ -13,7 +13,9 @@ pub fn construct(id: SceneId) -> Box<dyn Scene> {
     match id {
         SceneId::MainHub => Box::new(MainHub::default()),
         SceneId::BattleViewer => Box::new(BattleViewer::default()),
-        SceneId::RosterManager => Box::new(RosterManager::new()),
+        SceneId::RosterManager => {
+            Box::new(RosterManager::from_store(crate::player_data::PlayerStore::resolve()))
+        }
         SceneId::Leaderboard => Box::new(Leaderboard),
         SceneId::PostBattle => Box::new(PostBattle::new()),
         SceneId::Settings => Box::new(Settings::default()),
@@ -91,6 +93,18 @@ impl SceneCatalog for GameCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static HERMETIC_DIR_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    /// Unique per-test temp dir (pid + monotonic counter) for tests that
+    /// construct `RosterManager` through the real store-resolving path and
+    /// must not seed-write `player_data.bin` into the workspace root.
+    fn hermetic_data_dir(tag: &str) -> PathBuf {
+        let n = HERMETIC_DIR_COUNTER.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!("game-registry-hermetic-test-{}-{}-{}", std::process::id(), tag, n))
+    }
 
     #[test]
     fn construct_main_hub_id_roundtrip() {
@@ -106,8 +120,12 @@ mod tests {
 
     #[test]
     fn construct_roster_manager_id_roundtrip() {
-        let scene = construct(SceneId::RosterManager);
-        assert_eq!(scene.id(), SceneId::RosterManager.into());
+        let dir = hermetic_data_dir("construct-roundtrip");
+        crate::player_data::store::with_data_dir(&dir, || {
+            let scene = construct(SceneId::RosterManager);
+            assert_eq!(scene.id(), SceneId::RosterManager.into());
+        });
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -223,15 +241,19 @@ mod tests {
         let prev_hook = panic::take_hook();
         panic::set_hook(Box::new(|_| {}));
 
-        for &id in SceneId::all() {
-            let result = panic::catch_unwind(AssertUnwindSafe(|| construct(id)));
-            assert_eq!(
-                result.is_ok(),
-                is_implemented(id),
-                "is_implemented({:?}) disagrees with construct's panic behavior",
-                id
-            );
-        }
+        let dir = hermetic_data_dir("construct-panic-behavior");
+        crate::player_data::store::with_data_dir(&dir, || {
+            for &id in SceneId::all() {
+                let result = panic::catch_unwind(AssertUnwindSafe(|| construct(id)));
+                assert_eq!(
+                    result.is_ok(),
+                    is_implemented(id),
+                    "is_implemented({:?}) disagrees with construct's panic behavior",
+                    id
+                );
+            }
+        });
+        let _ = std::fs::remove_dir_all(&dir);
 
         panic::set_hook(prev_hook);
     }
@@ -265,18 +287,22 @@ mod tests {
     #[test]
     fn game_catalog_construct_roundtrips_id() {
         let catalog = GameCatalog;
-        for &id in &[
-            SceneId::MainHub,
-            SceneId::BattleViewer,
-            SceneId::RosterManager,
-            SceneId::Leaderboard,
-            SceneId::PostBattle,
-            SceneId::Settings,
-        ] {
-            let key: SceneKey = id.into();
-            let scene = catalog.construct(&key);
-            assert_eq!(scene.id(), id.into(), "construct({:?}) returned wrong scene id", id);
-        }
+        let dir = hermetic_data_dir("game-catalog-construct-roundtrip");
+        crate::player_data::store::with_data_dir(&dir, || {
+            for &id in &[
+                SceneId::MainHub,
+                SceneId::BattleViewer,
+                SceneId::RosterManager,
+                SceneId::Leaderboard,
+                SceneId::PostBattle,
+                SceneId::Settings,
+            ] {
+                let key: SceneKey = id.into();
+                let scene = catalog.construct(&key);
+                assert_eq!(scene.id(), id.into(), "construct({:?}) returned wrong scene id", id);
+            }
+        });
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -367,6 +393,37 @@ mod tests {
                 SceneId::Settings,
             ]
         );
+    }
+
+    // ------------------------------------------------------------ store-backed RosterManager
+
+    /// `construct(RosterManager)` is the production factory that wires the
+    /// real/env-resolved player-data store. Under an isolated
+    /// `AGENTBATTLEGROUND_DATA_DIR` override it must write its save file
+    /// inside that temp dir, not skip persistence entirely — the 17
+    /// `RosterManager::new()` test call sites stay unaffected since only
+    /// `construct` (registry.rs) goes through the store.
+    #[test]
+    fn construct_roster_manager_persists_under_the_overridden_data_dir() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static TMP_COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = TMP_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "game-registry-roster-hermetic-test-{}-{}",
+            std::process::id(),
+            n
+        ));
+
+        crate::player_data::store::with_data_dir(&dir, || {
+            let scene = construct(SceneId::RosterManager);
+            assert_eq!(scene.id(), SceneId::RosterManager.into());
+            assert!(
+                dir.join(crate::player_data::store::SAVE_FILE_NAME).exists(),
+                "constructing the production RosterManager must write its save file under the overridden data dir"
+            );
+        });
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

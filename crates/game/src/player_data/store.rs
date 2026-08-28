@@ -182,7 +182,6 @@ mod tests {
     use crate::ability::Element;
     use crate::player_data::schema::{Egg, EggState};
     use std::sync::atomic::{AtomicU32, Ordering};
-    use std::sync::Mutex;
 
     static TMP_COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -316,8 +315,34 @@ mod tests {
         assert!(!store.backup_path().exists(), "load must not write the backup file");
     }
 
-    // Serializes tests that touch the process-global AGENTBATTLEGROUND_DATA_DIR
-    // env var; no other test in the crate reads this var.
+    /// `PlayerStore::resolve()` honors `AGENTBATTLEGROUND_DATA_DIR`: a
+    /// save/load round trip through it lands under that directory.
+    #[test]
+    fn resolve_honors_data_dir_env_override() {
+        let dir = temp_store_dir("env-override");
+        with_data_dir(&dir, || {
+            let store = PlayerStore::resolve();
+            let data = sample_data("env-v1");
+            store.save(&data).expect("save should succeed");
+            let loaded = store.load(|| sample_data("seed-should-not-be-used"));
+
+            assert_eq!(store.main_path(), dir.join(SAVE_FILE_NAME));
+            assert!(matches!(loaded, Loaded::Main(_)));
+            assert_eq!(loaded.into_data(), data);
+        });
+    }
+}
+
+#[cfg(test)]
+mod env_guard {
+    use std::path::Path;
+    use std::sync::Mutex;
+
+    // Serializes every test in the game crate that touches the
+    // process-global AGENTBATTLEGROUND_DATA_DIR env var — `PlayerStore::resolve()`
+    // and `registry::construct` are the only two readers of
+    // `base_data_dir(None)` in the test binary, and the env var is
+    // process-wide, so they must share this one lock or race.
     static ENV_GUARD: Mutex<()> = Mutex::new(());
 
     /// Unsets `AGENTBATTLEGROUND_DATA_DIR` on drop, including on panic
@@ -330,22 +355,16 @@ mod tests {
         }
     }
 
-    /// `PlayerStore::resolve()` honors `AGENTBATTLEGROUND_DATA_DIR`: a
-    /// save/load round trip through it lands under that directory.
-    #[test]
-    fn resolve_honors_data_dir_env_override() {
+    /// Runs `f` with `AGENTBATTLEGROUND_DATA_DIR` overridden to `dir`,
+    /// holding the crate-wide env-var test lock for the duration and
+    /// restoring the environment afterward (even on panic).
+    pub(crate) fn with_data_dir<R>(dir: &Path, f: impl FnOnce() -> R) -> R {
         let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = temp_store_dir("env-override");
-        std::env::set_var("AGENTBATTLEGROUND_DATA_DIR", &dir);
+        std::env::set_var("AGENTBATTLEGROUND_DATA_DIR", dir);
         let _env_guard = EnvVarGuard;
-
-        let store = PlayerStore::resolve();
-        let data = sample_data("env-v1");
-        store.save(&data).expect("save should succeed");
-        let loaded = store.load(|| sample_data("seed-should-not-be-used"));
-
-        assert_eq!(store.main_path(), dir.join(SAVE_FILE_NAME));
-        assert!(matches!(loaded, Loaded::Main(_)));
-        assert_eq!(loaded.into_data(), data);
+        f()
     }
 }
+
+#[cfg(test)]
+pub(crate) use env_guard::with_data_dir;

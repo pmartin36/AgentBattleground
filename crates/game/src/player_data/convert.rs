@@ -26,18 +26,26 @@ pub fn creature_to_persisted(creature: &Creature) -> PersistedCreature {
     )
 }
 
+/// Overlays a `PersistedCreature`'s RPG fields and art handles onto `base`,
+/// returning the updated creature. The single builder chain shared by
+/// `creature_from_persisted` and roster hydration's bundled-sprite overlay
+/// (which starts from a bundled `Creature`, not `Creature::new`, so the
+/// bundled sprite is moved rather than discarded).
+pub fn apply_persisted_rpg(base: Creature, p: &PersistedCreature) -> Creature {
+    base.with_stats(p.stats)
+        .with_level(p.level)
+        .with_xp(p.xp)
+        .with_abilities(p.abilities.clone())
+        .with_stamina(p.stamina)
+        .with_element(p.element)
+        .with_art_handles(p.still.clone(), p.idle.clone(), p.attack.clone())
+}
+
 /// Builds a runtime `Creature` from a `PersistedCreature`: restores the RPG
 /// data and the three art handles, and — when an idle handle is present —
 /// decodes its frames into an `AnimationKind::Idle` sprite.
 pub fn creature_from_persisted(persisted: &PersistedCreature) -> Creature {
-    let mut creature = Creature::new(persisted.name.clone())
-        .with_stats(persisted.stats)
-        .with_level(persisted.level)
-        .with_xp(persisted.xp)
-        .with_abilities(persisted.abilities.clone())
-        .with_stamina(persisted.stamina)
-        .with_element(persisted.element)
-        .with_art_handles(persisted.still.clone(), persisted.idle.clone(), persisted.attack.clone());
+    let mut creature = apply_persisted_rpg(Creature::new(persisted.name.clone()), persisted);
 
     if let Some(idle) = &persisted.idle {
         if let Some(sprite) = resolve_clip(idle) {

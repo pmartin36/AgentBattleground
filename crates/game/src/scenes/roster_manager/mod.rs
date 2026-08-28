@@ -111,6 +111,16 @@ pub struct RosterManager {
     /// `handle_input(&mut self, ..)`, so a plain field.
     #[inspect(hidden)]
     hovered_badge: bool,
+    /// The store this scene persists roster/egg mutations through.
+    /// `None` for `new()`/`new_with_instructions_base` (store-less,
+    /// hermetic construction used by every non-store test); `Some` only
+    /// for a scene built via `from_store`/`from_store_in`.
+    #[inspect(hidden)]
+    store: Option<crate::player_data::PlayerStore>,
+    /// The loaded egg list, carried alongside `creatures` so a roster save
+    /// never drops it. Empty for store-less construction.
+    #[inspect(hidden)]
+    eggs: Vec<crate::player_data::Egg>,
 }
 
 /// Transient bookkeeping for an in-flight slide transition: the group that is
@@ -241,6 +251,8 @@ impl RosterManager {
             lint_runs: 0,
             badge_hit_rect: RefCell::new(None),
             hovered_badge: false,
+            store: None,
+            eggs: Vec::new(),
         };
         scene.reload_instructions();
         scene
@@ -251,6 +263,102 @@ impl RosterManager {
     #[cfg(test)]
     fn new_with_instructions_base(base: PathBuf) -> Self {
         Self::build(Some(base))
+    }
+
+    /// Store-backed construction used by the production scene factory
+    /// (`registry::construct`): loads `PlayerData` from `store` (walking
+    /// main -> .bak -> a first-run seed built from `demo_roster()`),
+    /// writes the seed on first run, hydrates the persisted roster back
+    /// into runtime `Creature`s (re-attaching bundled sprites by name),
+    /// and carries `store`/the loaded eggs so subsequent mutations persist.
+    pub fn from_store(store: crate::player_data::PlayerStore) -> Self {
+        Self::from_store_in(store, None)
+    }
+
+    /// `from_store` with an injectable instructions-cache base dir, so
+    /// tests never touch the runtime instructions resolver. Loads
+    /// `PlayerData` from `store` (walking main -> .bak -> a first-run seed
+    /// built from `demo_roster()`), writes the seed back on first run,
+    /// hydrates the persisted roster into runtime `Creature`s, and carries
+    /// `store`/the loaded eggs so `persist()` can save future mutations.
+    fn from_store_in(
+        store: crate::player_data::PlayerStore,
+        instructions_base: Option<PathBuf>,
+    ) -> Self {
+        let loaded = store.load(Self::seed_player_data);
+        let seeded = matches!(loaded, crate::player_data::Loaded::Seeded(_));
+        let data = loaded.into_data();
+        if seeded {
+            if let Err(e) = store.save(&data) {
+                tracing::warn!("player-data save failed: {e}");
+            }
+        }
+        let creatures = Self::hydrate_roster(&data.roster);
+
+        let mut scene = Self::build(instructions_base);
+        scene.creatures = creatures;
+        scene.eggs = data.eggs;
+        scene.store = Some(store);
+        scene.current_index = 0;
+        scene.reload_instructions();
+        scene
+    }
+
+    /// First-run seed: `demo_roster()` in persisted form (no art handles —
+    /// `hydrate_roster` re-attaches the matching bundled sprite by name).
+    fn seed_player_data() -> crate::player_data::PlayerData {
+        crate::player_data::PlayerData {
+            roster: crate::creatures::demo_roster()
+                .iter()
+                .map(crate::player_data::creature_to_persisted)
+                .collect(),
+            eggs: Vec::new(),
+        }
+    }
+
+    /// Converts a persisted roster into runtime `Creature`s, re-attaching
+    /// each bundled creature's decoded sprite BY NAME rather than resolving
+    /// a handle from disk. `AnimatedSprite` is not `Clone`, so a bundled
+    /// sprite must be moved out of a fresh `crate::creatures::all()`
+    /// instance, not cloned onto a `creature_from_persisted` result — this
+    /// is why hydration starts from the bundled `Creature`, not the
+    /// persisted RPG data. A generated creature (one that already carries an
+    /// idle handle) or a name with no bundled match resolves normally via
+    /// `creature_from_persisted`.
+    fn hydrate_roster(
+        persisted: &[crate::player_data::PersistedCreature],
+    ) -> Vec<crate::creatures::Creature> {
+        let mut bundled: std::collections::HashMap<String, crate::creatures::Creature> =
+            crate::creatures::all()
+                .into_iter()
+                .map(|c| (c.name().to_string(), c))
+                .collect();
+
+        persisted
+            .iter()
+            .map(|p| match bundled.remove(&p.name) {
+                Some(base) if p.idle.is_none() => {
+                    crate::player_data::apply_persisted_rpg(base, p)
+                }
+                _ => crate::player_data::creature_from_persisted(p),
+            })
+            .collect()
+    }
+
+    /// Re-serializes the current roster and eggs and writes them through
+    /// `store` — the single save site every roster-content mutation must
+    /// call through. A no-op for a store-less scene (`new()` /
+    /// `new_with_instructions_base`).
+    fn persist(&self) {
+        if let Some(store) = &self.store {
+            let data = crate::player_data::PlayerData {
+                roster: self.creatures.iter().map(crate::player_data::creature_to_persisted).collect(),
+                eggs: self.eggs.clone(),
+            };
+            if let Err(e) = store.save(&data) {
+                tracing::warn!("player-data save failed: {e}");
+            }
+        }
     }
 
     /// Reloads `current_instructions` from disk for the CURRENT creature
@@ -311,6 +419,7 @@ impl RosterManager {
                 self.creatures.swap(sel, self.current_index);
                 self.selected_index = None;
                 self.reload_instructions();
+                self.persist();
             }
         }
     }
@@ -609,3 +718,5 @@ mod prompt_editor_modal_tests;
 mod diagnostics_ui_tests;
 #[cfg(test)]
 mod diagnostics_integration_tests;
+#[cfg(test)]
+mod store_backed_tests;
