@@ -37,3 +37,24 @@
   MainHub's frame-0 render legitimately shows no text and the guard must be relaxed. Determine which
   before touching either; it is a test-side stale-assumption in shape (the deliverable it guards,
   the global debug-grid overlay, still works for Leaderboard).
+
+## Load resolves only the idle clip into a sprite; still/attack handles stay unresolved
+
+- Found by: feature player-data-store, task b2-t2 (validator).
+- Severity: low.
+- Owner: unassigned. No planned task in player-data-store owns it; needs its own task once the
+  runtime animation model grows the missing slots.
+- Observation: spec 69 (specs/69-player-data-store.md:39) says load "resolves the handles back into
+  sprites (still image, idle clip, attack clip)" for all three handles. The runtime animation model
+  exposes exactly one `AnimationKind` (`Idle`, crates/game/src/creatures.rs:21) and no "still" slot;
+  its only consumers read `AnimationKind::Idle` (battle_viewer/mod.rs:139, sizing.rs:310,
+  post_battle/columns.rs:170, roster_manager/sprite_name.rs:73). `creature_from_persisted`
+  (crates/game/src/player_data/convert.rs:32) therefore resolves ONLY the idle `ClipAsset` into an
+  Idle sprite and preserves `still`/`attack` losslessly as handles on the runtime `Creature`
+  (round-trip intact) without decoding them.
+- Does NOT relax b2-t2's DELIVERABLE: the deliverable's "resolved sprites match handle-referenced
+  frames" clause is met via the idle clip (verified: idle_clip_resolves_into_matching_sprite asserts
+  frame count + first-frame red-pixel decode).
+- Fix direction: full still/attack sprite resolution needs `AnimationKind::Attack` + a still slot +
+  their runtime consumers (battle-animation work), then extend `creature_from_persisted` to resolve
+  those two handles too.

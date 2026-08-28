@@ -5,6 +5,7 @@
 //! only things that ever differed between them).
 
 use crate::ability::{Ability, AbilityType, DamageClass, Element, Modifier, StatusKind};
+use crate::asset_gen::types::{ClipAsset, ImageAsset};
 use crate::squad_role::{squad_role, SquadRole, ACTIVE_SLOTS, BENCH_SLOTS};
 use crate::stamina::{Stamina, STAMINA_MAX_CAP};
 use crate::stats::Stats;
@@ -47,6 +48,9 @@ pub struct Creature {
     abilities: Vec<Ability>,
     stamina: Stamina,
     element: Element,
+    still_handle: Option<ImageAsset>,
+    idle_handle: Option<ClipAsset>,
+    attack_handle: Option<ClipAsset>,
 }
 
 impl Creature {
@@ -63,6 +67,9 @@ impl Creature {
             abilities: Vec::new(),
             stamina: Stamina::default(),
             element: Element::Normal,
+            still_handle: None,
+            idle_handle: None,
+            attack_handle: None,
         }
     }
 
@@ -149,13 +156,44 @@ impl Creature {
     pub fn element(&self) -> Element {
         self.element
     }
+
+    /// Set this creature's art handles (still image, idle clip, attack
+    /// clip) and return self (builder style). Each is independently
+    /// optional — a bundled/handle-less creature passes `None` for all
+    /// three.
+    pub fn with_art_handles(
+        mut self,
+        still: Option<ImageAsset>,
+        idle: Option<ClipAsset>,
+        attack: Option<ClipAsset>,
+    ) -> Self {
+        self.still_handle = still;
+        self.idle_handle = idle;
+        self.attack_handle = attack;
+        self
+    }
+
+    /// The still-image art handle, if this creature has one.
+    pub fn still_handle(&self) -> Option<&ImageAsset> {
+        self.still_handle.as_ref()
+    }
+
+    /// The idle-clip art handle, if this creature has one.
+    pub fn idle_handle(&self) -> Option<&ClipAsset> {
+        self.idle_handle.as_ref()
+    }
+
+    /// The attack-clip art handle, if this creature has one.
+    pub fn attack_handle(&self) -> Option<&ClipAsset> {
+        self.attack_handle.as_ref()
+    }
 }
 
 /// Per-frame display time for every bundled creature's idle loop. The GIF's
 /// own frame delays are ignored by `from_gif`; this is the uniform playback
 /// rate. All 8 creatures share this rate today; a future creature needing a
 /// different pace can pass its own duration as a 4th macro argument.
-const FRAME_DUR: Duration = Duration::from_millis(80);
+pub(crate) const FRAME_DUR: Duration = Duration::from_millis(80);
 
 /// Defines `pub fn $fn_name() -> Creature`: decodes the bundled GIF at
 /// `$gif_path` (relative to this file) into an `AnimatedSprite` at
@@ -816,5 +854,29 @@ mod tests {
             distinct.len() >= 2,
             "expected demo_roster() to span >= 2 distinct elements, got {distinct:?}"
         );
+    }
+
+    /// `with_art_handles` round-trips a `Some` still/idle/attack set through
+    /// the three accessors on a bare `Creature::new`.
+    #[test]
+    fn with_art_handles_round_trips_through_accessors() {
+        use crate::asset_gen::types::{ClipAsset, ImageAsset};
+        use std::path::PathBuf;
+
+        let still = ImageAsset { path: PathBuf::from("emberling/still.png") };
+        let idle = ClipAsset {
+            frames: vec![PathBuf::from("emberling/idle_0.png"), PathBuf::from("emberling/idle_1.png")],
+        };
+        let attack = ClipAsset { frames: vec![PathBuf::from("emberling/attack_0.png")] };
+
+        let c = Creature::new("Test").with_art_handles(
+            Some(still.clone()),
+            Some(idle.clone()),
+            Some(attack.clone()),
+        );
+
+        assert_eq!(c.still_handle(), Some(&still));
+        assert_eq!(c.idle_handle(), Some(&idle));
+        assert_eq!(c.attack_handle(), Some(&attack));
     }
 }
