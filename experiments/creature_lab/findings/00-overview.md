@@ -1,9 +1,7 @@
 # Creature Animation — Findings & State
 
-Knowledge dump from a long broad-exploration session (through early July 2026). Read this first,
-then `01-what-works`, `02-dead-ends`, `03-promising-next`, `04-inventory`, `05-proven-pipeline`,
-`06-ten-experiments-manifest` (2026-07-04 session: 10 concrete approaches designed from deep web
-research and actually run — most were negative/partial results, which is real signal, not noise).
+Read this first, then `12-attack-animation-pipeline.md` for the current working pipeline. The rest
+(`01-what-works` through `11`) is prior research/dead-end history, referenced from here where relevant.
 
 ## The goal (non-negotiable framing)
 A **generalized** creature-animation system: the player generates *any* creature ("an alien on a
@@ -13,45 +11,61 @@ game binary). Output is **downscaled to braille**, so motion quality / silhouett
 coherence matter far more than fine pixel detail.
 
 ## Where we are
-**Broad exploration phase.** We've been *close* a few times but have NOT cracked it. Specifically:
-- **Idle animation is hit-or-miss, not reliable.** Correction (user, 2026-07-04): it "sometimes works
-  and sometimes produces basically nothing." A few clips (`greenmouse_anim`, `slime_anim`, `wl_bounce`,
-  `wl_lunge`) have been individually re-verified as coherent, but don't treat "idle/weaponless motion"
-  as a trusted default — re-check any specific clip's frames before building on it.
-- **Attack animation is the unsolved core problem** — a lively, controllable, identity-preserving
-  attack for an arbitrary creature. Every approach so far either melts, goes lifeless, or reads badly
-  in braille. This is where to "go much deeper — try many more things." The 2026-07-04 session
-  (`06-ten-experiments-manifest`) went considerably deeper and still didn't crack it, but sharpened
-  the picture: the magnitude wall applies to body motion generally (not just props), VACE 1.3B cannot
-  manifest new solid limb structure regardless of control shape or strength, and chaining low-magnitude
-  clips avoids melting at the cost of the model barely moving at all.
-- **Skeletal/rig approaches (both the hand-drawn capsule rig and the later FABRIK IK + real-texture
-  cutout rig) are now CLOSED, per `02-dead-ends`.** The IK+cutout version (`10-ik-cutout-feasibility-
-  prototype.md`) fixed every diagnosable bug across 3 body plans (measurement errors, auto-thickness
-  bias, capsule-vs-silhouette mismatch, compositing artifacts) and still read as "rough" in real
-  braille playback (2026-07-10, user verdict). **Root cause is not braille resolution** — it's that
-  cutting a sprite into rigid pieces leaves nothing actually rendered *at* the joint (two flat
-  textures pivoting against each other, no material bending), which reads as unnatural motion
-  regardless of resolution or how many surface bugs get fixed. Don't reattempt rigid-cutout-and-hinge
-  limb rendering without a real deformation/blend-skinning renderer — see `02-dead-ends`.
-- **Active next avenue: ComfyUI + SCAIL-2** (topology-free motion transfer), installed and ready to
-  test at `../ComfyUI/` — see `09-exhaustive-search-plan.md` for the research behind it. Not yet
-  run/validated as of this note.
+**The attack-animation pipeline is locked in — see `12-attack-animation-pipeline.md` for the complete,
+current, runnable spec** (exact commands, prompt template, known gotchas). Summary: generate a creature
+still image → clean its background/shadow → animate via MiniMax H3 (image-to-video, Turbo LoRA, ~3
+min/clip on native `sd-cli`) → extract frames. No driving video, no per-creature rigging, a single detailed text prompt
+drives specific committed attack motion with identity/style held up. Verified end-to-end, including on
+a creature generated fresh through the whole pipeline (an alien on a pogostick, bounce + gunfire).
 
-## Meta-learnings (the expensive ones — internalize these)
-1. **STILLS LIE. Judge braille playback, across the WHOLE arc.** Repeatedly a clip looked clean on 3
-   spot-frames and fell apart in motion (double-sword, melted mid-frames). Screen every few frames AND
-   watch it move in braille before believing anything.
-2. **The magnitude wall.** Single-image I2V (Wan 5B) only stays coherent for *small* motion. Large/fast
-   motion **melts the whole creature** (not just a prop). Idle/bounce/lunge = OK; fast swing = mush.
-3. **The prop wall (separate from #2).** A rigid weapon (sword) melts, doubles, or goes floppy when
-   moved — even inside an otherwise-coherent body motion. This is *additional* to the magnitude wall.
-   → **Validated fix direction: generate weaponless, attach the weapon after the fact** (see 03).
-4. **Text can't specify a specific/novel action.** Prompting "sword slash" / "overhead swing" gives
-   melt or the-wrong-motion (a spin). Confirmed by research (arXiv 2510.26794) and empirically. Specific
-   motion in the field is controlled by **trajectories or reference motion**, not text.
-5. **Generalization is the whole point.** No hardcoded "sword slash" effects — a telepath/pogostick has
-   no sword. Solutions must be creature- and action-agnostic.
+**Chroma-key/shadow bleed is fixed.** `tools/cleanbg.py` strips both the background and any baked-in
+drop shadow before the image reaches H3 (H3 doesn't reliably reproduce a shadow's exact shape through
+generated motion, otherwise leaving patchy bleed). Verified clean across full clips on three creatures
+spanning both painterly-shaded and bold flat-vector art styles.
+
+**Background-color selection matters**: creatures whose own color matches the default green-screen hue
+family (e.g. a green-skinned alien) must be generated on a different key color (magenta, per the
+existing `generate.sh` convention for green creatures) or the background/shadow-removal step cannot
+distinguish character from background at all.
+
+**Prop coherence** (a held weapon staying solid through motion — historically the hardest failure mode
+in this project): tested on a mouse with a sword. Clean, full success — no issues.
+
+**Runtime**: the pipeline runs natively on `stable-diffusion.cpp` (`sd-cli`), no Python/ComfyUI —
+local generation shippable inside the game binary, the project's standing goal. See
+`12-attack-animation-pipeline.md` for the exact commands.
+
+Setup: native `stable-diffusion.cpp` (`sd-cli`), local, free/open-weight models only. Hailuo 2.3 and
+Krea 2 are out of scope — paid/cloud-API only, this project doesn't use paid models.
+
+**SCAIL-2** (topology-free motion transfer from a driving video onto a target image) works — real
+motion quality, identity/green-screen held up — but requires a driving video showing the desired
+motion, which doesn't generalize to arbitrary player-invented actions (no stock footage exists for
+"an alien on a pogostick that attacks via telepathy"). Also renders the target creature visibly
+thinner and with softer shading than the source, consistently across every driving video tried.
+Given H3 doesn't have either limitation, H3 is the primary path; SCAIL-2 is a fallback only.
+
+**Skeletal/rig approaches (hand-drawn capsule rig and FABRIK IK + real-texture cutout rig) are
+CLOSED** — cutting a sprite into rigid pieces leaves nothing actually rendered at the joint, which
+reads as unnatural motion regardless of resolution or polish. See `02-dead-ends` for the full
+technical record and revisit-if conditions.
+
+Idle animation (separate from attack animation) is unreliable via diffusion I2V — treat any specific
+idle clip as unverified until its own frames/playback are checked, don't assume the category works.
+
+## Meta-learnings
+1. **Judge braille playback, across the whole arc, not stills — and not sparse frame sampling either.**
+   A clip can look unchanged across widely-spaced still frames while containing a real, well-formed
+   motion concentrated in a narrower window between them. Dense sampling or real playback only.
+2. **The magnitude wall** (smaller video models, e.g. Wan 5B): single-image I2V only stays coherent for
+   small motion; large/fast motion melts the whole creature, not just a prop.
+3. **The prop wall** (smaller video models, e.g. Wan-family): a rigid weapon melts, doubles, or goes
+   floppy when moved, even inside otherwise-coherent body motion. H3 does not have this problem.
+4. **Larger models with real language understanding (H3) can follow a specific prompted action** where
+   smaller video models (Wan-family) cannot — text-driven specific motion is model-capacity-dependent,
+   not fundamentally impossible.
+5. **Generalization is the whole point.** No hardcoded per-weapon/per-creature effects — solutions must
+   be creature- and action-agnostic.
 
 ## How to use `02-dead-ends`
 Dead ends are recorded with a **"revisit if"** note. They are *not* permanently closed — most failed

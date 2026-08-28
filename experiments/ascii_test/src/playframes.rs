@@ -1,9 +1,11 @@
 // playframes — braille animation player for a frame sequence.
-// Input: a directory of PNG frames (frame_000.png, ...) OR a single .gif.
+// Input: one or more directories of PNG frames (frame_000.png, ...) and/or .gif files.
 // Keys the background out at render time (alpha OR chroma color), so a solid-background
 // video from Wan I2V animates cleanly with no intermediate files.
+// With 2+ clips given, Left/Right arrows switch between them (a comparison gallery) —
+// each clip keeps its own playback position, so switching away and back resumes in place.
 //
-// Usage: playframes <dir|gif> [--width N] [--chroma R,G,B] [--chroma-thresh N] [--pingpong] [--fps N]
+// Usage: playframes <dir|gif> [<dir|gif> ...] [--width N] [--chroma R,G,B] [--chroma-thresh N] [--pingpong] [--fps N]
 
 use crossterm::{
     event::{self, Event, KeyCode},
@@ -107,13 +109,22 @@ fn load_frames(path: &str) -> Vec<RgbaImage> {
     }
 }
 
+struct Clip {
+    label: String,
+    frames: Vec<Vec<Line<'static>>>,
+    order: Vec<usize>,
+    durations: Vec<Duration>,
+    pos: usize,
+    last: Instant,
+}
+
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("usage: playframes <dir|gif> [--width N] [--chroma R,G,B] [--chroma-thresh N] [--pingpong] [--fps N]");
+        eprintln!("usage: playframes <dir|gif> [<dir|gif> ...] [--width N] [--chroma R,G,B] [--chroma-thresh N] [--pingpong] [--fps N]");
         std::process::exit(1);
     }
-    let src = args[1].clone();
+    let mut sources: Vec<String> = Vec::new();
     let mut width: Option<u32> = None;
     let mut key: Option<Key> = None;
     let mut chroma_auto = false;
@@ -121,7 +132,7 @@ fn main() -> io::Result<()> {
     let mut pingpong = false;
     let mut fps = 12u32;
     let mut ease = String::from("none");
-    let mut i = 2;
+    let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
             "--width" if i+1 < args.len() => { width = args[i+1].parse().ok(); i += 2; }
@@ -138,50 +149,23 @@ fn main() -> io::Result<()> {
             "--pingpong" => { pingpong = true; i += 1; }
             "--fps" if i+1 < args.len() => { fps = args[i+1].parse().unwrap_or(12).max(1); i += 2; }
             "--ease" if i+1 < args.len() => { ease = args[i+1].clone(); i += 2; }
+            s if !s.starts_with("--") => { sources.push(s.to_string()); i += 1; }
             _ => i += 1,
         }
     }
     // chroma thresh may have been parsed after --chroma; recompute
     if let Some(k) = key.as_mut() { k.thresh2 = thresh * thresh; }
-
-    let frames_raw = load_frames(&src);
-    if frames_raw.is_empty() { eprintln!("playframes: no frames found"); std::process::exit(1); }
+    if sources.is_empty() { eprintln!("playframes: no clip given"); std::process::exit(1); }
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
-
     let size = terminal.size()?;
-    let (sw, sh) = (frames_raw[0].width() as f32, frames_raw[0].height() as f32);
-    let aspect = sw / sh;
-    let max_cols = width.unwrap_or(size.width as u32).min(size.width as u32);
-    let max_rows = size.height.saturating_sub(1) as u32;
-    // fit within terminal, square braille dots
-    let mut cols = max_cols;
-    let mut rows = ((cols as f32) / (2.0 * aspect)).round().max(1.0) as u32;
-    if rows > max_rows { rows = max_rows; cols = ((rows as f32) * 2.0 * aspect).round().max(1.0) as u32; }
+    let max_cols_avail = width.unwrap_or(size.width as u32).min(size.width as u32);
+    let max_rows_avail = size.height.saturating_sub(1) as u32; // bottom row reserved for the status/label line
 
-    // --chroma auto samples each frame's own corners, so a drifting background still keys cleanly.
-    let frames: Vec<Vec<Line>> = frames_raw.iter()
-        .map(|f| {
-            let fkey = if chroma_auto { Some(corner_key(f, thresh)) } else { key };
-            render_braille(&DynamicImage::ImageRgba8(f.clone()), cols, rows, &fkey)
-        })
-        .collect();
-
-    // playback order (ping-pong appends the reverse, minus endpoints)
-    let mut order: Vec<usize> = (0..frames.len()).collect();
-    if pingpong && frames.len() > 2 {
-        order.extend((1..frames.len()-1).rev());
-    }
-
-    // Per-position playback durations. --ease redistributes time (total loop length unchanged) so
-    // linearly-interpolated frames FEEL dynamic:
-    //   anticipate = slow windup, fast strike-snap, brief settle (for slashes/attacks)
-    //   smooth     = ease-in-out (slow at the ends, quick through the middle)
     let base_ms = 1000.0 / fps as f32;
-    let n = order.len().max(1);
     let weight = |p: f32| -> f32 {
         match ease.as_str() {
             "anticipate" => { if p < 0.35 { 2.2 } else if p < 0.55 { 0.35 } else { 1.4 } }
@@ -189,27 +173,87 @@ fn main() -> io::Result<()> {
             _ => 1.0,
         }
     };
-    let raw: Vec<f32> = (0..n).map(|j| weight(if n > 1 { j as f32 / (n - 1) as f32 } else { 0.0 })).collect();
-    let mean = (raw.iter().sum::<f32>() / n as f32).max(0.01);
-    let durations: Vec<Duration> = raw.iter()
-        .map(|w| Duration::from_millis(((base_ms * w / mean) as u64).max(1)))
-        .collect();
 
-    let mut idx = 0usize;
-    let mut last = Instant::now();
+    let mut clips: Vec<Clip> = Vec::new();
+    for src in &sources {
+        let frames_raw = load_frames(src);
+        if frames_raw.is_empty() {
+            disable_raw_mode()?;
+            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+            eprintln!("playframes: no frames found in {src}");
+            std::process::exit(1);
+        }
+        let (sw, sh) = (frames_raw[0].width() as f32, frames_raw[0].height() as f32);
+        let aspect = sw / sh;
+        let mut cols = max_cols_avail;
+        let mut rows = ((cols as f32) / (2.0 * aspect)).round().max(1.0) as u32;
+        if rows > max_rows_avail { rows = max_rows_avail; cols = ((rows as f32) * 2.0 * aspect).round().max(1.0) as u32; }
+
+        // --chroma auto samples each frame's own corners, so a drifting background still keys cleanly.
+        let frames: Vec<Vec<Line>> = frames_raw.iter()
+            .map(|f| {
+                let fkey = if chroma_auto { Some(corner_key(f, thresh)) } else { key };
+                render_braille(&DynamicImage::ImageRgba8(f.clone()), cols, rows, &fkey)
+            })
+            .collect();
+
+        // playback order (ping-pong appends the reverse, minus endpoints)
+        let mut order: Vec<usize> = (0..frames.len()).collect();
+        if pingpong && frames.len() > 2 {
+            order.extend((1..frames.len()-1).rev());
+        }
+
+        // Per-position playback durations. --ease redistributes time (total loop length unchanged) so
+        // linearly-interpolated frames FEEL dynamic:
+        //   anticipate = slow windup, fast strike-snap, brief settle (for slashes/attacks)
+        //   smooth     = ease-in-out (slow at the ends, quick through the middle)
+        let n = order.len().max(1);
+        let raw: Vec<f32> = (0..n).map(|j| weight(if n > 1 { j as f32 / (n - 1) as f32 } else { 0.0 })).collect();
+        let mean = (raw.iter().sum::<f32>() / n as f32).max(0.01);
+        let durations: Vec<Duration> = raw.iter()
+            .map(|w| Duration::from_millis(((base_ms * w / mean) as u64).max(1)))
+            .collect();
+
+        let label = Path::new(src).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| src.clone());
+        clips.push(Clip { label, frames, order, durations, pos: 0, last: Instant::now() });
+    }
+
+    let multi = clips.len() > 1;
+    let mut cur = 0usize;
 
     loop {
-        let lines = frames[order[idx]].clone();
+        let clip = &clips[cur];
+        let lines = clip.frames[clip.order[clip.pos]].clone();
+        let status = if multi {
+            format!("[{}/{}] {}   \u{2190}\u{2192} switch clip   q quit", cur + 1, clips.len(), clip.label)
+        } else {
+            String::new()
+        };
         terminal.draw(|f| {
-            f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), f.area());
+            let area = f.area();
+            f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), area);
+            if multi {
+                let status_area = ratatui::layout::Rect { x: 0, y: area.height.saturating_sub(1), width: area.width, height: 1 };
+                f.render_widget(Paragraph::new(status).alignment(Alignment::Center).style(Style::default().fg(Color::DarkGray)), status_area);
+            }
         })?;
-        if last.elapsed() >= durations[idx] {
-            idx = (idx + 1) % order.len();
-            last = Instant::now();
+
+        {
+            let clip = &mut clips[cur];
+            if clip.last.elapsed() >= clip.durations[clip.pos] {
+                clip.pos = (clip.pos + 1) % clip.order.len();
+                clip.last = Instant::now();
+            }
         }
+
         if event::poll(Duration::from_millis(4))? {
             if let Event::Key(k) = event::read()? {
-                if matches!(k.code, KeyCode::Char('q') | KeyCode::Esc) { break; }
+                match k.code {
+                    KeyCode::Char('q') | KeyCode::Esc => break,
+                    KeyCode::Right if multi => { cur = (cur + 1) % clips.len(); }
+                    KeyCode::Left if multi => { cur = (cur + clips.len() - 1) % clips.len(); }
+                    _ => {}
+                }
             }
         }
     }

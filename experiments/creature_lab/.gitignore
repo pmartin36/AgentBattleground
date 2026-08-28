@@ -7,3 +7,5 @@ out/
 .venv_comfyui/
 llama.cpp/
 ComfyUI/
+SwarmUI/
+models_sdcpp/
