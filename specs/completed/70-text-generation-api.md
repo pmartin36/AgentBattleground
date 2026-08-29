@@ -1,6 +1,8 @@
+> # ✅ DONE! — Completed 2026-08-29
+
 # Text Generation API
 
-> **Status: draft (not started).** The single in-game API for producing text from the configured model: a prompt goes in, generated text comes back. One API any feature calls; it routes to the player's configured backend (a local model subprocess, or an online provider over HTTP) and manages the job lifecycle. Game-specific (`crates/game/`), structured to mirror the asset-generation API (`66`). This spec defines the runtime model interface that `09-settings-model-config` and `10-battle-simulation-engine` both leave as an open question.
+> **Status: done.** The single in-game API for producing text from the configured model: a prompt goes in, generated text comes back. One API any feature calls; it routes to the player's configured backend (a local model subprocess, or an online provider over HTTP) and manages the job lifecycle. Game-specific (`crates/game/`), structured to mirror the asset-generation API (`66`). This spec defines the runtime model interface that `09-settings-model-config` and `10-battle-simulation-engine` both leave as an open question.
 
 ## Purpose
 Give every feature one uniform way to ask the configured model for text, so no feature re-wires model invocation for itself. The API owns the job lifecycle, backend routing, and the transport to the local subprocess or online provider. It is the counterpart to `66` for text: `66` turns prompts into art, this turns prompts into text.

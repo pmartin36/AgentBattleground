@@ -1,6 +1,8 @@
+> # ✅ DONE! — Completed 2026-08-29
+
 # Creature Construction
 
-> **Status: draft (not started).** Deterministic assembly of a full `Creature` from the model's interpretive parts plus fixed game rules. The model supplies flavor and choices (name, description, a stat weighting, which of four attack archetypes); this spec's deterministic code allocates a fixed stat budget, sets the one starting attack's numbers, and assembles the creature. Game-specific (`crates/game/`). The concrete home of the "model builds parts, game assembles" principle for creatures. Consumed by the hatchery (`67`), and available to onboarding (`01`) and bot opponents.
+> **Status: done.** Deterministic assembly of a full `Creature` from the model's interpretive parts plus fixed game rules. The model supplies flavor and choices (name, description, a stat weighting, which of four attack archetypes); this spec's deterministic code allocates a fixed stat budget, sets the one starting attack's numbers, and assembles the creature. Game-specific (`crates/game/`). The concrete home of the "model builds parts, game assembles" principle for creatures. Consumed by the hatchery (`67`), and available to onboarding (`01`) and bot opponents.
 
 ## Purpose
 Turn a described concept into a real, balanced `Creature` by fixed rules, so the result is reproducible and balanced no matter what the model returned. The model never authors a stat block or an attack; it advises. This spec is where the advice becomes a creature.
