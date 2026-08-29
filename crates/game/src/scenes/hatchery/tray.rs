@@ -33,9 +33,11 @@ const WIGGLE_AMP_DOTS: i32 = 2;
 /// above it clear.
 pub(crate) fn tray_band(area: Rect) -> Rect {
     let band_h = (area.height * 3 / 20).max(3);
+    let margin = (area.height / 20).max(1);
+    let bottom = area.y + area.height.saturating_sub(margin);
     Rect {
         x: area.x,
-        y: area.y + area.height.saturating_sub(band_h),
+        y: bottom.saturating_sub(band_h),
         width: area.width,
         height: band_h,
     }
