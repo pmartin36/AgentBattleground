@@ -6,6 +6,10 @@
 mod focus;
 mod lifecycle;
 mod tray;
+pub mod define_modal;
+pub mod definition;
+pub mod mad_lib;
+pub mod parts;
 
 use std::cell::RefCell;
 use std::time::{Duration, SystemTime};

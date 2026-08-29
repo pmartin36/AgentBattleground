@@ -10,6 +10,7 @@ pub mod instructions;
 #[cfg(test)]
 mod lint_test_fixture;
 pub mod mention;
+pub mod model_config;
 pub mod player_data;
 pub mod scene_id;
 pub mod scenes;
