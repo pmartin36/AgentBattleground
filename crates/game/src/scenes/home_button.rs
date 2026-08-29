@@ -68,6 +68,19 @@ const ICON_AMBER: Rgba = Rgba::rgb(0x8a, 0x4a, 0x00);
 /// home rect's deliberate 1-dot-up sub-cell nudge survives. Zero-area `region`
 /// draws nothing and does not panic.
 pub(crate) fn draw_home_button(buf: &mut Buffer, region: DotRect, state: ButtonState) {
+    draw_badge_button(buf, region, state, crate::assets::ICON_HOME);
+}
+
+/// Same gold disc + amber-tinted icon as `draw_home_button`, but with a
+/// caller-supplied `icon` (e.g. a back arrow or an egg), so a scene can reuse
+/// the shared badge look with a different glyph. `draw_home_button` is the
+/// `ICON_HOME` case.
+pub(crate) fn draw_badge_button(
+    buf: &mut Buffer,
+    region: DotRect,
+    state: ButtonState,
+    icon: &'static [u8],
+) {
     let w_dots = region.w.max(0) as usize;
     let h_dots = region.h.max(0) as usize;
     if w_dots == 0 || h_dots == 0 {
@@ -87,11 +100,11 @@ pub(crate) fn draw_home_button(buf: &mut Buffer, region: DotRect, state: ButtonS
     // fit `Button` uses) and centered on the disc; its lit dots overwrite the
     // gold, its transparent dots leave the gold showing.
     let cell_rect = region.to_cell_rect();
-    let fitted = engine_render::asset_cache::convert(crate::assets::ICON_HOME, cell_rect);
+    let fitted = engine_render::asset_cache::convert(icon, cell_rect);
     let (fc, fr) = (fitted.cols(), fitted.rows());
     if fc > 0 && fr > 0 {
         let icon_raw = engine_render::asset_cache::sprite_to_dots(
-            crate::assets::ICON_HOME,
+            icon,
             fc as u32 * 2,
             fr as u32 * 4,
         );

@@ -125,7 +125,7 @@ pub struct RosterManager {
     /// the same immutable-render-mutates-button-state reason as the other
     /// buttons.
     #[inspect(hidden)]
-    hatchery_button: RefCell<engine_render::Button>,
+    hatchery_button: RefCell<engine_render::ButtonCore>,
 }
 
 /// Transient bookkeeping for an in-flight slide transition: the group that is
@@ -258,10 +258,7 @@ impl RosterManager {
             hovered_badge: false,
             store: None,
             eggs: Vec::new(),
-            hatchery_button: RefCell::new(
-                engine_render::Button::new(Rect::default(), crate::assets::FRAME_PANEL)
-                    .label("Hatchery"),
-            ),
+            hatchery_button: RefCell::new(engine_render::ButtonCore::new(Rect::default())),
         };
         scene.reload_instructions();
         scene
@@ -316,13 +313,7 @@ impl RosterManager {
     /// First-run seed: `demo_roster()` in persisted form (no art handles —
     /// `hydrate_roster` re-attaches the matching bundled sprite by name).
     fn seed_player_data() -> crate::player_data::PlayerData {
-        crate::player_data::PlayerData {
-            roster: crate::creatures::demo_roster()
-                .iter()
-                .map(crate::player_data::creature_to_persisted)
-                .collect(),
-            eggs: Vec::new(),
-        }
+        crate::player_data::default_seed()
     }
 
     /// Converts a persisted roster into runtime `Creature`s, re-attaching
@@ -576,10 +567,15 @@ impl Scene for RosterManager {
         }
 
         {
-            let hr = Self::hatchery_button_rect(area);
+            let hdr = Self::hatchery_dot_rect(area);
             let mut hb = self.hatchery_button.borrow_mut();
-            hb.set_rect(hr);
-            hb.render(frame.buffer_mut());
+            hb.set_rect(Self::hatchery_button_rect(area));
+            crate::scenes::home_button::draw_badge_button(
+                frame.buffer_mut(),
+                hdr,
+                hb.state(),
+                crate::assets::ICON_EGG,
+            );
         }
 
         // Ability hover tooltip (spec 49) — topmost overlay, hover-only.

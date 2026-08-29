@@ -130,10 +130,7 @@ impl Hatchery {
     /// The seed used whenever a load falls through to a fresh `PlayerData`.
     /// Never written to disk on its own — see `persist_eggs`'s reload-merge.
     fn egg_seed() -> crate::player_data::PlayerData {
-        crate::player_data::PlayerData {
-            roster: Vec::new(),
-            eggs: Vec::new(),
-        }
+        crate::player_data::default_seed()
     }
 
     /// Promotes any elapsed `Incubating` egg to `Ready` and, only when a
@@ -233,7 +230,12 @@ impl Scene for Hatchery {
         let dr = Self::back_dot_rect(area);
         let mut b = self.back_button.borrow_mut();
         b.set_rect(dr.to_cell_rect());
-        crate::scenes::home_button::draw_home_button(frame.buffer_mut(), dr, b.state());
+        crate::scenes::home_button::draw_badge_button(
+            frame.buffer_mut(),
+            dr,
+            b.state(),
+            crate::assets::ICON_ARROW_LEFT,
+        );
 
         let mut buttons = self.egg_buttons.borrow_mut();
         match self.focused {

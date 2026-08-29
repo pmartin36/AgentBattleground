@@ -38,6 +38,11 @@ pub const ICON_HOME: &[u8] = include_bytes!("assets/icon_home.png");
 /// (Apache 2.0), horizontally mirrored.
 pub const ICON_ARROW_LEFT: &[u8] = include_bytes!("assets/icon_arrow_left.png");
 
+/// Egg icon, 48×48 RGBA8. A bold solid egg silhouette on an alpha-transparent
+/// background, for the roster's Hatchery-entry badge (a house-badge sibling).
+/// Solid, not line-art, so it survives the ~12×12-dot badge size.
+pub const ICON_EGG: &[u8] = include_bytes!("assets/icon_egg.png");
+
 /// Right-arrow icon, 48×48 RGBA8. A bold solid triangle — see
 /// `ICON_ARROW_LEFT`'s doc comment for why this replaced the thin
 /// `arrow_forward` line-art glyph.
@@ -219,10 +224,11 @@ mod spoil_candy_tests {
 mod icon_tests {
     use super::*;
 
-    const ICONS: [(&[u8], &str); 3] = [
+    const ICONS: [(&[u8], &str); 4] = [
         (ICON_HOME, "icon_home"),
         (ICON_ARROW_LEFT, "icon_arrow_left"),
         (ICON_ARROW_RIGHT, "icon_arrow_right"),
+        (ICON_EGG, "icon_egg"),
     ];
 
     fn decode(bytes: &[u8], name: &str) -> image::RgbaImage {

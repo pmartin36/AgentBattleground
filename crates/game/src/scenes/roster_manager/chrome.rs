@@ -113,26 +113,23 @@ impl RosterManager {
         Self::home_dot_rect(area).to_cell_rect()
     }
 
-    /// Width of the Hatchery entry button — fits its "Hatchery" label.
-    const HATCHERY_BUTTON_W: u16 = 12;
-    /// Blank-cell gap between the Hatchery entry button and the home button
-    /// it sits beside.
-    const HATCHERY_HOME_GAP: u16 = 2;
+    /// Blank-cell gap between the Hatchery egg badge and the home badge it
+    /// sits beside.
+    const HATCHERY_HOME_GAP: u16 = 1;
 
-    /// Top rect for the Hatchery entry button — same row as the home button,
-    /// immediately to its left (the centered name/level bands occupy this
-    /// row's columns too, but only near the horizontal center; anchoring
-    /// beside the home button, at the row's far right, keeps this button
-    /// clear of the centered name glyph the same way the home button already
-    /// is).
+    /// Dot-space rect for the Hatchery egg badge — same size and row as the
+    /// home badge, immediately to its left with a `HATCHERY_HOME_GAP` cell
+    /// gap. Returned UNFLOORED (like `home_dot_rect`) so the badge's sub-cell
+    /// nudge survives; blit via `draw_badge_button`.
+    pub(super) fn hatchery_dot_rect(area: Rect) -> engine_render::DotRect {
+        let home = Self::home_dot_rect(area);
+        let shift = (crate::scenes::home_button::HOME_W + Self::HATCHERY_HOME_GAP) as i32 * 2;
+        engine_render::DotRect { x: home.x - shift, ..home }
+    }
+
+    /// Cell-space hit rect for the Hatchery egg badge.
     pub(super) fn hatchery_button_rect(area: Rect) -> Rect {
-        let home = Self::home_dot_rect(area).to_cell_rect();
-        Rect {
-            x: home.x - Self::HATCHERY_HOME_GAP - Self::HATCHERY_BUTTON_W,
-            y: area.y,
-            width: Self::HATCHERY_BUTTON_W,
-            height: crate::scenes::home_button::HOME_H,
-        }
+        Self::hatchery_dot_rect(area).to_cell_rect()
     }
 
 }
