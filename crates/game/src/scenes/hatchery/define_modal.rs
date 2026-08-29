@@ -5,12 +5,10 @@
 //!
 //! This module owns the modal's state container, its pure layout (a greedy
 //! word-wrap over a mixed stream of literal words and fixed-width blank
-//! slots), and its standalone render. Input routing, Done-gating, and the
-//! completed-sentence result are a separate seam layered on top of this
-//! state.
-//!
-//! Nothing outside this module's own tests constructs a `DefineModal`; it is
-//! wired into the hatchery flow by that separate seam.
+//! slots), its standalone render, and its input routing (`handle_input`
+//! reports what the hatchery scene should do: stay, close, or submit the
+//! completed sentence). The hatchery scene opens a `DefineModal` for an
+//! `Undefined` egg and drives it via that report.
 #![allow(dead_code)]
 
 use std::cell::{Cell, RefCell};

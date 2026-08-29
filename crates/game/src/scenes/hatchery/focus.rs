@@ -1,7 +1,7 @@
 //! Tap-to-focus interaction: classifies a completed tap on an egg by its
 //! current state, lays out the centered focus view and the relocated tray
 //! strip, and formats/draws the incubating countdown. Pure functions; the
-//! scene applies their result and owns `focused`/`pending_define`/
+//! scene applies their result and owns `focused`/`define_modal`/
 //! `pending_hatch` state.
 
 use std::time::Duration;

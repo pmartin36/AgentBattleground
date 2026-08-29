@@ -11,8 +11,9 @@ use std::time::Duration;
 use image::DynamicImage;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::{Color, Style};
 
-use engine_render::DotRect;
+use engine_render::{DotRect, TextAlign};
 
 use crate::player_data::{Egg, EggState};
 
@@ -107,6 +108,46 @@ pub(crate) fn draw_egg(
     let dy = if matches!(egg.state, EggState::Ready) { wiggle_offset_y(elapsed) } else { 0 };
     let placed = DotRect { x: target.x, y: target.y + dy, w: target.w, h: target.h };
     crate::scenes::post_battle::columns::blit_dots(buf, placed, &dots);
+}
+
+/// Fixed placeholder shown in place of each empty blank in the tray preview,
+/// so a blank reads as a fill-in slot rather than an invisible gap.
+const BLANK_PLACEHOLDER: &str = "____";
+
+/// Draws an `Undefined` egg's unfilled mad-lib sentence (its selected
+/// template with every blank shown as an empty slot) as a wrapped text
+/// caption above the egg's tray `slot`. A non-`Undefined` egg draws nothing.
+/// `egg_index` selects the template and MUST be the egg's index in
+/// `Hatchery.eggs` (the same key the define modal opens with). Text, exempt
+/// from the braille dot pipeline.
+pub(crate) fn draw_unfilled_sentence(
+    buf: &mut Buffer,
+    slot: DotRect,
+    egg: &Egg,
+    egg_index: usize,
+) {
+    if !matches!(egg.state, EggState::Undefined) {
+        return;
+    }
+
+    let template = super::mad_lib::select_template(egg_index);
+    let values = vec![BLANK_PLACEHOLDER; template.blank_count()];
+    let sentence = super::mad_lib::completed_sentence(template, &values);
+
+    let cell = slot.to_cell_rect();
+    let width = cell.width.saturating_add(6);
+    let height = 4;
+    let x = (cell.x + cell.width / 2).saturating_sub(width / 2);
+    let y = cell.y.saturating_sub(height);
+
+    engine_render::wrapped_text(
+        buf,
+        Rect { x, y, width, height },
+        &sentence,
+        TextAlign::Center,
+        Style::default().fg(Color::Rgb(0xff, 0xff, 0xff)),
+        true,
+    );
 }
 
 /// Vertical dot offset of a `Ready` egg's idle bob at `elapsed`:
@@ -271,5 +312,63 @@ mod tests {
         let incubating_a = serialize(&render_at(&incubating, Duration::ZERO));
         let incubating_b = serialize(&render_at(&incubating, WIGGLE_PERIOD / 4));
         assert_eq!(incubating_a, incubating_b, "an Incubating egg's render must be stationary across elapsed");
+    }
+
+    /// A buffer with generous room above a placed slot, for the unfilled
+    /// mad-lib preview tests below.
+    fn preview_buffer() -> (Buffer, DotRect) {
+        let area = Rect::new(0, 0, 40, 30);
+        let slot = DotRect { x: 40, y: 40, w: EGG_SLOT_W_DOTS, h: EGG_SLOT_H_DOTS };
+        (Buffer::empty(area), slot)
+    }
+
+    /// A word from `select_template(egg_index)`'s literal text longer than 3
+    /// characters, so a substring match is meaningful rather than
+    /// incidental.
+    fn distinctive_literal_word(egg_index: usize) -> String {
+        let template = super::super::mad_lib::select_template(egg_index);
+        template
+            .segments()
+            .iter()
+            .filter_map(|s| match s {
+                super::super::mad_lib::Segment::Literal(text) => Some(*text),
+                super::super::mad_lib::Segment::Blank { .. } => None,
+            })
+            .flat_map(str::split_whitespace)
+            .find(|word| word.len() > 3)
+            .expect("selected template must contain a literal word longer than 3 characters")
+            .to_string()
+    }
+
+    /// An `Undefined` egg's caption carries the selected template's literal
+    /// words — the tray's unfilled mad-lib preview.
+    #[test]
+    fn draw_unfilled_sentence_undefined_shows_template_literals() {
+        let (mut buf, slot) = preview_buffer();
+        draw_unfilled_sentence(&mut buf, slot, &undefined_egg(), 0);
+
+        let area = buf.area;
+        let text = crate::scenes::test_util::rect_text(&buf, area);
+        let word = distinctive_literal_word(0);
+        assert!(text.contains(&word), "expected the rendered caption to contain {word:?}, got {text:?}");
+    }
+
+    /// A non-`Undefined` egg (`Incubating` or `Ready`) has no unfilled
+    /// sentence, so the caption draws nothing.
+    #[test]
+    fn draw_unfilled_sentence_non_undefined_draws_nothing() {
+        let (mut incubating_buf, slot) = preview_buffer();
+        draw_unfilled_sentence(&mut incubating_buf, slot, &incubating_egg(Element::Fire), 0);
+        assert!(
+            !crate::scenes::test_util::has_non_space(&incubating_buf, incubating_buf.area),
+            "an Incubating egg must not draw an unfilled-sentence caption"
+        );
+
+        let (mut ready_buf, slot) = preview_buffer();
+        draw_unfilled_sentence(&mut ready_buf, slot, &ready_egg(), 0);
+        assert!(
+            !crate::scenes::test_util::has_non_space(&ready_buf, ready_buf.area),
+            "a Ready egg must not draw an unfilled-sentence caption"
+        );
     }
 }
