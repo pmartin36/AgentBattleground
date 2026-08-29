@@ -7,6 +7,7 @@ Turn an undefined egg into a defined, incubating one: the player fills in a mad-
 
 ## Scope
 - The mad-lib definition modal, including meta-generated (varying) sentence templates.
+- Rendering an undefined egg's unfilled mad-lib sentence (the template with its blanks) in `65`'s hatchery tray. (`65` renders the `?` egg sprite; the sentence that accompanies it is owned here, since it is the mad-lib template.)
 - Submitting the completed sentence as the generation prompt.
 - Generating the egg's art and updating the egg in place.
 - Deriving the hatched creature's identity (name, stats, abilities, starting attack) from the mad-lib description.

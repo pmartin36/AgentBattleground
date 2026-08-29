@@ -7,6 +7,7 @@
 //! (scene model). Real scenes (battle viewer, roster manager, …) replace these.
 
 pub mod battle_viewer;
+pub mod hatchery;
 pub mod leaderboard;
 pub mod main_hub;
 pub mod roster_manager;
@@ -22,6 +23,7 @@ pub(crate) mod title_logo;
 mod test_util;
 
 pub use battle_viewer::BattleViewer;
+pub use hatchery::Hatchery;
 pub use leaderboard::Leaderboard;
 pub use main_hub::MainHub;
 pub use roster_manager::RosterManager;

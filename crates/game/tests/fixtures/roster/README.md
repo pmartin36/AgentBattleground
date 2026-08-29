@@ -45,3 +45,8 @@ entire details panel interior suppressed (no stamina/ability/instructions
 content, no bar, no edit button), consistent with the mid-slide (~25% of
 `SLIDE_DUR`) transition frame. Confirmed correct; no divergence found before
 commit.
+
+All 4 fixtures were regenerated to add the Hatchery entry button, framed
+immediately to the left of the HOME button in the same top row. Reviewed
+against the same layout otherwise unchanged; the new button does not overlap
+the centered name/level text or bleed into the details panel border.

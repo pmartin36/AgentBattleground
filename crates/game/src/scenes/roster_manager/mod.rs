@@ -121,6 +121,11 @@ pub struct RosterManager {
     /// never drops it. Empty for store-less construction.
     #[inspect(hidden)]
     eggs: Vec<crate::player_data::Egg>,
+    /// Entry button that transitions to the Hatchery scene. `RefCell` for
+    /// the same immutable-render-mutates-button-state reason as the other
+    /// buttons.
+    #[inspect(hidden)]
+    hatchery_button: RefCell<engine_render::Button>,
 }
 
 /// Transient bookkeeping for an in-flight slide transition: the group that is
@@ -253,6 +258,10 @@ impl RosterManager {
             hovered_badge: false,
             store: None,
             eggs: Vec::new(),
+            hatchery_button: RefCell::new(
+                engine_render::Button::new(Rect::default(), crate::assets::FRAME_PANEL)
+                    .label("Hatchery"),
+            ),
         };
         scene.reload_instructions();
         scene
@@ -566,6 +575,13 @@ impl Scene for RosterManager {
             crate::scenes::home_button::draw_home_button(frame.buffer_mut(), home_dr, home.state());
         }
 
+        {
+            let hr = Self::hatchery_button_rect(area);
+            let mut hb = self.hatchery_button.borrow_mut();
+            hb.set_rect(hr);
+            hb.render(frame.buffer_mut());
+        }
+
         // Ability hover tooltip (spec 49) — topmost overlay, hover-only.
         // Suppressed while a modal is open or a slide is in flight (the details
         // panel and its ability cells are not drawn during a slide, and the
@@ -627,6 +643,7 @@ impl Scene for RosterManager {
                 let hit_home = self.home_button.get_mut().handle_mouse(&me);
                 let hit_dot = self.current_dot.get_mut().handle_mouse(&me);
                 let hit_edit = self.edit_button.get_mut().handle_mouse(&me);
+                let hit_hatchery = self.hatchery_button.get_mut().handle_mouse(&me);
                 if me.kind == MouseEventKind::Moved {
                     let pos = Position { x: me.column, y: me.row };
                     self.hovered_ability = self
@@ -639,6 +656,12 @@ impl Scene for RosterManager {
                 if hit_home {
                     return Some(Transition {
                         target: SceneId::MainHub.into(),
+                        params: None,
+                    });
+                }
+                if hit_hatchery {
+                    return Some(Transition {
+                        target: SceneId::Hatchery.into(),
                         params: None,
                     });
                 }
@@ -720,3 +743,5 @@ mod diagnostics_ui_tests;
 mod diagnostics_integration_tests;
 #[cfg(test)]
 mod store_backed_tests;
+#[cfg(test)]
+mod hatchery_button_tests;

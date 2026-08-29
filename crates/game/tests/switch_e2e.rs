@@ -84,8 +84,8 @@ fn e2e_connect_then_switch_battle_viewer() {
         );
         assert_eq!(
             hello.scenes.len(),
-            6,
-            "Hello.scenes must list exactly six M1 scenes, got {}",
+            7,
+            "Hello.scenes must list exactly seven implemented scenes, got {}",
             hello.scenes.len()
         );
         let expected_ids = [
@@ -95,6 +95,7 @@ fn e2e_connect_then_switch_battle_viewer() {
             SceneKey::from(SceneId::Leaderboard),
             SceneKey::from(SceneId::PostBattle),
             SceneKey::from(SceneId::Settings),
+            SceneKey::from(SceneId::Hatchery),
         ];
         let got_ids: Vec<SceneKey> = hello.scenes.iter().map(|e| e.id.clone()).collect();
         for expected in expected_ids {

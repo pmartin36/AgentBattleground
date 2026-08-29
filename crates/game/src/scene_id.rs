@@ -13,10 +13,11 @@ pub enum SceneId {
     ReplayBrowser,
     Leaderboard,
     Settings,
+    Hatchery,
 }
 
 impl SceneId {
-    /// Returns a slice of all nine variants in catalog (declaration) order.
+    /// Returns a slice of all ten variants in catalog (declaration) order.
     pub fn all() -> &'static [SceneId] {
         use SceneId::*;
         &[
@@ -29,6 +30,7 @@ impl SceneId {
             ReplayBrowser,
             Leaderboard,
             Settings,
+            Hatchery,
         ]
     }
 
@@ -44,6 +46,7 @@ impl SceneId {
             SceneId::ReplayBrowser => "Replay Browser",
             SceneId::Leaderboard => "Leaderboard",
             SceneId::Settings => "Settings",
+            SceneId::Hatchery => "Hatchery",
         }
     }
 
@@ -59,6 +62,7 @@ impl SceneId {
             SceneId::ReplayBrowser => "ReplayBrowser",
             SceneId::Leaderboard => "Leaderboard",
             SceneId::Settings => "Settings",
+            SceneId::Hatchery => "Hatchery",
         }
     }
 
@@ -126,7 +130,8 @@ mod tests {
             | SceneId::PostBattle
             | SceneId::ReplayBrowser
             | SceneId::Leaderboard
-            | SceneId::Settings => {
+            | SceneId::Settings
+            | SceneId::Hatchery => {
                 assert!(
                     SceneId::all().contains(&v),
                     "{v:?} is a SceneId variant but missing from SceneId::all()"
@@ -149,12 +154,13 @@ mod tests {
         assert_variant_is_in_all(SceneId::ReplayBrowser);
         assert_variant_is_in_all(SceneId::Leaderboard);
         assert_variant_is_in_all(SceneId::Settings);
+        assert_variant_is_in_all(SceneId::Hatchery);
     }
 
     #[test]
-    fn all_has_nine_unique_variants() {
+    fn all_has_ten_unique_variants() {
         let variants = SceneId::all();
-        assert_eq!(variants.len(), 9, "all() must return exactly 9 variants");
+        assert_eq!(variants.len(), 10, "all() must return exactly 10 variants");
         // every variant must appear exactly once
         let mut seen = std::collections::HashSet::new();
         for v in variants {
@@ -222,6 +228,21 @@ mod tests {
     #[test]
     fn from_wire_roster_manager_resolves() {
         assert_eq!(SceneId::from_wire("RosterManager"), Some(SceneId::RosterManager));
+    }
+
+    #[test]
+    fn wire_name_equals_rust_variant_identifier_hatchery() {
+        assert_eq!(SceneId::Hatchery.wire_name(), "Hatchery");
+    }
+
+    #[test]
+    fn display_name_hatchery_is_hatchery() {
+        assert_eq!(SceneId::Hatchery.display_name(), "Hatchery");
+    }
+
+    #[test]
+    fn from_wire_hatchery_resolves() {
+        assert_eq!(SceneId::from_wire("Hatchery"), Some(SceneId::Hatchery));
     }
 
     // --- serde ---

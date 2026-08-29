@@ -24,7 +24,7 @@ An egg's type maps onto the existing `Element` enum (`Normal, Fire, Ice, Earth, 
 
 ## Egg States & Tray
 An egg is in exactly one of these states:
-1. **Undefined** — no mad-lib completed yet. Renders as a purpose-drawn silhouette sprite whose form incorporates a question mark (not a text `?` overlaid on an egg), authored through the braille dot pipeline to read clean at sprite resolution, both in the tray and in focus view. Shown in the tray as its mad-lib sentence with blanks visibly unfilled.
+1. **Undefined** — no mad-lib completed yet. Renders as the bundled sprite `crates/game/src/assets/egg_unknown.png` — a dark egg with a bold, chunky, bright-yellow question mark, already verified to read through the braille dot pipeline at both tray and focus sizes (the `?` strokes are deliberately fat so their braille cells stay bright-yellow after per-cell color averaging rather than washing to gray). Use this asset; do not generate a new one. The unfilled mad-lib sentence that accompanies an undefined egg in the tray is owned by `67-hatchery-definition-generation` (which owns the mad-lib templates) and rendered there, not here; this spec renders only the `?` egg sprite for the undefined state.
 2. **Incubating** — mad-lib completed, art generated, 24-hour timer running. Renders with its generated, type-tinted art.
 3. **Ready** — timer elapsed. Same art as Incubating, but plays an idle "wiggle" animation in the tray to signal it can be hatched.
 

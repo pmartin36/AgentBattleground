@@ -113,6 +113,28 @@ impl RosterManager {
         Self::home_dot_rect(area).to_cell_rect()
     }
 
+    /// Width of the Hatchery entry button — fits its "Hatchery" label.
+    const HATCHERY_BUTTON_W: u16 = 12;
+    /// Blank-cell gap between the Hatchery entry button and the home button
+    /// it sits beside.
+    const HATCHERY_HOME_GAP: u16 = 2;
+
+    /// Top rect for the Hatchery entry button — same row as the home button,
+    /// immediately to its left (the centered name/level bands occupy this
+    /// row's columns too, but only near the horizontal center; anchoring
+    /// beside the home button, at the row's far right, keeps this button
+    /// clear of the centered name glyph the same way the home button already
+    /// is).
+    pub(super) fn hatchery_button_rect(area: Rect) -> Rect {
+        let home = Self::home_dot_rect(area).to_cell_rect();
+        Rect {
+            x: home.x - Self::HATCHERY_HOME_GAP - Self::HATCHERY_BUTTON_W,
+            y: area.y,
+            width: Self::HATCHERY_BUTTON_W,
+            height: crate::scenes::home_button::HOME_H,
+        }
+    }
+
 }
 
 #[cfg(test)]
