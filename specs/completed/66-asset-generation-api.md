@@ -1,15 +1,17 @@
+> # ✅ DONE! — Completed 2026-08-29
+
 # Asset Generation API
 
-> **Status: draft; orchestration core built, generation backends pending.** The single in-game API and pipeline for producing creature art assets: still images, animations of a still, or a still plus a set of animations. One API any scene calls; it really generates (Z-Image for stills, MiniMax H3 for animation, both via the native `sd-cli` subprocess), removes backgrounds, and caches results. Game-specific (`crates/game/`). Supersedes the former split across `17-creature-art-asset-pipeline` and `64-creature-animation-pipeline`, whose content is folded in here.
+> **Status: done.** The single in-game API and pipeline for producing creature art assets: still images, animations of a still, or a still plus a set of animations. One API any scene calls; it really generates (Z-Image for stills, MiniMax H3 for animation, both via the native `sd-cli` subprocess), removes backgrounds, and caches results. Game-specific (`crates/game/`). Supersedes the former split across `17-creature-art-asset-pipeline` and `64-creature-animation-pipeline`, whose content is folded in here.
 
-## Build state (do not rebuild)
-The orchestration core is already implemented and committed under `crates/game/src/asset_gen/` and MUST NOT be rebuilt or re-decomposed:
-- the request/response types, the `RecipeBackend` trait, the async job lifecycle + `SdCliRunner` (spawns the sibling `sd-cli`), the keyed cache, and the capability query.
+## Delivered
+All of this feature is implemented and committed under `crates/game/src/asset_gen/`:
+- the request/response types, the `RecipeBackend` trait, the async job lifecycle + `SdCliRunner` (spawns the sibling `sd-cli`), the keyed cache, and the capability query;
+- the two `RecipeBackend` implementations: the Z-Image image backend (`ZImageBackend`) and the MiniMax H3 animation backend (`MiniMaxH3Backend`);
+- background removal (`bg_removal.rs`): the `ChromaDespill` chroma-key + despill default behind a swappable `BackgroundRemover` seam;
+- the three operations wired onto the lifecycle/cache/capability, plus the `generate_creature` preset.
 
-Remaining work this spec drives:
-- the two `RecipeBackend` implementations — the Z-Image image backend and the MiniMax H3 animation backend;
-- background removal (method under research — see below);
-- the three operations wired onto the existing lifecycle/cache/capability, plus the `generate_creature` preset.
+Real generation runs at runtime when the sibling `sd-cli` binary and a GPU with model weights are present; the no-GPU path falls back to image import. Choosing the optimal background-removal method, versus the shipped `ChromaDespill` default, is a separate non-blocking research item (see `needs-research/creature-background-removal.md`).
 
 ## Purpose
 Give every feature one uniform way to request generated art, so no scene re-wires generation for itself. The API owns the job lifecycle, caching, GPU-gating, and the real generation (which model, which prompt, background removal). Deliberately general (image + animations), not creature-specific — creature presets are sugar over the general call.
