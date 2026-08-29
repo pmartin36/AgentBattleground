@@ -3,6 +3,7 @@ pub mod app;
 pub mod asset_gen;
 pub mod assets;
 pub mod braille_name;
+pub mod construction;
 pub mod creatures;
 pub mod diagnostics;
 pub mod instructions;

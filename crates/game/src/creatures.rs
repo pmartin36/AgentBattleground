@@ -41,6 +41,7 @@ pub const XP_TO_NEXT_LEVEL: u32 = 100;
 /// `34-creature-attributes-data-model.md`'s Decisions.)
 pub struct Creature {
     name: String,
+    description: String,
     animations: HashMap<AnimationKind, AnimatedSprite>,
     stats: Stats,
     level: u32,
@@ -60,6 +61,7 @@ impl Creature {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            description: String::new(),
             animations: HashMap::new(),
             stats: Stats::default(),
             level: 1,
@@ -115,9 +117,20 @@ impl Creature {
         self
     }
 
+    /// Set this creature's description and return self (builder style).
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
+    }
+
     /// The creature's display name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// The creature's flavor description (empty for a fresh `Creature::new`).
+    pub fn description(&self) -> &str {
+        &self.description
     }
 
     /// The sprite registered under `kind`, if any.
@@ -878,5 +891,19 @@ mod tests {
         assert_eq!(c.still_handle(), Some(&still));
         assert_eq!(c.idle_handle(), Some(&idle));
         assert_eq!(c.attack_handle(), Some(&attack));
+    }
+
+    /// A freshly constructed `Creature` defaults to an empty description.
+    #[test]
+    fn new_creature_description_defaults_empty() {
+        let c = Creature::new("Test");
+        assert_eq!(c.description(), "");
+    }
+
+    /// `with_description` round-trips through `description()`.
+    #[test]
+    fn with_description_round_trips() {
+        let c = Creature::new("Test").with_description("a small ember spirit");
+        assert_eq!(c.description(), "a small ember spirit");
     }
 }
