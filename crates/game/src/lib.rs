@@ -16,6 +16,7 @@ pub mod sounds;
 pub mod squad_role;
 pub mod stamina;
 pub mod stats;
+pub mod text_gen;
 pub mod registry;
 pub mod cli;
 
