@@ -1,6 +1,8 @@
+> # ✅ DONE! — Completed 2026-08-29
+
 # Hatchery — Egg Definition & Creature Generation
 
-> **Status: draft (not started).** The mad-lib definition modal and the wiring that turns an undefined egg into a defined, incubating one: the player fills a sentence, the model reads it into parts (`70`), deterministic code assembles the creature (`71`), and the egg's art is generated (`66`). Second of the three hatchery specs — see `65-hatchery` (shell & egg lifecycle) and `68-hatchery-hatch-sequence` (the animated hatch and add-to-roster).
+> **Status: done.** The mad-lib definition modal and the wiring that turns an undefined egg into a defined, incubating one: the player fills a sentence, the model reads it into parts (`70`), deterministic code assembles the creature (`71`), and the egg's art is generated (`66`). Second of the three hatchery specs — see `65-hatchery` (shell & egg lifecycle) and `68-hatchery-hatch-sequence` (the animated hatch and add-to-roster).
 
 ## Purpose
 Turn an undefined egg into a defined, incubating one. The player fills in a mad-lib sentence; that sentence becomes the description the model interprets and the prompt the art is generated from. This spec owns the modal and the wiring between the pieces that already exist; it does not itself derive stats or attacks (that is `71`) or run the model (that is `70`).
