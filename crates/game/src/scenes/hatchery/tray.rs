@@ -27,26 +27,46 @@ const WIGGLE_PERIOD: Duration = Duration::from_millis(500);
 /// Peak vertical bob amplitude, in dots.
 const WIGGLE_AMP_DOTS: i32 = 2;
 
+/// The resting tray band: a strip along the bottom of `area` ~15% of its
+/// height tall, where the tray lays its eggs out. Anchoring the eggs to a
+/// short bottom band (rather than the vertical center) keeps the play area
+/// above it clear.
+pub(crate) fn tray_band(area: Rect) -> Rect {
+    let band_h = (area.height * 3 / 20).max(3);
+    Rect {
+        x: area.x,
+        y: area.y + area.height.saturating_sub(band_h),
+        width: area.width,
+        height: band_h,
+    }
+}
+
 /// The single owner of per-egg tray placement and hit-rects: one unfloored
-/// `DotRect` per egg, a centered horizontal row, vertically centered in
-/// `area`. Every returned rect is `EGG_SLOT_W_DOTS` x `EGG_SLOT_H_DOTS`.
+/// `DotRect` per egg, a centered horizontal row that fills the given `area`
+/// band vertically (small padding), preserving the egg sprite's 11:14 aspect.
+/// Callers pass a short band (`tray_band` for the resting tray, the focus
+/// strip while an egg is focused), so the eggs size themselves to it.
 pub(crate) fn tray_slots(area: Rect, count: usize) -> Vec<DotRect> {
     let ax = area.x as i32 * 2;
     let ay = area.y as i32 * 4;
     let aw = area.width as i32 * 2;
     let ah = area.height as i32 * 4;
 
+    let pad = (ah / 14).max(1);
+    let slot_h = (ah - 2 * pad).max(1);
+    let slot_w = (slot_h * EGG_SLOT_W_DOTS / EGG_SLOT_H_DOTS).max(1);
+    let slot_y = ay + (ah - slot_h) / 2;
+
     let count_i32 = count as i32;
-    let total_w = count_i32 * EGG_SLOT_W_DOTS + (count_i32 - 1).max(0) * EGG_GAP_DOTS;
+    let total_w = count_i32 * slot_w + (count_i32 - 1).max(0) * EGG_GAP_DOTS;
     let start_x = ax + (aw - total_w) / 2;
-    let slot_y = ay + (ah - EGG_SLOT_H_DOTS) / 2;
 
     (0..count)
         .map(|i| DotRect {
-            x: start_x + i as i32 * (EGG_SLOT_W_DOTS + EGG_GAP_DOTS),
+            x: start_x + i as i32 * (slot_w + EGG_GAP_DOTS),
             y: slot_y,
-            w: EGG_SLOT_W_DOTS,
-            h: EGG_SLOT_H_DOTS,
+            w: slot_w,
+            h: slot_h,
         })
         .collect()
 }

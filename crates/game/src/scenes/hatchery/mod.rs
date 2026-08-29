@@ -240,7 +240,7 @@ impl Scene for Hatchery {
         let mut buttons = self.egg_buttons.borrow_mut();
         match self.focused {
             None => {
-                let slots = tray::tray_slots(area, self.eggs.len());
+                let slots = tray::tray_slots(tray::tray_band(area), self.eggs.len());
                 for (i, slot) in slots.iter().enumerate() {
                     tray::draw_egg(
                         frame.buffer_mut(),
@@ -505,9 +505,12 @@ mod tests {
     }
 
     /// A scene with an `Undefined` egg renders the tray: somewhere in the
-    /// frame there is a lit dot carrying the bundled `?` sprite's bright
-    /// yellow, untinted (element_color tints would darken it away from this
-    /// exact hue).
+    /// frame there is a cell carrying the bundled `?` sprite's warm yellow-gold,
+    /// untinted. In the resting tray the egg is small, so per-cell braille
+    /// averaging blends the `?`'s thin strokes with the dark egg body toward a
+    /// muted gold (~201,160,60) rather than the sprite's pure yellow — but it
+    /// stays unmistakably yellow-gold, which no element tint (reddish Fire,
+    /// bluish Ice, ...) would produce from a bright mark.
     #[test]
     fn render_draws_undefined_eggs_bright_yellow_marker() {
         let dir = temp_store_dir("render-undefined-marker");
@@ -518,19 +521,21 @@ mod tests {
         let (w, h) = (40u16, 20u16);
         let buf = render_to_buffer(&scene, w, h);
 
-        let is_bright_yellow = |r: u8, g: u8, b: u8| r > 200 && g > 150 && b < 50;
+        // Warm yellow-gold: strong red+green, low blue. Loose enough for the
+        // small-egg per-cell blend, tight enough to exclude element tints.
+        let is_yellow_gold = |r: u8, g: u8, b: u8| r > 190 && g > 150 && b < 90;
         let mut found = false;
         'scan: for y in 0..h {
             for x in 0..w {
                 if let Some((_, color)) = engine_render::decode_braille_cell(&buf, x, y) {
-                    if is_bright_yellow(color.r, color.g, color.b) {
+                    if is_yellow_gold(color.r, color.g, color.b) {
                         found = true;
                         break 'scan;
                     }
                 }
             }
         }
-        assert!(found, "expected a bright-yellow lit dot somewhere in the rendered frame for the undefined egg's `?`");
+        assert!(found, "expected a warm yellow-gold cell somewhere in the rendered frame for the undefined egg's `?`");
     }
 
     fn ready_egg() -> Egg {
@@ -566,7 +571,7 @@ mod tests {
         let area = Rect::new(0, 0, w, h);
         let _ = render_to_buffer(&scene, w, h);
 
-        let rect = tray::tray_slots(area, 1)[0].to_cell_rect();
+        let rect = tray::tray_slots(tray::tray_band(area), 1)[0].to_cell_rect();
         tap_at(&mut scene, rect.x, rect.y);
 
         assert_eq!(scene.focused, Some(0), "tapping an Incubating egg must focus it");
@@ -588,7 +593,7 @@ mod tests {
         let area = Rect::new(0, 0, w, h);
 
         let _ = render_to_buffer(&scene, w, h);
-        let tray_rect = tray::tray_slots(area, 1)[0].to_cell_rect();
+        let tray_rect = tray::tray_slots(tray::tray_band(area), 1)[0].to_cell_rect();
         tap_at(&mut scene, tray_rect.x, tray_rect.y);
         assert_eq!(scene.focused, Some(0));
 
@@ -617,7 +622,7 @@ mod tests {
         let area = Rect::new(0, 0, w, h);
 
         let _ = render_to_buffer(&scene, w, h);
-        let slot0 = tray::tray_slots(area, 2)[0].to_cell_rect();
+        let slot0 = tray::tray_slots(tray::tray_band(area), 2)[0].to_cell_rect();
         tap_at(&mut scene, slot0.x, slot0.y);
         assert_eq!(scene.focused, Some(0));
 
@@ -640,7 +645,7 @@ mod tests {
         let (w, h) = (40u16, 20u16);
         let area = Rect::new(0, 0, w, h);
         let _ = render_to_buffer(&scene, w, h);
-        let rect = tray::tray_slots(area, 1)[0].to_cell_rect();
+        let rect = tray::tray_slots(tray::tray_band(area), 1)[0].to_cell_rect();
         tap_at(&mut scene, rect.x, rect.y);
 
         assert!(scene.focused.is_none(), "an Undefined egg must never enter focus");
@@ -659,7 +664,7 @@ mod tests {
         let (w, h) = (40u16, 20u16);
         let area = Rect::new(0, 0, w, h);
         let _ = render_to_buffer(&scene, w, h);
-        let rect = tray::tray_slots(area, 1)[0].to_cell_rect();
+        let rect = tray::tray_slots(tray::tray_band(area), 1)[0].to_cell_rect();
         tap_at(&mut scene, rect.x, rect.y);
 
         assert!(scene.focused.is_none(), "a Ready egg must never enter focus");
