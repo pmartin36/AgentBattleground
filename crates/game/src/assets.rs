@@ -68,6 +68,12 @@ pub const DOT_UNFILLED: &[u8] = include_bytes!("assets/dot_unfilled.png");
 /// PostBattle spoils band's per-item icon (spec `46-post-battle-results-screen.md`).
 pub const ICON_SPOIL_CANDY: &[u8] = include_bytes!("assets/icon_spoil_candy.png");
 
+/// Undefined-egg sprite, 220×280 RGBA8: a dark egg body with a bold, chunky,
+/// bright-yellow question mark. Rendered UNTINTED so the `?` stays yellow
+/// after per-cell braille color averaging (its strokes are deliberately fat
+/// for this). Bundled first-party asset.
+pub const EGG_UNKNOWN: &[u8] = include_bytes!("assets/egg_unknown.png");
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,6 +272,21 @@ mod icon_tests {
                 "{name} center pixel must be opaque, got alpha={alpha}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod egg_unknown_tests {
+    use super::*;
+
+    /// The bundled bytes decode without error and are the pinned 220×280
+    /// dimensions the egg tray render is fitted to.
+    #[test]
+    fn egg_unknown_decodes() {
+        let img = image::load_from_memory(EGG_UNKNOWN)
+            .expect("EGG_UNKNOWN must decode as a valid image")
+            .to_rgba8();
+        assert_eq!(img.dimensions(), (220, 280), "egg_unknown must be 220x280");
     }
 }
 
