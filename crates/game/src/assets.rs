@@ -79,6 +79,12 @@ pub const ICON_SPOIL_CANDY: &[u8] = include_bytes!("assets/icon_spoil_candy.png"
 /// for this). Bundled first-party asset.
 pub const EGG_UNKNOWN: &[u8] = include_bytes!("assets/egg_unknown.png");
 
+/// Egg-crack overlay animation, black-on-transparent RGBA GIF frames — the
+/// hatch sequence's shared crack sprite, composited on top of any egg during
+/// the Crack phase (no tint needed: black ink reads over every element
+/// color). Decoded once per launched hatch sequence.
+pub const EGG_CRACK: &[u8] = include_bytes!("assets/egg_crack.gif");
+
 #[cfg(test)]
 mod tests {
     use super::*;

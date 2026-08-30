@@ -61,7 +61,7 @@ pub fn creature_from_persisted(persisted: &PersistedCreature) -> Creature {
 /// an empty clip or when any frame fails to decode (logged via
 /// `tracing::warn!`) — the caller leaves the animation unresolved rather than
 /// panicking.
-fn resolve_clip(clip: &ClipAsset) -> Option<AnimatedSprite> {
+pub(crate) fn resolve_clip(clip: &ClipAsset) -> Option<AnimatedSprite> {
     if clip.frames.is_empty() {
         return None;
     }

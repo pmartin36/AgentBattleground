@@ -4,6 +4,11 @@
 //! remaining eggs relocate to a bottom strip.
 
 mod focus;
+mod hatch;
+mod hatch_clips;
+#[cfg(debug_assertions)]
+mod hatch_dev;
+mod hatch_render;
 mod lifecycle;
 mod tray;
 pub mod define_modal;
@@ -92,6 +97,14 @@ pub struct Hatchery {
     /// failure), or `None`; cleared by the next attempted Done.
     #[inspect(hidden)]
     definition_error: Option<String>,
+    /// Recorded idle/attack clip jobs, one per `(egg, kind)` submitted this
+    /// session; a settled entry suppresses resubmission even after failure.
+    #[inspect(hidden)]
+    clip_jobs: Vec<hatch_clips::ClipJob>,
+    /// The in-progress hatch sequence launched from a tapped `Ready` egg, or
+    /// `None` when no hatch is underway.
+    #[inspect(hidden)]
+    hatch: Option<hatch_render::HatchState>,
 }
 
 impl Hatchery {
@@ -116,6 +129,8 @@ impl Hatchery {
             text_gen_factory: Self::production_text_gen_factory(),
             definition: None,
             definition_error: None,
+            clip_jobs: Vec::new(),
+            hatch: None,
         }
     }
 
@@ -180,6 +195,8 @@ impl Hatchery {
             text_gen_factory,
             definition: None,
             definition_error: None,
+            clip_jobs: Vec::new(),
+            hatch: None,
         };
         scene.tick(now);
         scene
@@ -323,11 +340,18 @@ impl Scene for Hatchery {
         self.elapsed += dt;
         self.tick(SystemTime::now());
         self.poll_definition(SystemTime::now());
+        self.advance_hatch_clips();
+        self.advance_hatch(dt);
         None
     }
 
     fn render(&self, frame: &mut Frame, area: Rect) {
         engine_render::fill(frame.buffer_mut(), area, Self::COLOR);
+
+        if self.hatch.is_some() {
+            self.draw_hatch(frame, area);
+            return;
+        }
 
         let dr = Self::back_dot_rect(area);
         let mut b = self.back_button.borrow_mut();
@@ -400,6 +424,10 @@ impl Scene for Hatchery {
     }
 
     fn handle_input(&mut self, ev: InputEvent) -> Option<Transition> {
+        if self.hatch.as_ref().is_some_and(|h| h.seq.is_active()) {
+            return None;
+        }
+
         if let Some(modal) = self.define_modal.as_mut() {
             let action = modal.handle_input(&ev);
             match action {
@@ -408,6 +436,13 @@ impl Scene for Hatchery {
                 ModalAction::None => {}
             }
             return None;
+        }
+
+        #[cfg(debug_assertions)]
+        if let InputEvent::Key(key) = &ev {
+            if self.handle_debug_hotkey(key.code) {
+                return None;
+            }
         }
 
         if let InputEvent::Mouse(me) = ev {
@@ -898,4 +933,13 @@ mod tests {
         assert!(scene.focused.is_none(), "a Ready egg must never enter focus");
         assert_eq!(scene.take_hatch_request(), Some(0));
     }
+
+    // Hatch sequence render + scene wiring tests live in
+    // `tests/hatch_sequence_tests.rs` (kept out of this file to stay under
+    // the project's file-size budget).
+    mod hatch_sequence_tests;
+    // Dev-only debug hotkey tests live in `tests/hatch_dev_tests.rs`,
+    // compiled only alongside the debug-only `hatch_dev` module itself.
+    #[cfg(debug_assertions)]
+    mod hatch_dev_tests;
 }

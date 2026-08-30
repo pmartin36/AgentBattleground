@@ -72,14 +72,28 @@ pub(in crate::asset_gen) fn creature_requests(
 
     let anims = ACTION_TEMPLATES
         .iter()
-        .map(|template| AnimationRequest {
-            action: template.action.to_string(),
-            prompt: format!("A {} {}", spec.description, template.beats),
-            params: DEFAULT_CLIP_PARAMS,
+        .map(|template| {
+            animation_request(template.action, &spec.description)
+                .expect("action comes from ACTION_TEMPLATES itself")
         })
         .collect();
 
     (image, anims)
+}
+
+/// Looks up `action` in `ACTION_TEMPLATES` and builds the `AnimationRequest`
+/// for it: `description`'s beats, prompt, and the shared default clip
+/// params. `None` for an action with no template. The single authoring
+/// site for per-action beats + params, so `creature_requests` and any other
+/// caller build every `AnimationRequest` through here rather than
+/// re-authoring beats inline.
+pub fn animation_request(action: &str, description: &str) -> Option<AnimationRequest> {
+    let template = ACTION_TEMPLATES.iter().find(|t| t.action == action)?;
+    Some(AnimationRequest {
+        action: template.action.to_string(),
+        prompt: format!("A {} {}", description, template.beats),
+        params: DEFAULT_CLIP_PARAMS,
+    })
 }
 
 impl AssetGen {
@@ -229,5 +243,27 @@ mod tests {
         assert_eq!(result.clips.len(), 3, "one clip per default action");
         assert!(result.clips.iter().all(|c| c.is_ok()), "every clip must resolve Ok: {:?}", result.clips);
         assert_eq!(anim_calls.load(Ordering::SeqCst), 3, "one runner call per default action");
+    }
+
+    /// `animation_request` carries the caller's description, the action's
+    /// beats, and the shared default clip params; an unknown action yields
+    /// `None`.
+    #[test]
+    fn animation_request_owns_beats_and_params_or_none_for_unknown() {
+        let idle = animation_request("idle", "a shy fox").expect("idle has a template");
+        assert_eq!(idle.action, "idle");
+        assert!(idle.prompt.contains("a shy fox"), "got: {}", idle.prompt);
+        assert!(idle.prompt.contains("bob"), "got: {}", idle.prompt);
+        assert_eq!(idle.params, DEFAULT_CLIP_PARAMS);
+
+        let attack = animation_request("attack", "a shy fox").expect("attack has a template");
+        assert_eq!(attack.action, "attack");
+        assert!(attack.prompt.contains("follow-through"), "got: {}", attack.prompt);
+        assert_eq!(attack.params, DEFAULT_CLIP_PARAMS);
+
+        assert!(
+            animation_request("bogus-action", "a shy fox").is_none(),
+            "an action with no template must yield None"
+        );
     }
 }

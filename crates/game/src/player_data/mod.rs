@@ -7,6 +7,7 @@ pub mod schema;
 pub mod store;
 
 pub use convert::{apply_persisted_rpg, creature_from_persisted, creature_to_persisted};
+pub(crate) use convert::resolve_clip;
 pub use schema::{Egg, EggState, PersistedCreature, PlayerData};
 pub use store::{Loaded, PlayerStore};
 
