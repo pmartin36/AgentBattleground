@@ -5,6 +5,8 @@
 //! and the structured error both backends map their failures into
 //! (`TextError`).
 
+use std::path::{Path, PathBuf};
+
 /// A caller-assembled generation request. The API does not wrap or inject
 /// content into `user`; the caller has already assembled it.
 #[derive(Clone, Debug, PartialEq)]
@@ -58,6 +60,9 @@ pub struct ResolvedModelConfig {
     api_key: Option<String>,
     local_command: Option<String>,
     base_url: Option<String>,
+    model_id: Option<String>,
+    runtime_path: Option<PathBuf>,
+    weights_path: Option<PathBuf>,
 }
 
 impl ResolvedModelConfig {
@@ -74,6 +79,9 @@ impl ResolvedModelConfig {
             api_key,
             local_command,
             base_url,
+            model_id: None,
+            runtime_path: None,
+            weights_path: None,
         }
     }
 
@@ -96,6 +104,45 @@ impl ResolvedModelConfig {
     pub fn local_command(&self) -> Option<&str> {
         self.local_command.as_deref()
     }
+
+    /// A registry-resolved `Provider::Local` config: `model_identity` and
+    /// `model_id()` are the same stable registry id, carrying the resolved
+    /// `llm-cli` runtime path and installed weights path.
+    pub fn local_registry(
+        model_id: impl Into<String>,
+        runtime_path: PathBuf,
+        weights_path: PathBuf,
+    ) -> Self {
+        let model_id = model_id.into();
+        ResolvedModelConfig {
+            provider: Provider::Local,
+            model_identity: model_id.clone(),
+            api_key: None,
+            local_command: None,
+            base_url: None,
+            model_id: Some(model_id),
+            runtime_path: Some(runtime_path),
+            weights_path: Some(weights_path),
+        }
+    }
+
+    /// The registry `model_id` for a registry-resolved Local config; `None`
+    /// for online configs and for the `local_command` escape hatch.
+    pub fn model_id(&self) -> Option<&str> {
+        self.model_id.as_deref()
+    }
+
+    /// The resolved `llm-cli` sibling runtime path for a registry-resolved
+    /// Local config; `None` otherwise.
+    pub fn runtime_path(&self) -> Option<&Path> {
+        self.runtime_path.as_deref()
+    }
+
+    /// The resolved installed GGUF weights path for a registry-resolved
+    /// Local config; `None` otherwise.
+    pub fn weights_path(&self) -> Option<&Path> {
+        self.weights_path.as_deref()
+    }
 }
 
 /// A structured failure from either backend. No GPU variants (that is an
@@ -116,4 +163,32 @@ pub enum TextError {
     Parse(String),
     /// Either: e.g. `OpenAiCompatible` selected with no base URL.
     Config(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `local_registry` builds a `Provider::Local` config whose
+    /// `model_identity` and `model_id()` are the same registry id, and whose
+    /// runtime/weights accessors surface the paths it was given; the
+    /// `local_command` escape hatch stays unset.
+    #[test]
+    fn local_registry_constructor_populates_paths() {
+        let cfg = ResolvedModelConfig::local_registry(
+            "qwen3-4b-instruct",
+            PathBuf::from("/fake/bin/llm-cli"),
+            PathBuf::from("/fake/models/qwen3-4b-instruct/w.gguf"),
+        );
+
+        assert_eq!(cfg.provider(), Provider::Local);
+        assert_eq!(cfg.model_identity(), "qwen3-4b-instruct");
+        assert_eq!(cfg.model_id(), Some("qwen3-4b-instruct"));
+        assert_eq!(cfg.runtime_path(), Some(Path::new("/fake/bin/llm-cli")));
+        assert_eq!(
+            cfg.weights_path(),
+            Some(Path::new("/fake/models/qwen3-4b-instruct/w.gguf"))
+        );
+        assert_eq!(cfg.local_command(), None);
+    }
 }

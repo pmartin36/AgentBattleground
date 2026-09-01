@@ -10,6 +10,8 @@ pub mod backend_online;
 pub mod cache;
 pub mod conformance;
 pub mod job;
+pub mod model_install;
+pub mod model_registry;
 pub mod operation;
 pub mod types;
 
@@ -25,6 +27,8 @@ mod boundary {
         ("types.rs", include_str!("types.rs")),
         ("backend.rs", include_str!("backend.rs")),
         ("job.rs", include_str!("job.rs")),
+        ("model_registry.rs", include_str!("model_registry.rs")),
+        ("model_install.rs", include_str!("model_install.rs")),
         ("conformance.rs", include_str!("conformance.rs")),
         ("backend_local.rs", include_str!("backend_local.rs")),
         ("backend_online.rs", include_str!("backend_online.rs")),

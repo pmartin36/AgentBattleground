@@ -11,6 +11,7 @@ use image::{Rgba, RgbaImage};
 use crate::asset_gen::recipe::SdCliInvocation;
 use crate::asset_gen::types::ImageAsset;
 use crate::asset_gen::{CancelFlag, GpuCapability, JobError, JobRunner, RunOutput};
+use crate::model_config::ConfigError;
 
 use super::*;
 
@@ -502,7 +503,7 @@ fn bystander_egg_gets_clips_after_sibling_dismissal() {
         PlayerStore::with_dir(&dir),
         SystemTime::now(),
         succeeding_asset_gen(calls.clone()),
-        None,
+        Err(ConfigError::NotConfigured),
         unused_text_gen_factory(),
     );
 
@@ -582,7 +583,7 @@ fn in_flight_clip_resolves_to_shifted_egg_not_stale_index() {
         PlayerStore::with_dir(&dir),
         SystemTime::now(),
         gated_asset_gen(calls.clone(), 3, gate.clone()),
-        None,
+        Err(ConfigError::NotConfigured),
         unused_text_gen_factory(),
     );
 

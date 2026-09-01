@@ -191,6 +191,7 @@ mod tests {
     use crate::asset_gen::{
         AssetGen, CancelFlag, GpuCapability, JobError, JobRunner, RunOutput, ZImageBackend,
     };
+    use crate::model_config::ConfigError;
     use crate::player_data::{Egg, EggState, PersistedCreature, PlayerData, PlayerStore};
     use crate::stamina::Stamina;
     use crate::stats::Stats;
@@ -299,7 +300,7 @@ mod tests {
             PlayerStore::with_dir(&dir),
             SystemTime::now(),
             asset_gen,
-            None,
+            Err(ConfigError::NotConfigured),
             unused_text_gen_factory(),
         )
     }
@@ -315,7 +316,7 @@ mod tests {
             PlayerStore::with_dir(&dir),
             SystemTime::now(),
             asset_gen,
-            None,
+            Err(ConfigError::NotConfigured),
             unused_text_gen_factory(),
         );
         (scene, dir)
@@ -418,7 +419,7 @@ mod tests {
             PlayerStore::with_dir(&dir),
             SystemTime::now(),
             fake_asset_gen(second_calls.clone(), false, GpuCapability::Available),
-            None,
+            Err(ConfigError::NotConfigured),
             unused_text_gen_factory(),
         );
 

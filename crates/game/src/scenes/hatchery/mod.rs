@@ -30,7 +30,7 @@ use engine_core::Inspectable;
 use engine_core::SceneKey;
 
 use crate::asset_gen::{capability, AssetGen, SdCliRunner, ZImageBackend};
-use crate::model_config::resolve_model_config;
+use crate::model_config::{resolve_model_config, ConfigError};
 use crate::text_gen::operation::TextGen;
 use crate::text_gen::ResolvedModelConfig;
 use define_modal::{DefineModal, ModalAction};
@@ -84,10 +84,10 @@ pub struct Hatchery {
     /// modal is submitted.
     #[inspect(hidden)]
     asset_gen: AssetGen,
-    /// The resolved text-generation model config, or `None` when nothing
-    /// usable is configured; read by the definition pipeline.
+    /// The resolved text-generation model config, or the distinct reason
+    /// nothing usable is configured; read by the definition pipeline.
     #[inspect(hidden)]
-    model_config: Option<ResolvedModelConfig>,
+    model_config: Result<ResolvedModelConfig, ConfigError>,
     /// Builds a `TextGen` from a resolved model config on demand, so the
     /// definition pipeline can construct it lazily and tests can inject a
     /// fake-backend `TextGen`.
@@ -173,7 +173,7 @@ impl Hatchery {
         store: crate::player_data::PlayerStore,
         now: SystemTime,
         asset_gen: AssetGen,
-        model_config: Option<ResolvedModelConfig>,
+        model_config: Result<ResolvedModelConfig, ConfigError>,
         text_gen_factory: TextGenFactory,
     ) -> Self {
         let data = store.load(Self::egg_seed).into_data();

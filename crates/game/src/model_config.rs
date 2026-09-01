@@ -2,22 +2,101 @@
 //! local JSON config file into a `ResolvedModelConfig` (text_gen type), or
 //! a clear absent signal when nothing usable is configured. Never panics.
 
+use crate::text_gen::model_install::InstallError;
+use crate::text_gen::model_registry::ModelEntry;
 use crate::text_gen::{Provider, ResolvedModelConfig};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const ENV_PROVIDER: &str = "AGENTBATTLEGROUND_MODEL_PROVIDER";
 const ENV_IDENTITY: &str = "AGENTBATTLEGROUND_MODEL_IDENTITY";
 const ENV_API_KEY: &str = "AGENTBATTLEGROUND_MODEL_API_KEY";
 const ENV_BASE_URL: &str = "AGENTBATTLEGROUND_MODEL_BASE_URL";
 const ENV_LOCAL_COMMAND: &str = "AGENTBATTLEGROUND_MODEL_LOCAL_COMMAND";
+const ENV_MODEL_ID: &str = "AGENTBATTLEGROUND_MODEL_ID";
 const CONFIG_FILE_NAME: &str = "model_config.json";
+/// The bundled llama.cpp runtime sibling name.
+const RUNTIME_BIN: &str = "llm-cli";
+
+/// Model-config resolution failure: either the Local registry path (a
+/// selected `model_id`, not the raw `local_command` escape hatch) or the
+/// general case of nothing usable being configured at all.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConfigError {
+    /// No online provider is complete, no `local_command` is set, and the
+    /// runtime sibling directory could not be located.
+    NotConfigured,
+    UnknownModel { model_id: String },
+    NotDownloaded { model_id: String },
+}
+
+/// Pure, seam-injected Local-registry resolver: resolves `model_id` (or the
+/// registry default when `None`) through the registry to a
+/// `ResolvedModelConfig` carrying the `llm-cli` sibling path under
+/// `runtime_dir` and the installed weights path `weights` reports. Never
+/// touches the filesystem or environment directly.
+fn resolve_local_registry(
+    model_id: Option<&str>,
+    runtime_dir: &Path,
+    weights: &dyn Fn(&ModelEntry) -> Result<PathBuf, InstallError>,
+) -> Result<ResolvedModelConfig, ConfigError> {
+    let id = model_id.unwrap_or(crate::text_gen::model_registry::DEFAULT_MODEL_ID);
+    let entry = crate::text_gen::model_registry::lookup(id)
+        .ok_or_else(|| ConfigError::UnknownModel { model_id: id.to_string() })?;
+    let weights_path =
+        weights(entry).map_err(|_| ConfigError::NotDownloaded { model_id: id.to_string() })?;
+    Ok(ResolvedModelConfig::local_registry(
+        id,
+        runtime_dir.join(RUNTIME_BIN),
+        weights_path,
+    ))
+}
 
 /// Production entry: real env, then the JSON file under the base data dir.
-/// `None` = no usable model configured (absent OR incomplete/malformed).
-pub fn resolve_model_config() -> Option<ResolvedModelConfig> {
-    let path = crate::instructions::base_data_dir(None).join(CONFIG_FILE_NAME);
+/// Online configs and the `local_command` escape hatch resolve via
+/// `resolve_from_sources`; a `Local` selection with no `local_command` (the
+/// shipped default, including when nothing is configured at all) falls
+/// through to the registry, resolving `model_id` against the real `llm-cli`
+/// sibling and the installed weights. `Err` carries the reason nothing
+/// usable is configured (an online provider absent/incomplete/malformed, a
+/// registry model that is unknown, or one that is not yet downloaded) —
+/// never a silent absence.
+pub fn resolve_model_config() -> Result<ResolvedModelConfig, ConfigError> {
+    let base = crate::instructions::base_data_dir(None);
+    let path = base.join(CONFIG_FILE_NAME);
     let file_json = read_config_file(&path);
-    resolve_from_sources(|k| std::env::var(k).ok(), file_json.as_deref())
+    let env = |k: &str| std::env::var(k).ok();
+
+    if let Some(cfg) = resolve_from_sources(env, file_json.as_deref()) {
+        return Ok(cfg);
+    }
+
+    let raw: Option<RawConfig> =
+        file_json.as_deref().and_then(|j| serde_json::from_str(j).ok());
+    let provider = non_empty(env(ENV_PROVIDER))
+        .or_else(|| raw.as_ref().and_then(|r| r.provider.clone()))
+        .and_then(|p| parse_provider(&p));
+    let has_local_command = non_empty(env(ENV_LOCAL_COMMAND))
+        .or_else(|| raw.as_ref().and_then(|r| r.local_command.clone()))
+        .is_some();
+    if !matches!(provider, None | Some(Provider::Local)) || has_local_command {
+        return Err(ConfigError::NotConfigured);
+    }
+
+    let model_id = non_empty(env(ENV_MODEL_ID))
+        .or_else(|| raw.as_ref().and_then(|r| r.model_id.clone()));
+    let runtime_dir = sibling_dir().map_err(|_| ConfigError::NotConfigured)?;
+    let weights = |entry: &ModelEntry| crate::text_gen::model_install::require_present(&base, entry);
+    resolve_local_registry(model_id.as_deref(), &runtime_dir, &weights)
+}
+
+/// The directory holding the `llm-cli` sibling runtime binary: the running
+/// executable's own directory, mirroring `SdCliRunner::sibling`
+/// (asset_gen/runner.rs).
+fn sibling_dir() -> std::io::Result<PathBuf> {
+    let exe = std::env::current_exe()?;
+    exe.parent().map(Path::to_path_buf).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "current_exe has no parent directory")
+    })
 }
 
 /// Pure, hermetic core: env wins wholesale over the file.
@@ -129,6 +208,7 @@ struct RawConfig {
     api_key: Option<String>,
     base_url: Option<String>,
     local_command: Option<String>,
+    model_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -211,10 +291,68 @@ mod tests {
         assert_eq!(cfg.local_command(), Some("/usr/bin/flux4"));
     }
 
+    /// A `weights` seam reporting the model as present, keyed by whichever
+    /// entry's `model_id` the resolver looks up.
+    fn present_seam(entry: &ModelEntry) -> Result<PathBuf, InstallError> {
+        Ok(PathBuf::from("/fake/models").join(entry.model_id).join("w.gguf"))
+    }
+
+    /// A `weights` seam reporting the model as never downloaded.
+    fn absent_seam(entry: &ModelEntry) -> Result<PathBuf, InstallError> {
+        Err(InstallError::NotDownloaded { model_id: entry.model_id.to_string() })
+    }
+
+    /// With no explicit `model_id`, the registry resolver picks the
+    /// registry's default model.
     #[test]
-    fn local_env_config_missing_command_is_absent() {
-        let env = env_map(&[(ENV_PROVIDER, "local"), (ENV_IDENTITY, "local-model")]);
-        assert_eq!(resolve_from_sources(env, None), None);
+    fn default_model_id_resolves_when_unset() {
+        let rt_dir = Path::new("/fake/bin");
+        let cfg = resolve_local_registry(None, rt_dir, &present_seam)
+            .expect("default model_id should resolve");
+        assert_eq!(cfg.model_id(), Some(crate::text_gen::model_registry::DEFAULT_MODEL_ID));
+    }
+
+    /// An explicit `model_id` overrides the registry default.
+    #[test]
+    fn explicit_model_id_overrides_default() {
+        let rt_dir = Path::new("/fake/bin");
+        let cfg = resolve_local_registry(Some("phi-4-mini-instruct"), rt_dir, &present_seam)
+            .expect("explicit model_id should resolve");
+        assert_eq!(cfg.model_id(), Some("phi-4-mini-instruct"));
+    }
+
+    /// A `model_id` absent from the registry is a config error, not a panic
+    /// or a silent fallback to the default.
+    #[test]
+    fn unknown_model_id_is_config_error() {
+        let rt_dir = Path::new("/fake/bin");
+        let result = resolve_local_registry(Some("does-not-exist"), rt_dir, &present_seam);
+        assert_eq!(
+            result,
+            Err(ConfigError::UnknownModel { model_id: "does-not-exist".to_string() })
+        );
+    }
+
+    /// A known `model_id` whose weights are not yet installed surfaces a
+    /// distinct "not downloaded" error naming the model id, never a silent
+    /// `None`/absent result.
+    #[test]
+    fn absent_weights_is_model_not_downloaded() {
+        let rt_dir = Path::new("/fake/bin");
+        let result = resolve_local_registry(Some("qwen3-4b-instruct"), rt_dir, &absent_seam);
+        assert_eq!(
+            result,
+            Err(ConfigError::NotDownloaded { model_id: "qwen3-4b-instruct".to_string() })
+        );
+    }
+
+    /// The resolved runtime path is the `llm-cli` sibling under the given
+    /// runtime dir.
+    #[test]
+    fn runtime_path_is_llm_cli_sibling() {
+        let rt_dir = Path::new("/fake/bin");
+        let cfg = resolve_local_registry(None, rt_dir, &present_seam).expect("should resolve");
+        assert_eq!(cfg.runtime_path(), Some(Path::new("/fake/bin/llm-cli")));
     }
 
     #[test]

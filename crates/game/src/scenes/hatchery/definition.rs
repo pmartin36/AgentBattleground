@@ -33,9 +33,31 @@ pub(crate) enum PendingDefinition {
 /// resolved model config.
 pub(crate) const NO_MODEL_MESSAGE: &str = "no model configured";
 
+/// Surfaced via `draw_definition_error` when Done is pressed against a
+/// selected model_id whose weights have not been downloaded yet — distinct
+/// from `NO_MODEL_MESSAGE` so the player knows to install rather than
+/// configure a provider.
+pub(crate) const NOT_DOWNLOADED_MESSAGE: &str = "model not downloaded";
+
+/// Surfaced via `draw_definition_error` when Done is pressed against a
+/// selected `model_id` that does not exist in the registry.
+pub(crate) const UNKNOWN_MODEL_MESSAGE: &str = "unknown model";
+
 /// Surfaced when the parts text job fails, times out, or parses to nothing
 /// usable.
 pub(crate) const GEN_FAILED_MESSAGE: &str = "creature generation failed";
+
+/// Maps a `ConfigError` variant to its distinct, player-facing message: each
+/// variant names a different reason nothing usable is configured, so none of
+/// them may collapse into another.
+fn config_error_message(err: &crate::model_config::ConfigError) -> &'static str {
+    use crate::model_config::ConfigError;
+    match err {
+        ConfigError::NotConfigured => NO_MODEL_MESSAGE,
+        ConfigError::NotDownloaded { .. } => NOT_DOWNLOADED_MESSAGE,
+        ConfigError::UnknownModel { .. } => UNKNOWN_MODEL_MESSAGE,
+    }
+}
 
 /// A stable seed for a given egg + completed sentence, so a construction is
 /// reproducible for the same inputs. Mirrors `asset_gen::operations`'s
@@ -87,9 +109,12 @@ impl super::Hatchery {
 
         self.definition_error = None;
 
-        let Some(config) = self.model_config.clone() else {
-            self.definition_error = Some(NO_MODEL_MESSAGE.to_string());
-            return;
+        let config = match &self.model_config {
+            Ok(config) => config.clone(),
+            Err(e) => {
+                self.definition_error = Some(config_error_message(e).to_string());
+                return;
+            }
         };
 
         if let Some(e) = self.eggs.get_mut(egg) {
@@ -235,6 +260,7 @@ mod tests {
         ZImageBackend, CREATURE_FRAMING,
     };
     use crate::construction::{construct_creature, ConstructionRequest};
+    use crate::model_config::ConfigError;
     use crate::player_data::{creature_to_persisted, Egg, EggState, PlayerData, PlayerStore};
     use crate::scenes::hatchery::parts::parse_parts;
     use crate::scenes::palette::element_color;
@@ -361,7 +387,7 @@ ARCHETYPE: Ranged\n";
             PlayerStore::with_dir(&dir),
             std::time::SystemTime::now(),
             fake_asset_gen(calls.clone()),
-            model_config,
+            model_config.ok_or(ConfigError::NotConfigured),
             text_gen_factory,
         );
         scene.open_define_modal(0);
@@ -382,9 +408,10 @@ ARCHETYPE: Ranged\n";
         }
     }
 
-    /// With no resolved model config, Done surfaces a no-model error, starts
-    /// no pipeline, and leaves the egg `Undefined` — the model/image APIs
-    /// are never touched.
+    /// With no resolved model config, Done surfaces the generic no-model
+    /// error (not the distinct not-downloaded message), starts no pipeline,
+    /// and leaves the egg `Undefined` — the model/image APIs are never
+    /// touched.
     #[test]
     fn done_no_config_surfaces_error_and_leaves_egg_undefined() {
         let (mut scene, calls) =
@@ -392,10 +419,37 @@ ARCHETYPE: Ranged\n";
 
         scene.begin_definition("A small brave creature.".to_string());
 
-        assert!(scene.definition_error.is_some(), "an absent config must surface a definition error");
+        assert_eq!(
+            scene.definition_error.as_deref(),
+            Some(NO_MODEL_MESSAGE),
+            "an unconfigured model must surface the generic no-model message, not a model-specific one"
+        );
         assert!(scene.definition.is_none(), "an absent config must not start a pipeline");
         assert_eq!(scene.eggs[0].state, EggState::Undefined, "the egg must stay Undefined");
         assert_eq!(calls.load(Ordering::SeqCst), 0, "no image job may be submitted without a config");
+    }
+
+    /// A selected model_id whose weights have not been downloaded surfaces a
+    /// message distinct from the generic no-model-configured case, starts no
+    /// pipeline, and leaves the egg `Undefined`.
+    #[test]
+    fn done_absent_weights_surfaces_not_downloaded_message() {
+        let (mut scene, calls) =
+            scene_with_undefined_egg("absent-weights", None, text_gen_factory_yielding(WELL_FORMED_PARTS));
+        scene.model_config =
+            Err(ConfigError::NotDownloaded { model_id: "qwen3-4b-instruct".to_string() });
+
+        scene.begin_definition("A small brave creature.".to_string());
+
+        assert_eq!(
+            scene.definition_error.as_deref(),
+            Some(NOT_DOWNLOADED_MESSAGE),
+            "absent weights must surface a distinct 'model not downloaded' message, not the generic \
+             no-model message"
+        );
+        assert!(scene.definition.is_none(), "absent weights must not start a pipeline");
+        assert_eq!(scene.eggs[0].state, EggState::Undefined, "the egg must stay Undefined");
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "no image job may be submitted without installed weights");
     }
 
     /// A completed Done with a present config and a well-formed parts
@@ -604,7 +658,7 @@ ARCHETYPE: Ranged\n";
             PlayerStore::with_dir(&dir),
             std::time::SystemTime::now(),
             asset_gen,
-            Some(present_model_config()),
+            Ok(present_model_config()),
             text_gen_factory_yielding(WELL_FORMED_PARTS),
         );
         scene.open_define_modal(0);
@@ -639,7 +693,7 @@ ARCHETYPE: Ranged\n";
             PlayerStore::with_dir(&dir),
             std::time::SystemTime::now(),
             fake_asset_gen(calls),
-            Some(present_model_config()),
+            Ok(present_model_config()),
             text_gen_factory_yielding(WELL_FORMED_PARTS),
         );
         scene.open_define_modal(0);
