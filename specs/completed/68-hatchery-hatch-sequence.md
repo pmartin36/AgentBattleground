@@ -1,6 +1,8 @@
+> # ✅ DONE! — Completed 2026-09-01
+
 # Hatchery — Hatch Sequence & Add to Roster
 
-> **Status: draft (not started).** The animated hatch — the payoff moment — and everything after it: the escalating crack/break/reveal sequence, the creature reveal and stats panel, and the Add-to-Roster action. Third of the three hatchery specs — see `65-hatchery` (shell & egg lifecycle) and `67-hatchery-definition-generation` (definition & generation).
+> **Status: done.** The animated hatch — the payoff moment — and everything after it: the escalating crack/break/reveal sequence, the creature reveal and stats panel, and the Add-to-Roster action. Third of the three hatchery specs — see `65-hatchery` (shell & egg lifecycle) and `67-hatchery-definition-generation` (definition & generation).
 
 ## Purpose
 Play the full hatch when a ready egg is tapped into focus (`65`), reveal the creature `67` generated, and let the player add it to the active roster.
