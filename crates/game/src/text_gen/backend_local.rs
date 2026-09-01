@@ -1,9 +1,11 @@
 //! The local subprocess `TextBackend`: drives the configured local model
 //! out-of-process via the sibling-binary pattern, fully on the player's
-//! machine. The framed prompt (system+user) is written to a scratch file
-//! and passed via `-f`, never piped to stdin or scanned into argv; the
-//! program and sampling flags form the scanned argv envelope, so caller
-//! content can never leak an affordance into argv.
+//! machine. The system prompt is written to one scratch file (passed via
+//! `-sysf`) and the user turn to another (passed via `-f`) — never combined,
+//! so llm-cli does not echo the system template's placeholder lines to
+//! stdout ahead of the real completion. Neither is piped to stdin or scanned
+//! into argv; the program and sampling flags form the scanned argv envelope,
+//! so caller content can never leak an affordance into argv.
 
 use std::io::Read;
 use std::process::{Command, Stdio};
@@ -150,18 +152,39 @@ impl LocalBackend {
             flags.push(weights.to_string_lossy().into_owned());
         }
 
+        // System prompt via -sysf (a SEPARATE file), user turn via -f. Never
+        // combine them into one -f prompt: this llm-cli echoes the -f prompt
+        // to stdout, so a combined prompt would echo the system template's
+        // `<placeholder>` label lines (NAME:, STRENGTH:, ...) ahead of the
+        // model's real answer, and the completion parser would read the
+        // placeholders instead of the generated parts. With -sysf the system
+        // template is not echoed, so stdout carries only the real completion.
+        if !request.system.is_empty() {
+            let sys_file = scratch_file("txt")?;
+            std::fs::write(&sys_file, &request.system).map_err(|e| TextError::Io(e.to_string()))?;
+            flags.push("-sysf".to_string());
+            flags.push(sys_file.to_string_lossy().into_owned());
+            temp_files.push(sys_file);
+        }
+        let user_file = scratch_file("txt")?;
+        std::fs::write(&user_file, &request.user).map_err(|e| TextError::Io(e.to_string()))?;
+        flags.push("-f".to_string());
+        flags.push(user_file.to_string_lossy().into_owned());
+        temp_files.push(user_file);
+
+        // -st exits after a single turn; --jinja applies the model's chat
+        // template; --simple-io + --log-disable keep the subprocess stdout as
+        // clean as this llm-cli build allows; --no-display-prompt suppresses
+        // the prompt echo.
+        flags.extend(
+            ["-st", "--jinja", "--simple-io", "--log-disable", "--no-display-prompt"].map(String::from),
+        );
+        // The opaque payload the conformance harness checks was transmitted.
         let prompt = if request.system.is_empty() {
             request.user.clone()
         } else {
             format!("{}\n\n{}", request.system, request.user)
         };
-        let prompt_file = scratch_file("txt")?;
-        std::fs::write(&prompt_file, &prompt).map_err(|e| TextError::Io(e.to_string()))?;
-        flags.push("-f".to_string());
-        flags.push(prompt_file.to_string_lossy().into_owned());
-        temp_files.push(prompt_file);
-
-        flags.extend(["--jinja", "-no-cnv", "-st", "--no-display-prompt"].map(String::from));
         flags.push("--temp".to_string());
         flags.push(request.temperature.to_string());
         flags.push("-n".to_string());
@@ -352,9 +375,9 @@ mod tests {
         );
     }
 
-    /// The framed prompt (system+user) is written to a scratch file passed
-    /// via `-f`, not piped to stdin; the raw text never leaks into the
-    /// scanned argv envelope.
+    /// The system prompt is written to a `-sysf` scratch file and the user
+    /// turn to a `-f` scratch file, not piped to stdin; the raw text never
+    /// leaks into the scanned argv envelope.
     #[test]
     fn prompt_written_to_file_not_stdin() {
         let backend = LocalBackend::with_transport(local_config(), Box::new(CannedTransport::ok("text")));
@@ -374,15 +397,26 @@ mod tests {
         let captured = backend.captured_request().expect("backend must capture the invocation");
         let envelope: Vec<String> = captured.envelope.iter().map(|f| f.value.clone()).collect();
 
-        let prompt_file = envelope
+        let sys_file = envelope
+            .windows(2)
+            .find(|w| w[0] == "-sysf")
+            .map(|w| w[1].clone())
+            .unwrap_or_else(|| panic!("envelope must pass the system prompt via -sysf <file>, got {envelope:?}"));
+        let sys_contents = std::fs::read_to_string(&sys_file).expect("system file must exist and be readable");
+        assert!(
+            sys_contents.contains(&request.system),
+            "sysf file must contain the system text, got {sys_contents:?}"
+        );
+
+        let user_file = envelope
             .windows(2)
             .find(|w| w[0] == "-f")
             .map(|w| w[1].clone())
-            .unwrap_or_else(|| panic!("envelope must pass the prompt via -f <file>, got {envelope:?}"));
-        let contents = std::fs::read_to_string(&prompt_file).expect("prompt file must exist and be readable");
+            .unwrap_or_else(|| panic!("envelope must pass the user turn via -f <file>, got {envelope:?}"));
+        let user_contents = std::fs::read_to_string(&user_file).expect("user file must exist and be readable");
         assert!(
-            contents.contains(&request.system) && contents.contains(&request.user),
-            "prompt file must contain both system and user text, got {contents:?}"
+            user_contents.contains(&request.user),
+            "user file must contain the user text, got {user_contents:?}"
         );
         assert!(
             !envelope.iter().any(|v| v.contains("you are terse")),
@@ -410,7 +444,7 @@ mod tests {
             envelope.windows(2).any(|w| w[0] == "-m" && w[1].contains("model.gguf")),
             "envelope must pass the resolved weights via -m, got {envelope:?}"
         );
-        for flag in ["--jinja", "-no-cnv", "-st", "--no-display-prompt"] {
+        for flag in ["--jinja", "-st", "--no-display-prompt", "--simple-io", "--log-disable"] {
             assert!(envelope.iter().any(|v| v == flag), "envelope must contain {flag}, got {envelope:?}");
         }
         assert!(
@@ -426,15 +460,23 @@ mod tests {
             "envelope must pass the seed via -s, got {envelope:?}"
         );
 
-        let prompt_file = envelope
+        let sys_file = envelope
+            .windows(2)
+            .find(|w| w[0] == "-sysf")
+            .map(|w| w[1].clone())
+            .unwrap_or_else(|| panic!("envelope must pass the system via -sysf <file>, got {envelope:?}"));
+        assert!(
+            std::fs::read_to_string(&sys_file).expect("sysf file readable").contains(&request.system),
+            "sysf file must contain the system text"
+        );
+        let user_file = envelope
             .windows(2)
             .find(|w| w[0] == "-f")
             .map(|w| w[1].clone())
-            .unwrap_or_else(|| panic!("envelope must pass the prompt via -f <file>, got {envelope:?}"));
-        let contents = std::fs::read_to_string(&prompt_file).expect("prompt file must exist and be readable");
+            .unwrap_or_else(|| panic!("envelope must pass the user via -f <file>, got {envelope:?}"));
         assert!(
-            contents.contains(&request.system) && contents.contains(&request.user),
-            "prompt file must contain both system and user text, got {contents:?}"
+            std::fs::read_to_string(&user_file).expect("user file readable").contains(&request.user),
+            "-f file must contain the user text"
         );
     }
 

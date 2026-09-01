@@ -152,7 +152,7 @@ fn done_reaches_resolved_local_model_argv() {
         "argv must pass the resolved weights via -m, got {:?}",
         invocation.flags
     );
-    for flag in ["--jinja", "-no-cnv", "-st", "--no-display-prompt"] {
+    for flag in ["--jinja", "-st", "--no-display-prompt", "--simple-io", "--log-disable"] {
         assert!(
             invocation.flags.iter().any(|f| f == flag),
             "argv must contain {flag}, got {:?}",
@@ -160,15 +160,15 @@ fn done_reaches_resolved_local_model_argv() {
         );
     }
 
-    let prompt_file = invocation
+    let sys_file = invocation
         .flags
         .windows(2)
-        .find(|w| w[0] == "-f")
+        .find(|w| w[0] == "-sysf")
         .map(|w| w[1].clone())
-        .unwrap_or_else(|| panic!("argv must pass the prompt via -f <file>, got {:?}", invocation.flags));
-    let contents = std::fs::read_to_string(&prompt_file).expect("prompt file must exist and be readable");
+        .unwrap_or_else(|| panic!("argv must pass the system via -sysf <file>, got {:?}", invocation.flags));
+    let contents = std::fs::read_to_string(&sys_file).expect("system file must exist and be readable");
     assert!(
         contents.contains("You describe only the parts of a creature"),
-        "prompt file must carry the parts-prompt system text, got {contents:?}"
+        "sysf file must carry the parts-prompt system text, got {contents:?}"
     );
 }
