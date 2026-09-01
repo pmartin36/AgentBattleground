@@ -1,11 +1,13 @@
 //! The local subprocess `TextBackend`: drives the configured local model
 //! out-of-process via the sibling-binary pattern, fully on the player's
-//! machine. The prompt (system+user) is piped to the child's stdin as the
-//! opaque payload; the program and sampling flags form the scanned argv
-//! envelope, so caller content can never leak an affordance into argv.
+//! machine. The framed prompt (system+user) is written to a scratch file
+//! and passed via `-f`, never piped to stdin or scanned into argv; the
+//! program and sampling flags form the scanned argv envelope, so caller
+//! content can never leak an affordance into argv.
 
-use std::io::{Read, Write};
+use std::io::Read;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use super::backend::TextBackend;
@@ -18,13 +20,32 @@ use super::types::{ResolvedModelConfig, TextError, TextRequest};
 pub const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// A fully-formed local-model subprocess invocation. `program` and `flags`
-/// are the scanned argv envelope; `prompt` (system+user, piped to stdin) is
-/// the opaque payload.
+/// are the scanned argv envelope; `prompt` (system+user, also written to the
+/// `-f` scratch file named in `flags`) is the opaque payload the
+/// conformance harness checks was transmitted. `temp_files` lists every
+/// scratch file `flags` references, for the production transport to clean
+/// up after the child exits.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalInvocation {
     pub program: String,
     pub flags: Vec<String>,
     pub prompt: String,
+    pub temp_files: Vec<std::path::PathBuf>,
+}
+
+/// Process-static counter giving each scratch file a unique name within
+/// this process, alongside the pid.
+static SCRATCH_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// A unique scratch file path under `abg_text` in the system temp
+/// directory, with the given extension. Mirrors asset_gen's
+/// `temp_dir().join("abg_...")` naming.
+fn scratch_file(extension: &str) -> Result<std::path::PathBuf, TextError> {
+    let dir = std::env::temp_dir().join("abg_text");
+    std::fs::create_dir_all(&dir).map_err(|e| TextError::Io(e.to_string()))?;
+    let pid = std::process::id();
+    let n = SCRATCH_COUNTER.fetch_add(1, Ordering::SeqCst);
+    Ok(dir.join(format!("{pid}-{n}.{extension}")))
 }
 
 /// Execution seam: runs one invocation to completion, observing `cancel`.
@@ -48,21 +69,17 @@ impl LocalTransport for SiblingBinaryTransport {
     fn run(&self, invocation: &LocalInvocation, cancel: &CancelFlag) -> Result<String, TextError> {
         let mut child = Command::new(&invocation.program)
             .args(&invocation.flags)
-            .stdin(Stdio::piped())
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| TextError::Spawn(e.to_string()))?;
 
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(invocation.prompt.as_bytes());
-        }
-
-        loop {
+        let result = loop {
             if cancel.is_cancelled() {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(TextError::Io("cancelled".to_string()));
+                break Err(TextError::Io("cancelled".to_string()));
             }
 
             match child.try_wait() {
@@ -72,21 +89,26 @@ impl LocalTransport for SiblingBinaryTransport {
                         let _ = out.read_to_string(&mut stdout);
                     }
                     if status.success() {
-                        return Ok(stdout);
+                        break Ok(stdout);
                     }
                     let mut stderr = String::new();
                     if let Some(mut err) = child.stderr.take() {
                         let _ = err.read_to_string(&mut stderr);
                     }
-                    return Err(TextError::Process {
+                    break Err(TextError::Process {
                         code: status.code(),
                         stderr,
                     });
                 }
                 Ok(None) => std::thread::sleep(POLL_INTERVAL),
-                Err(e) => return Err(TextError::Io(e.to_string())),
+                Err(e) => break Err(TextError::Io(e.to_string())),
             }
+        };
+
+        for f in &invocation.temp_files {
+            let _ = std::fs::remove_file(f);
         }
+        result
     }
 }
 
@@ -114,25 +136,18 @@ impl LocalBackend {
     }
 
     fn build_invocation(&self, request: &TextRequest) -> Result<LocalInvocation, TextError> {
-        let program = self
-            .config
-            .local_command()
-            .ok_or_else(|| TextError::Config("no local command configured".to_string()))?
-            .to_string();
+        let program = match (self.config.runtime_path(), self.config.local_command()) {
+            (Some(runtime), _) => runtime.to_string_lossy().into_owned(),
+            (None, Some(cmd)) => cmd.to_string(),
+            (None, None) => return Err(TextError::Config("no local runtime configured".to_string())),
+        };
 
-        let mut flags = vec![
-            "--temperature".to_string(),
-            request.temperature.to_string(),
-            "--max-tokens".to_string(),
-            request.max_tokens.to_string(),
-        ];
-        if let Some(seed) = request.seed {
-            flags.push("--seed".to_string());
-            flags.push(seed.to_string());
-        }
-        for stop in &request.stop {
-            flags.push("--stop".to_string());
-            flags.push(stop.clone());
+        let mut flags = Vec::new();
+        let mut temp_files = Vec::new();
+
+        if let Some(weights) = self.config.weights_path() {
+            flags.push("-m".to_string());
+            flags.push(weights.to_string_lossy().into_owned());
         }
 
         let prompt = if request.system.is_empty() {
@@ -140,8 +155,37 @@ impl LocalBackend {
         } else {
             format!("{}\n\n{}", request.system, request.user)
         };
+        let prompt_file = scratch_file("txt")?;
+        std::fs::write(&prompt_file, &prompt).map_err(|e| TextError::Io(e.to_string()))?;
+        flags.push("-f".to_string());
+        flags.push(prompt_file.to_string_lossy().into_owned());
+        temp_files.push(prompt_file);
 
-        Ok(LocalInvocation { program, flags, prompt })
+        flags.extend(["--jinja", "-no-cnv", "-st", "--no-display-prompt"].map(String::from));
+        flags.push("--temp".to_string());
+        flags.push(request.temperature.to_string());
+        flags.push("-n".to_string());
+        flags.push(request.max_tokens.to_string());
+        if let Some(seed) = request.seed {
+            flags.push("-s".to_string());
+            flags.push(seed.to_string());
+        }
+        // request.stop is intentionally dropped on the local llm-cli path.
+
+        if let Some(grammar) = &request.grammar {
+            let grammar_file = scratch_file("gbnf")?;
+            std::fs::write(&grammar_file, grammar).map_err(|e| TextError::Io(e.to_string()))?;
+            flags.push("--grammar-file".to_string());
+            flags.push(grammar_file.to_string_lossy().into_owned());
+            temp_files.push(grammar_file);
+        }
+
+        Ok(LocalInvocation {
+            program,
+            flags,
+            prompt,
+            temp_files,
+        })
     }
 }
 
@@ -162,6 +206,7 @@ impl CaptureBackend for LocalBackend {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
@@ -185,6 +230,14 @@ mod tests {
         ResolvedModelConfig::new(Provider::Local, "local-test-model", None, None, None)
     }
 
+    fn registry_config() -> ResolvedModelConfig {
+        ResolvedModelConfig::local_registry(
+            "qwen3-4b-instruct",
+            PathBuf::from("/fake/bin/llm-cli"),
+            PathBuf::from("/fake/models/qwen3-4b-instruct/model.gguf"),
+        )
+    }
+
     fn sample_request() -> TextRequest {
         TextRequest {
             system: "you are a battle narrator".into(),
@@ -193,6 +246,7 @@ mod tests {
             max_tokens: 128,
             stop: Vec::new(),
             seed: None,
+            grammar: None,
         }
     }
 
@@ -265,8 +319,8 @@ mod tests {
     }
 
     /// `generate` returns the transport's completion text, and the captured
-    /// invocation carries the configured program plus the sampling flags in
-    /// its envelope.
+    /// invocation carries the configured program plus the llm-cli sampling
+    /// flags (`--temp`/`-n`), never the old `--temperature`/`--max-tokens`.
     #[test]
     fn returns_completion_text() {
         let backend =
@@ -285,19 +339,24 @@ mod tests {
             "envelope must contain the configured program, got {envelope:?}"
         );
         assert!(
-            envelope.iter().any(|v| v.contains("--temperature")),
-            "envelope must contain --temperature, got {envelope:?}"
+            envelope.iter().any(|v| v == "--temp"),
+            "envelope must contain --temp, got {envelope:?}"
         );
         assert!(
-            envelope.iter().any(|v| v.contains("--max-tokens")),
-            "envelope must contain --max-tokens, got {envelope:?}"
+            envelope.iter().any(|v| v == "-n"),
+            "envelope must contain -n, got {envelope:?}"
+        );
+        assert!(
+            !envelope.iter().any(|v| v.contains("--temperature") || v.contains("--max-tokens")),
+            "envelope must not contain the superseded --temperature/--max-tokens flags, got {envelope:?}"
         );
     }
 
-    /// The stdin payload carries both the system and user text; neither
-    /// leaks into the scanned argv envelope.
+    /// The framed prompt (system+user) is written to a scratch file passed
+    /// via `-f`, not piped to stdin; the raw text never leaks into the
+    /// scanned argv envelope.
     #[test]
-    fn prompt_frames_system_and_user() {
+    fn prompt_written_to_file_not_stdin() {
         let backend = LocalBackend::with_transport(local_config(), Box::new(CannedTransport::ok("text")));
         let cancel = CancelFlag::new();
         let request = TextRequest {
@@ -307,23 +366,138 @@ mod tests {
             max_tokens: 16,
             stop: Vec::new(),
             seed: None,
+            grammar: None,
         };
 
         backend.generate(&request, &cancel).expect("canned transport always succeeds");
 
         let captured = backend.captured_request().expect("backend must capture the invocation");
-        assert!(
-            captured
-                .payload
-                .iter()
-                .any(|p| p.contains("you are terse") && p.contains("describe the opening move")),
-            "payload must contain both system and user text, got {:?}",
-            captured.payload
-        );
         let envelope: Vec<String> = captured.envelope.iter().map(|f| f.value.clone()).collect();
+
+        let prompt_file = envelope
+            .windows(2)
+            .find(|w| w[0] == "-f")
+            .map(|w| w[1].clone())
+            .unwrap_or_else(|| panic!("envelope must pass the prompt via -f <file>, got {envelope:?}"));
+        let contents = std::fs::read_to_string(&prompt_file).expect("prompt file must exist and be readable");
+        assert!(
+            contents.contains(&request.system) && contents.contains(&request.user),
+            "prompt file must contain both system and user text, got {contents:?}"
+        );
         assert!(
             !envelope.iter().any(|v| v.contains("you are terse")),
             "system/user content must not leak into the envelope, got {envelope:?}"
+        );
+    }
+
+    /// A registry-resolved config (`ResolvedModelConfig::local_registry`)
+    /// builds an llm-cli argv: weights via `-m`, chat-template + single-turn
+    /// flags, and sampling via `--temp`/`-n`/`-s`.
+    #[test]
+    fn emits_llm_cli_argv_for_registry_config() {
+        let backend = LocalBackend::with_transport(registry_config(), Box::new(CannedTransport::ok("text")));
+        let cancel = CancelFlag::new();
+        let request = TextRequest { seed: Some(7), ..sample_request() };
+
+        backend
+            .generate(&request, &cancel)
+            .expect("a registry-resolved config must produce a runnable llm-cli invocation");
+
+        let captured = backend.captured_request().expect("backend must capture the invocation");
+        let envelope: Vec<String> = captured.envelope.iter().map(|f| f.value.clone()).collect();
+
+        assert!(
+            envelope.windows(2).any(|w| w[0] == "-m" && w[1].contains("model.gguf")),
+            "envelope must pass the resolved weights via -m, got {envelope:?}"
+        );
+        for flag in ["--jinja", "-no-cnv", "-st", "--no-display-prompt"] {
+            assert!(envelope.iter().any(|v| v == flag), "envelope must contain {flag}, got {envelope:?}");
+        }
+        assert!(
+            envelope.windows(2).any(|w| w[0] == "--temp" && w[1] == request.temperature.to_string()),
+            "envelope must pass temperature via --temp, got {envelope:?}"
+        );
+        assert!(
+            envelope.windows(2).any(|w| w[0] == "-n" && w[1] == request.max_tokens.to_string()),
+            "envelope must pass max_tokens via -n, got {envelope:?}"
+        );
+        assert!(
+            envelope.windows(2).any(|w| w[0] == "-s" && w[1] == "7"),
+            "envelope must pass the seed via -s, got {envelope:?}"
+        );
+
+        let prompt_file = envelope
+            .windows(2)
+            .find(|w| w[0] == "-f")
+            .map(|w| w[1].clone())
+            .unwrap_or_else(|| panic!("envelope must pass the prompt via -f <file>, got {envelope:?}"));
+        let contents = std::fs::read_to_string(&prompt_file).expect("prompt file must exist and be readable");
+        assert!(
+            contents.contains(&request.system) && contents.contains(&request.user),
+            "prompt file must contain both system and user text, got {contents:?}"
+        );
+    }
+
+    /// A request carrying GBNF grammar text maps to `--grammar-file <path>`
+    /// (never the inline `--grammar` form), whose file contents equal the
+    /// grammar text.
+    #[test]
+    fn grammar_maps_to_grammar_file_when_set() {
+        let backend = LocalBackend::with_transport(local_config(), Box::new(CannedTransport::ok("text")));
+        let cancel = CancelFlag::new();
+        let grammar_text = "root ::= \"yes\" | \"no\"".to_string();
+        let request = TextRequest { grammar: Some(grammar_text.clone()), ..sample_request() };
+
+        backend.generate(&request, &cancel).expect("canned transport always succeeds");
+
+        let captured = backend.captured_request().expect("backend must capture the invocation");
+        let envelope: Vec<String> = captured.envelope.iter().map(|f| f.value.clone()).collect();
+
+        assert!(
+            !envelope.iter().any(|v| v == "--grammar"),
+            "grammar must use the file form, not the inline --grammar flag, got {envelope:?}"
+        );
+        let grammar_file = envelope
+            .windows(2)
+            .find(|w| w[0] == "--grammar-file")
+            .map(|w| w[1].clone())
+            .unwrap_or_else(|| panic!("envelope must pass the grammar via --grammar-file <file>, got {envelope:?}"));
+        let contents = std::fs::read_to_string(&grammar_file).expect("grammar file must exist and be readable");
+        assert_eq!(contents, grammar_text, "grammar file contents must equal the request's grammar text");
+    }
+
+    /// A request with no grammar never emits `--grammar-file` or the inline
+    /// `--grammar` flag.
+    #[test]
+    fn grammar_omitted_when_unset() {
+        let backend = LocalBackend::with_transport(local_config(), Box::new(CannedTransport::ok("text")));
+        let cancel = CancelFlag::new();
+
+        backend.generate(&sample_request(), &cancel).expect("canned transport always succeeds");
+
+        let captured = backend.captured_request().expect("backend must capture the invocation");
+        let envelope: Vec<String> = captured.envelope.iter().map(|f| f.value.clone()).collect();
+        assert!(
+            !envelope.iter().any(|v| v == "--grammar-file" || v == "--grammar"),
+            "no grammar flag must appear when the request carries none, got {envelope:?}"
+        );
+    }
+
+    /// `TextRequest.stop` is dropped on the local llm-cli path: no `--stop`
+    /// flag and no stop text reaches the argv.
+    #[test]
+    fn stop_sequences_dropped() {
+        let backend = LocalBackend::with_transport(local_config(), Box::new(CannedTransport::ok("text")));
+        let cancel = CancelFlag::new();
+        let request = TextRequest { stop: vec!["HALT_MARKER".to_string()], ..sample_request() };
+
+        backend.generate(&request, &cancel).expect("canned transport always succeeds");
+
+        let captured = backend.captured_request().expect("backend must capture the invocation");
+        let envelope: Vec<String> = captured.envelope.iter().map(|f| f.value.clone()).collect();
+        assert!(
+            !envelope.iter().any(|v| v == "--stop" || v == "HALT_MARKER"),
+            "stop sequences must be dropped on the local path, got {envelope:?}"
         );
     }
 

@@ -119,6 +119,7 @@ Return exactly these labeled lines, one per line, and nothing else:\n\
         max_tokens: 200,
         stop: Vec::new(),
         seed: None,
+        grammar: None,
     }
 }
 

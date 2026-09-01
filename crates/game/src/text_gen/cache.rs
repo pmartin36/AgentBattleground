@@ -19,6 +19,7 @@ struct TextCacheKey {
     max_tokens: u32,
     stop: Vec<String>,
     seed: Option<u64>,
+    grammar: Option<String>,
 }
 
 impl TextCacheKey {
@@ -31,6 +32,7 @@ impl TextCacheKey {
             max_tokens: request.max_tokens,
             stop: request.stop.clone(),
             seed: request.seed,
+            grammar: request.grammar.clone(),
         }
     }
 }
@@ -108,6 +110,7 @@ mod tests {
             max_tokens: 64,
             stop: Vec::new(),
             seed,
+            grammar: None,
         }
     }
 

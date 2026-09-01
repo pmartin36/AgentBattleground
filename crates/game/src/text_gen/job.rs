@@ -226,6 +226,7 @@ mod tests {
             max_tokens: 128,
             stop: Vec::new(),
             seed: None,
+            grammar: None,
         }
     }
 

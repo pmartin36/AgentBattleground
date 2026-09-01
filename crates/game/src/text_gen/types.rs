@@ -17,6 +17,9 @@ pub struct TextRequest {
     pub max_tokens: u32,
     pub stop: Vec<String>,
     pub seed: Option<u64>,
+    /// Optional GBNF grammar text constraining decoding on the local
+    /// backend. `None` means unconstrained. Online backends ignore it.
+    pub grammar: Option<String>,
 }
 
 /// The closed set of providers a `TextBackend` can be constructed for.

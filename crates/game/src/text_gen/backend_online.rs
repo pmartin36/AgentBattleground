@@ -311,6 +311,7 @@ mod tests {
             max_tokens: 128,
             stop: Vec::new(),
             seed: None,
+            grammar: None,
         }
     }
 
@@ -575,6 +576,7 @@ mod tests {
             max_tokens: 16,
             stop: Vec::new(),
             seed: None,
+            grammar: None,
         };
 
         backend.generate(&request, &cancel).expect("canned transport always succeeds");

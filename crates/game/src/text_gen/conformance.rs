@@ -194,6 +194,7 @@ pub fn conformance_probe_request() -> TextRequest {
         max_tokens: 16,
         stop: Vec::new(),
         seed: Some(1),
+        grammar: None,
     }
 }
 

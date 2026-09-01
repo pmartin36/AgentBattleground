@@ -12,6 +12,8 @@ mod hatch_layout;
 mod hatch_render;
 mod hatch_roster;
 mod lifecycle;
+#[cfg(test)]
+mod local_model_e2e_tests;
 mod tray;
 pub mod define_modal;
 pub mod definition;
