@@ -8,9 +8,9 @@ mod hatch;
 mod hatch_clips;
 #[cfg(debug_assertions)]
 mod hatch_dev;
+mod hatch_layout;
 mod hatch_render;
 mod hatch_roster;
-mod hatch_stats;
 mod lifecycle;
 mod tray;
 pub mod define_modal;
@@ -109,7 +109,7 @@ pub struct Hatchery {
     /// `None` when no hatch is underway.
     #[inspect(hidden)]
     hatch: Option<hatch_render::HatchState>,
-    /// The post-hatch "Add to Roster" action state, or `None` before the
+    /// The post-hatch Keep/Discard action state, or `None` before the
     /// active hatch completes.
     #[inspect(hidden)]
     roster_action: Option<hatch_roster::RosterAction>,
@@ -352,7 +352,7 @@ impl Scene for Hatchery {
         self.poll_definition(SystemTime::now());
         self.advance_hatch_clips();
         self.advance_hatch(dt);
-        self.maybe_offer_add_to_roster();
+        self.maybe_offer_dock_actions();
         None
     }
 
@@ -361,7 +361,7 @@ impl Scene for Hatchery {
 
         if self.hatch.is_some() {
             self.draw_hatch(frame, area);
-            self.draw_add_to_roster(frame, area);
+            self.draw_dock_actions(frame, area);
             return;
         }
         if self.pending_hatch.is_some() {
@@ -957,13 +957,17 @@ mod tests {
     // `tests/hatch_sequence_tests.rs` (kept out of this file to stay under
     // the project's file-size budget).
     mod hatch_sequence_tests;
-    // Post-hatch stats panel tests live in `tests/hatch_stats_tests.rs`,
-    // kept out of this file for the same reason as hatch_sequence_tests.
-    mod hatch_stats_tests;
-    // Post-hatch "Add to Roster" action tests live in
+    // Settled-placement layout + stats-dock tests live in
+    // `tests/hatch_settled_tests.rs`, kept out of this file for the same
+    // reason as hatch_sequence_tests.
+    mod hatch_settled_tests;
+    // Post-hatch Keep/Discard action tests live in
     // `tests/hatch_roster_tests.rs`, kept out of this file for the same
     // reason as hatch_sequence_tests.
     mod hatch_roster_tests;
+    // Slide-phase choreography tests live in `tests/hatch_slide_tests.rs`,
+    // kept out of this file for the same reason as hatch_sequence_tests.
+    mod hatch_slide_tests;
     // Dev-only debug hotkey tests live in `tests/hatch_dev_tests.rs`,
     // compiled only alongside the debug-only `hatch_dev` module itself.
     #[cfg(debug_assertions)]

@@ -244,6 +244,13 @@ fn wrap_to_width(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+/// Number of rows `wrapped_text` would draw for `text` at `width` columns —
+/// the same greedy word-wrap `wrapped_text` itself uses, so a caller sizing
+/// a wrap-flexing zone stays consistent with what actually renders.
+pub fn wrapped_line_count(text: &str, width: usize) -> usize {
+    wrap_to_width(text, width).len()
+}
+
 /// Paint a bundled raster asset (`bytes`, e.g. `game::assets::DOT_FILLED`)
 /// aspect-fit + centered into `area`, routed through the shared
 /// process-lifetime decode/rasterize cache (`asset_cache::convert`). Zero-area
@@ -609,6 +616,17 @@ mod tests {
                 assert_eq!(buf.cell((x, y)).unwrap().symbol(), " ");
             }
         }
+    }
+
+    // ------------------------------------------------------- wrapped_line_count
+
+    /// The row count matches the number of rows `wrapped_text` actually
+    /// draws for the same text and width.
+    #[test]
+    fn wrapped_line_count_matches_wrapped_text_rows() {
+        assert_eq!(wrapped_line_count("one two three", 6), 3);
+        assert_eq!(wrapped_line_count("short", 20), 1);
+        assert_eq!(wrapped_line_count("", 10), 0);
     }
 
     // -------------------------------------------------------------- label_blended (b2-t3)

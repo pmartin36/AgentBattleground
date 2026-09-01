@@ -1,5 +1,5 @@
-//! Post-hatch "Add to Roster" action tests: button presence and placement,
-//! for both an open roster slot and a full-roster pick-and-bump, with
+//! Post-hatch Keep/Discard action tests: button presence and placement,
+//! for an open roster slot, a full-roster pick-and-bump, and discard, with
 //! persist round trips.
 
 use std::path::PathBuf;
@@ -47,18 +47,26 @@ fn named_creature(name: &str) -> PersistedCreature {
 
 /// Renders `scene`'s post-hatch roster-action UI directly, independent of
 /// the scene's full render pass.
-fn render_add_to_roster(scene: &Hatchery, w: u16, h: u16) -> ratatui::buffer::Buffer {
+fn render_dock_actions(scene: &Hatchery, w: u16, h: u16) -> ratatui::buffer::Buffer {
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
     terminal
         .draw(|f| {
             let area = f.area();
-            scene.draw_add_to_roster(f, area);
+            scene.draw_dock_actions(f, area);
         })
         .unwrap();
     terminal.backend().buffer().clone()
 }
 
-/// Before the hatch completes, no "Add to Roster" text has rendered.
+/// The completed hatch's Keep and Discard cell rects, via the same
+/// authoritative source the renderer draws into. Panics if there is no
+/// active offer — a fixture bug, since every test calling this has already
+/// driven the sequence to completion.
+fn keep_discard_rects(scene: &Hatchery, area: Rect) -> (Rect, Rect) {
+    scene.dock_action_rects(area).expect("an active Keep/Discard offer must have dock action rects")
+}
+
+/// Before the hatch completes, no Keep/Discard text has rendered.
 #[test]
 fn add_button_absent_before_completion() {
     let dir = temp_store_dir("hatch-roster-absent");
@@ -72,15 +80,16 @@ fn add_button_absent_before_completion() {
     let (w, h) = (70u16, 24u16);
     hsq::launch_hatch(&mut scene, w, h);
 
-    let buf = render_add_to_roster(&scene, w, h);
+    let buf = render_dock_actions(&scene, w, h);
     let text = crate::scenes::test_util::rect_text(&buf, Rect::new(0, 0, w, h));
-    assert!(!text.contains("Add to Roster"), "expected no Add to Roster button before completion, got {text:?}");
+    assert!(!text.contains("Keep"), "expected no Keep button before completion, got {text:?}");
+    assert!(!text.contains("Discard"), "expected no Discard button before completion, got {text:?}");
 }
 
-/// Once the hatch completes and `maybe_offer_add_to_roster` runs, the
-/// "Add to Roster" button renders.
+/// Once the hatch completes, the Keep and Discard buttons render, and no
+/// "Add to Roster" text renders anywhere.
 #[test]
-fn add_button_present_after_completion() {
+fn keep_and_discard_render_no_add_to_roster() {
     let dir = temp_store_dir("hatch-roster-present");
     let seed = PlayerData {
         roster: Vec::new(),
@@ -89,17 +98,19 @@ fn add_button_present_after_completion() {
     PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
 
     let mut scene = Hatchery::from_store_at(PlayerStore::with_dir(&dir), SystemTime::now());
-    let (w, h) = (70u16, 24u16);
+    let (w, h) = (90u16, 30u16);
     hsq::launch_hatch(&mut scene, w, h);
     advance_to_complete(&mut scene);
-    scene.maybe_offer_add_to_roster();
+    scene.maybe_offer_dock_actions();
 
-    let buf = render_add_to_roster(&scene, w, h);
+    let buf = render_dock_actions(&scene, w, h);
     let text = crate::scenes::test_util::rect_text(&buf, Rect::new(0, 0, w, h));
-    assert!(text.contains("Add to Roster"), "expected an Add to Roster button after completion, got {text:?}");
+    assert!(text.contains("Keep"), "expected a Keep button after completion, got {text:?}");
+    assert!(text.contains("Discard"), "expected a Discard button after completion, got {text:?}");
+    assert!(!text.contains("Add to Roster"), "the removed single-button action must not render, got {text:?}");
 }
 
-/// With an open roster slot, tapping the add button appends the hatchling
+/// With an open roster slot, tapping the Keep button appends the hatchling
 /// on disk, preserving the existing member's order.
 #[test]
 fn open_slot_add_grows_roster_persisted() {
@@ -111,16 +122,15 @@ fn open_slot_add_grows_roster_persisted() {
     PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
 
     let mut scene = Hatchery::from_store_at(PlayerStore::with_dir(&dir), SystemTime::now());
-    let (w, h) = (70u16, 24u16);
+    let (w, h) = (90u16, 30u16);
     hsq::launch_hatch(&mut scene, w, h);
     advance_to_complete(&mut scene);
-    scene.maybe_offer_add_to_roster();
+    scene.maybe_offer_dock_actions();
 
     let area = Rect::new(0, 0, w, h);
-    let _ = render_add_to_roster(&scene, w, h);
-    let focus_cell = focus::focus_layout(area).0.to_cell_rect();
-    let rect = hatch_roster::add_button_rect(focus_cell);
-    tap_at(&mut scene, rect.x + rect.width / 2, rect.y + rect.height / 2);
+    let _ = render_dock_actions(&scene, w, h);
+    let (keep_rect, _discard_rect) = keep_discard_rects(&scene, area);
+    tap_at(&mut scene, keep_rect.x + keep_rect.width / 2, keep_rect.y + keep_rect.height / 2);
 
     let reloaded = PlayerStore::with_dir(&dir).load(|| panic!("must not fall back to seed")).into_data();
     assert_eq!(reloaded.roster.len(), 2, "roster must grow by one");
@@ -128,7 +138,7 @@ fn open_slot_add_grows_roster_persisted() {
     assert_eq!(reloaded.roster[1].name, "Newbie", "the hatchling must be appended");
 }
 
-/// With a full 6-slot roster, tapping the add button shows a pick UI
+/// With a full 6-slot roster, tapping the Keep button shows a pick UI
 /// listing the current roster instead of placing the hatchling directly.
 #[test]
 fn full_roster_shows_picker() {
@@ -139,22 +149,21 @@ fn full_roster_shows_picker() {
     PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
 
     let mut scene = Hatchery::from_store_at(PlayerStore::with_dir(&dir), SystemTime::now());
-    let (w, h) = (70u16, 24u16);
+    let (w, h) = (90u16, 30u16);
     hsq::launch_hatch(&mut scene, w, h);
     advance_to_complete(&mut scene);
-    scene.maybe_offer_add_to_roster();
+    scene.maybe_offer_dock_actions();
 
     let area = Rect::new(0, 0, w, h);
-    let _ = render_add_to_roster(&scene, w, h);
-    let focus_cell = focus::focus_layout(area).0.to_cell_rect();
-    let rect = hatch_roster::add_button_rect(focus_cell);
-    tap_at(&mut scene, rect.x + rect.width / 2, rect.y + rect.height / 2);
+    let _ = render_dock_actions(&scene, w, h);
+    let (keep_rect, _discard_rect) = keep_discard_rects(&scene, area);
+    tap_at(&mut scene, keep_rect.x + keep_rect.width / 2, keep_rect.y + keep_rect.height / 2);
 
     assert!(
         matches!(scene.roster_action, Some(hatch_roster::RosterAction::Picking { .. })),
         "a full roster must show the bump-picker instead of placing the hatchling directly"
     );
-    let text = crate::scenes::test_util::rect_text(&render_add_to_roster(&scene, w, h), area);
+    let text = crate::scenes::test_util::rect_text(&render_dock_actions(&scene, w, h), area);
     assert!(text.contains("Member2"), "expected a seeded roster name in the picker text, got {text:?}");
 }
 
@@ -170,18 +179,18 @@ fn full_roster_bump_replaces_slot_persisted() {
     PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
 
     let mut scene = Hatchery::from_store_at(PlayerStore::with_dir(&dir), SystemTime::now());
-    let (w, h) = (70u16, 24u16);
+    let (w, h) = (90u16, 30u16);
     hsq::launch_hatch(&mut scene, w, h);
     advance_to_complete(&mut scene);
-    scene.maybe_offer_add_to_roster();
+    scene.maybe_offer_dock_actions();
 
     let area = Rect::new(0, 0, w, h);
-    let _ = render_add_to_roster(&scene, w, h);
-    let focus_cell = focus::focus_layout(area).0.to_cell_rect();
-    let add_rect = hatch_roster::add_button_rect(focus_cell);
-    tap_at(&mut scene, add_rect.x + add_rect.width / 2, add_rect.y + add_rect.height / 2);
+    let _ = render_dock_actions(&scene, w, h);
+    let (keep_rect, _discard_rect) = keep_discard_rects(&scene, area);
+    tap_at(&mut scene, keep_rect.x + keep_rect.width / 2, keep_rect.y + keep_rect.height / 2);
 
-    let _ = render_add_to_roster(&scene, w, h);
+    let _ = render_dock_actions(&scene, w, h);
+    let focus_cell = focus::focus_layout(area).0.to_cell_rect();
     let panel = hatch_roster::picker_panel_rect(area, focus_cell);
     let pick_rect = hatch_roster::picker_button_rect(panel, 2);
     tap_at(&mut scene, pick_rect.x + pick_rect.width / 2, pick_rect.y + pick_rect.height / 2);
@@ -192,7 +201,7 @@ fn full_roster_bump_replaces_slot_persisted() {
     assert!(reloaded.roster.iter().any(|c| c.name == "Newbie"), "the hatchling must be present after the bump");
 }
 
-/// Once an open-slot add commits the hatchling, the hatch sub-mode ends:
+/// Once an open-slot Keep commits the hatchling, the hatch sub-mode ends:
 /// the active hatch and its post-hatch action both clear, and the hatched
 /// egg is retired from the tray, on the live scene and on disk.
 #[test]
@@ -205,16 +214,15 @@ fn open_slot_add_dismisses_hatch_and_retires_egg() {
     PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
 
     let mut scene = Hatchery::from_store_at(PlayerStore::with_dir(&dir), SystemTime::now());
-    let (w, h) = (70u16, 24u16);
+    let (w, h) = (90u16, 30u16);
     hsq::launch_hatch(&mut scene, w, h);
     advance_to_complete(&mut scene);
-    scene.maybe_offer_add_to_roster();
+    scene.maybe_offer_dock_actions();
 
     let area = Rect::new(0, 0, w, h);
-    let _ = render_add_to_roster(&scene, w, h);
-    let focus_cell = focus::focus_layout(area).0.to_cell_rect();
-    let rect = hatch_roster::add_button_rect(focus_cell);
-    tap_at(&mut scene, rect.x + rect.width / 2, rect.y + rect.height / 2);
+    let _ = render_dock_actions(&scene, w, h);
+    let (keep_rect, _discard_rect) = keep_discard_rects(&scene, area);
+    tap_at(&mut scene, keep_rect.x + keep_rect.width / 2, keep_rect.y + keep_rect.height / 2);
 
     assert!(scene.hatch.is_none(), "hatch sub-mode must end once the hatchling is placed");
     assert!(scene.roster_action.is_none(), "the post-hatch action must clear on dismissal");
@@ -237,18 +245,18 @@ fn full_roster_bump_dismisses_hatch() {
     PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
 
     let mut scene = Hatchery::from_store_at(PlayerStore::with_dir(&dir), SystemTime::now());
-    let (w, h) = (70u16, 24u16);
+    let (w, h) = (90u16, 30u16);
     hsq::launch_hatch(&mut scene, w, h);
     advance_to_complete(&mut scene);
-    scene.maybe_offer_add_to_roster();
+    scene.maybe_offer_dock_actions();
 
     let area = Rect::new(0, 0, w, h);
-    let _ = render_add_to_roster(&scene, w, h);
-    let focus_cell = focus::focus_layout(area).0.to_cell_rect();
-    let add_rect = hatch_roster::add_button_rect(focus_cell);
-    tap_at(&mut scene, add_rect.x + add_rect.width / 2, add_rect.y + add_rect.height / 2);
+    let _ = render_dock_actions(&scene, w, h);
+    let (keep_rect, _discard_rect) = keep_discard_rects(&scene, area);
+    tap_at(&mut scene, keep_rect.x + keep_rect.width / 2, keep_rect.y + keep_rect.height / 2);
 
-    let _ = render_add_to_roster(&scene, w, h);
+    let _ = render_dock_actions(&scene, w, h);
+    let focus_cell = focus::focus_layout(area).0.to_cell_rect();
     let panel = hatch_roster::picker_panel_rect(area, focus_cell);
     let pick_rect = hatch_roster::picker_button_rect(panel, 2);
     tap_at(&mut scene, pick_rect.x + pick_rect.width / 2, pick_rect.y + pick_rect.height / 2);
@@ -260,12 +268,46 @@ fn full_roster_bump_dismisses_hatch() {
     assert!(reloaded.eggs.is_empty(), "the retired egg must not survive on disk");
 }
 
-/// After the hatch dismisses, the back button is reachable again: a
-/// completed click on it returns a `Transition` to `RosterManager`, proving
-/// input reaches the tray path instead of staying routed to the hatch.
+/// Tapping Discard adds nothing to the roster, retires the egg the same way
+/// a placed hatch does, and ends the hatch sub-mode.
 #[test]
-fn back_button_works_after_dismissal() {
-    let dir = temp_store_dir("hatch-roster-dismiss-back");
+fn discard_does_not_add_retires_egg_returns_to_tray() {
+    let dir = temp_store_dir("hatch-roster-discard");
+    let seed = PlayerData {
+        roster: vec![named_creature("Emberling")],
+        eggs: vec![hsq::ready_egg_with_hatchling(named_creature("Newbie"))],
+    };
+    PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
+
+    let mut scene = Hatchery::from_store_at(PlayerStore::with_dir(&dir), SystemTime::now());
+    let (w, h) = (90u16, 30u16);
+    hsq::launch_hatch(&mut scene, w, h);
+    advance_to_complete(&mut scene);
+    scene.maybe_offer_dock_actions();
+
+    let area = Rect::new(0, 0, w, h);
+    let _ = render_dock_actions(&scene, w, h);
+    let (_keep_rect, discard_rect) = keep_discard_rects(&scene, area);
+    tap_at(&mut scene, discard_rect.x + discard_rect.width / 2, discard_rect.y + discard_rect.height / 2);
+
+    assert!(scene.hatch.is_none(), "hatch sub-mode must end once discarded");
+    assert!(scene.roster_action.is_none(), "the post-hatch action must clear on discard");
+    assert!(scene.focused.is_none(), "focus must clear on discard");
+    assert!(scene.eggs.is_empty(), "the discarded egg must be retired from the tray");
+
+    let reloaded = PlayerStore::with_dir(&dir).load(|| panic!("must not fall back to seed")).into_data();
+    assert!(reloaded.eggs.is_empty(), "the retired egg must not survive on disk");
+    assert_eq!(reloaded.roster.len(), 1, "discard must not add the hatchling to the roster");
+    assert!(!reloaded.roster.iter().any(|c| c.name == "Newbie"), "the discarded hatchling must not appear in the roster");
+}
+
+/// After the hatch dismisses via Keep, the back button is reachable again:
+/// a completed click on it returns a `Transition` to `RosterManager`,
+/// proving input reaches the tray path instead of staying routed to the
+/// hatch.
+#[test]
+fn back_button_works_after_keep() {
+    let dir = temp_store_dir("hatch-roster-dismiss-back-keep");
     let seed = PlayerData {
         roster: Vec::new(),
         eggs: vec![hsq::ready_egg_with_hatchling(named_creature("Newbie"))],
@@ -273,16 +315,15 @@ fn back_button_works_after_dismissal() {
     PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
 
     let mut scene = Hatchery::from_store_at(PlayerStore::with_dir(&dir), SystemTime::now());
-    let (w, h) = (70u16, 24u16);
+    let (w, h) = (90u16, 30u16);
     hsq::launch_hatch(&mut scene, w, h);
     advance_to_complete(&mut scene);
-    scene.maybe_offer_add_to_roster();
+    scene.maybe_offer_dock_actions();
 
     let area = Rect::new(0, 0, w, h);
-    let _ = render_add_to_roster(&scene, w, h);
-    let focus_cell = focus::focus_layout(area).0.to_cell_rect();
-    let add_rect = hatch_roster::add_button_rect(focus_cell);
-    tap_at(&mut scene, add_rect.x + add_rect.width / 2, add_rect.y + add_rect.height / 2);
+    let _ = render_dock_actions(&scene, w, h);
+    let (keep_rect, _discard_rect) = keep_discard_rects(&scene, area);
+    tap_at(&mut scene, keep_rect.x + keep_rect.width / 2, keep_rect.y + keep_rect.height / 2);
 
     let _ = render_to_buffer(&scene, w, h);
     let back_rect = crate::scenes::home_button::home_dot_rect(area).to_cell_rect();
@@ -291,11 +332,48 @@ fn back_button_works_after_dismissal() {
     scene.handle_input(mouse_event(MouseEventKind::Down(MouseButton::Left), cx, cy));
     let t = scene.handle_input(mouse_event(MouseEventKind::Up(MouseButton::Left), cx, cy));
 
-    let t = t.expect("the back button must be reachable again after the hatch dismisses");
+    let t = t.expect("the back button must be reachable again after Keep dismisses the hatch");
     assert_eq!(
         t.target,
         SceneKey::from(SceneId::RosterManager),
-        "back button must return to RosterManager after dismissal"
+        "back button must return to RosterManager after Keep"
+    );
+}
+
+/// After the hatch dismisses via Discard, the back button is reachable
+/// again the same way it is after Keep.
+#[test]
+fn back_button_works_after_discard() {
+    let dir = temp_store_dir("hatch-roster-dismiss-back-discard");
+    let seed = PlayerData {
+        roster: Vec::new(),
+        eggs: vec![hsq::ready_egg_with_hatchling(named_creature("Newbie"))],
+    };
+    PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
+
+    let mut scene = Hatchery::from_store_at(PlayerStore::with_dir(&dir), SystemTime::now());
+    let (w, h) = (90u16, 30u16);
+    hsq::launch_hatch(&mut scene, w, h);
+    advance_to_complete(&mut scene);
+    scene.maybe_offer_dock_actions();
+
+    let area = Rect::new(0, 0, w, h);
+    let _ = render_dock_actions(&scene, w, h);
+    let (_keep_rect, discard_rect) = keep_discard_rects(&scene, area);
+    tap_at(&mut scene, discard_rect.x + discard_rect.width / 2, discard_rect.y + discard_rect.height / 2);
+
+    let _ = render_to_buffer(&scene, w, h);
+    let back_rect = crate::scenes::home_button::home_dot_rect(area).to_cell_rect();
+    let (cx, cy) = (back_rect.x, back_rect.y);
+    scene.handle_input(mouse_event(MouseEventKind::Moved, cx, cy));
+    scene.handle_input(mouse_event(MouseEventKind::Down(MouseButton::Left), cx, cy));
+    let t = scene.handle_input(mouse_event(MouseEventKind::Up(MouseButton::Left), cx, cy));
+
+    let t = t.expect("the back button must be reachable again after Discard dismisses the hatch");
+    assert_eq!(
+        t.target,
+        SceneKey::from(SceneId::RosterManager),
+        "back button must return to RosterManager after Discard"
     );
 }
 
@@ -443,18 +521,17 @@ fn bystander_egg_gets_clips_after_sibling_dismissal() {
         "fixture setup must resolve egg 0's own idle+attack clips before the hatch"
     );
 
-    // Egg 0 is hatched and dismissed via the real "Add to Roster" path,
-    // shifting egg 1 down to index 0.
+    // Egg 0 is hatched and dismissed via the real Keep path, shifting egg 1
+    // down to index 0.
     scene.eggs[0].state = EggState::Ready;
-    let (w, h) = (70u16, 24u16);
+    let (w, h) = (90u16, 30u16);
     hsq::launch_hatch(&mut scene, w, h);
     advance_to_complete(&mut scene);
-    scene.maybe_offer_add_to_roster();
+    scene.maybe_offer_dock_actions();
     let area = Rect::new(0, 0, w, h);
-    let _ = render_add_to_roster(&scene, w, h);
-    let focus_cell = focus::focus_layout(area).0.to_cell_rect();
-    let rect = hatch_roster::add_button_rect(focus_cell);
-    tap_at(&mut scene, rect.x + rect.width / 2, rect.y + rect.height / 2);
+    let _ = render_dock_actions(&scene, w, h);
+    let (keep_rect, _discard_rect) = keep_discard_rects(&scene, area);
+    tap_at(&mut scene, keep_rect.x + keep_rect.width / 2, keep_rect.y + keep_rect.height / 2);
     assert_eq!(scene.eggs.len(), 1, "fixture setup must leave the bystander as the sole remaining egg");
     assert_eq!(
         scene.eggs[0].hatchling.as_ref().map(|h| h.name.as_str()),
@@ -522,19 +599,17 @@ fn in_flight_clip_resolves_to_shifted_egg_not_stale_index() {
         "fixture setup must resolve egg 0's own clips while egg 1's job holds in-flight"
     );
 
-    // Egg 0 is hatched and dismissed via the real "Add to Roster" path,
-    // shifting egg 1 to index 0 and egg 2 to index 1 while its own job is
-    // still in-flight.
+    // Egg 0 is hatched and dismissed via the real Keep path, shifting egg 1
+    // to index 0 and egg 2 to index 1 while its own job is still in-flight.
     scene.eggs[0].state = EggState::Ready;
-    let (w, h) = (70u16, 24u16);
+    let (w, h) = (90u16, 30u16);
     hsq::launch_hatch(&mut scene, w, h);
     advance_to_complete(&mut scene);
-    scene.maybe_offer_add_to_roster();
+    scene.maybe_offer_dock_actions();
     let area = Rect::new(0, 0, w, h);
-    let _ = render_add_to_roster(&scene, w, h);
-    let focus_cell = focus::focus_layout(area).0.to_cell_rect();
-    let rect = hatch_roster::add_button_rect(focus_cell);
-    tap_at(&mut scene, rect.x + rect.width / 2, rect.y + rect.height / 2);
+    let _ = render_dock_actions(&scene, w, h);
+    let (keep_rect, _discard_rect) = keep_discard_rects(&scene, area);
+    tap_at(&mut scene, keep_rect.x + keep_rect.width / 2, keep_rect.y + keep_rect.height / 2);
     assert_eq!(scene.eggs.len(), 2, "fixture setup must leave both bystanders after dismissal");
     assert_eq!(
         scene.eggs[1].hatchling.as_ref().map(|h| h.name.as_str()),

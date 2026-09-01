@@ -1,10 +1,11 @@
-//! Post-hatch "Add to Roster" action: offers to place the freshly hatched
-//! creature into the roster once the hatch sequence completes, either
-//! directly (an open slot) or via a pick-a-creature-to-bump step when the
-//! roster is full. The pick step and the bumped creature's disposal
-//! (`dispose_bumped`) stay two distinct steps so the disposal can later be
-//! swapped for a move-to-Farm/Playpen action without reworking the pick
-//! flow.
+//! Post-hatch Keep/Discard action: offers to place the freshly hatched
+//! creature into the roster, or discard it, once the hatch sequence
+//! completes. Keep places the hatchling either directly (an open slot) or
+//! via a pick-a-creature-to-bump step when the roster is full; Discard
+//! retires the egg without adding the hatchling. The pick step and the
+//! bumped creature's disposal (`dispose_bumped`) stay two distinct steps so
+//! the disposal can later be swapped for a move-to-Farm/Playpen action
+//! without reworking the pick flow.
 
 use std::cell::RefCell;
 
@@ -13,14 +14,19 @@ use ratatui::style::{Color, Style};
 use ratatui::Frame;
 
 use engine_core::scene::{InputEvent, Transition};
-use engine_render::{Button, ButtonCore, ButtonState, TextAlign};
+use engine_render::{
+    Align, Basis, Button, ButtonCore, ButtonState, Direction, FlexChild, FlexStyle, Justify, TextAlign,
+};
 
 use crate::player_data::PersistedCreature;
+use crate::scenes::detail_panel;
+
+use super::hatch_layout;
 
 /// What the post-hatch UI shows, one state at a time.
 pub(super) enum RosterAction {
-    /// The hatch has completed; the "Add to Roster" button is shown.
-    Offer { button: RefCell<Button> },
+    /// The hatch has completed; the Keep and Discard buttons are shown.
+    Offer { keep: RefCell<Button>, discard: RefCell<Button> },
     /// The roster was full; the player is picking a creature to bump.
     Picking { roster: Vec<PersistedCreature>, buttons: RefCell<Vec<ButtonCore>> },
 }
@@ -29,9 +35,8 @@ impl RosterAction {
     /// A fresh offer, mirroring the define-modal Done button's construction.
     fn offer() -> Self {
         RosterAction::Offer {
-            button: RefCell::new(
-                Button::new(Rect::default(), crate::assets::FRAME_PANEL).label("Add to Roster"),
-            ),
+            keep: RefCell::new(Button::new(Rect::default(), crate::assets::FRAME_PANEL).label("Keep")),
+            discard: RefCell::new(Button::new(Rect::default(), crate::assets::FRAME_PANEL).label("Discard")),
         }
     }
 
@@ -47,26 +52,20 @@ impl RosterAction {
 /// changes when this body is replaced.
 pub(super) fn dispose_bumped(_bumped: PersistedCreature) {}
 
-/// Width, in cells, of the "Add to Roster" button and each picker candidate
-/// row.
+/// Width, in cells, of each picker candidate row.
 const BUTTON_W_CELLS: u16 = 18;
-/// Height, in cells, of the "Add to Roster" button.
-const ADD_BUTTON_H_CELLS: u16 = 3;
-/// Gap, in cells, between the reveal's bottom edge and the button/panel
+/// Gap, in cells, between the reveal's bottom edge and the picker panel
 /// below it.
 const GAP_CELLS: u16 = 1;
 /// Height, in cells, of the picker's title row.
 const PICKER_TITLE_H_CELLS: u16 = 1;
 /// Height, in cells, of each picker candidate row.
 const PICKER_ROW_H_CELLS: u16 = 2;
-
-/// Rect for the "Add to Roster" button, centered below the reveal.
-pub(super) fn add_button_rect(focus_cell: Rect) -> Rect {
-    let cx = focus_cell.x + focus_cell.width / 2;
-    let x = cx.saturating_sub(BUTTON_W_CELLS / 2);
-    let y = focus_cell.y + focus_cell.height + GAP_CELLS;
-    Rect { x, y, width: BUTTON_W_CELLS, height: ADD_BUTTON_H_CELLS }
-}
+/// Gap, in dots, between the stacked Keep and Discard action rects. The
+/// dock's reserved bottom slot is only a few dot-rows tall, so this stays at
+/// 0 (the ability grid's own row gap) rather than a full cell — a wider gap
+/// would floor one or both rows to a zero-height cell rect on `to_cell_rect`.
+const DOCK_ACTION_GAP_DOTS: i32 = 0;
 
 /// Rect for the full-roster pick panel, anchored below the reveal and
 /// clamped to stay within `area`'s width.
@@ -89,29 +88,70 @@ pub(super) fn picker_button_rect(panel: Rect, i: usize) -> Rect {
 /// (an `&self`-compatible borrow of `roster_action`) can finish and drop
 /// before the resulting mutation runs.
 enum PostHatchDecision {
-    AddClicked,
+    KeepClicked,
+    DiscardClicked,
     Picked(usize),
 }
 
 impl super::Hatchery {
-    /// Once the active hatch completes, offers the "Add to Roster" action.
-    /// A no-op once an action has already been set, or while no hatch is
+    /// Once the active hatch completes, offers the Keep/Discard action. A
+    /// no-op once an action has already been set, or while no hatch is
     /// active/complete.
-    pub(super) fn maybe_offer_add_to_roster(&mut self) {
+    pub(super) fn maybe_offer_dock_actions(&mut self) {
         let complete = self.hatch.as_ref().is_some_and(|h| h.seq.is_complete());
         if complete && self.roster_action.is_none() {
             self.roster_action = Some(RosterAction::offer());
         }
     }
 
+    /// The settled dock's Keep/Discard action cell rects, in that order —
+    /// the single authoritative source both the renderer (button
+    /// `set_rect`) and hit-testing read, so the drawn rects and the tap
+    /// targets can never drift apart. `None` without an active hatch and
+    /// hatchling to place.
+    pub(super) fn dock_action_rects(&self, area: Rect) -> Option<(Rect, Rect)> {
+        let h = self.hatch.as_ref()?;
+        let name = &self.eggs.get(h.egg)?.hatchling.as_ref()?.name;
+
+        let (_focus_dr, strip) = super::focus::focus_layout(area);
+        let border = hatch_layout::settled_layout(area, strip, name).dock_border;
+        let bottom = detail_panel::interior_regions(border).bottom;
+
+        let rows = engine_render::flex(
+            bottom,
+            FlexStyle {
+                direction: Direction::Column,
+                justify_content: Justify::Start,
+                align_items: Align::Stretch,
+                gap: DOCK_ACTION_GAP_DOTS,
+            },
+            &[
+                FlexChild { basis: Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
+                FlexChild { basis: Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
+            ],
+        );
+        let [keep, discard] = rows[..] else {
+            unreachable!("flex() with 2 children returns exactly 2 rects")
+        };
+        Some((keep.to_cell_rect(), discard.to_cell_rect()))
+    }
+
     /// Routes input to the offer/picker buttons. Never returns a
-    /// `Transition` — add-to-roster stays in-scene.
+    /// `Transition` — the post-hatch action stays in-scene.
     pub(super) fn handle_post_hatch_input(&mut self, ev: InputEvent) -> Option<Transition> {
         let InputEvent::Mouse(me) = ev else { return None };
 
         let decision = match self.roster_action.as_ref()? {
-            RosterAction::Offer { button } => {
-                button.borrow_mut().handle_mouse(&me).then_some(PostHatchDecision::AddClicked)
+            RosterAction::Offer { keep, discard } => {
+                let keep_clicked = keep.borrow_mut().handle_mouse(&me);
+                let discard_clicked = discard.borrow_mut().handle_mouse(&me);
+                if keep_clicked {
+                    Some(PostHatchDecision::KeepClicked)
+                } else if discard_clicked {
+                    Some(PostHatchDecision::DiscardClicked)
+                } else {
+                    None
+                }
             }
             RosterAction::Picking { buttons, .. } => {
                 let mut clicked = None;
@@ -125,7 +165,8 @@ impl super::Hatchery {
         };
 
         match decision {
-            Some(PostHatchDecision::AddClicked) => self.on_add_to_roster_clicked(),
+            Some(PostHatchDecision::KeepClicked) => self.on_keep_clicked(),
+            Some(PostHatchDecision::DiscardClicked) => self.on_discard_clicked(),
             Some(PostHatchDecision::Picked(index)) => self.on_bump_picked(index),
             None => {}
         }
@@ -161,7 +202,7 @@ impl super::Hatchery {
     /// Loads the on-disk roster; with an open slot, appends the hatchling
     /// directly and dismisses the hatch; otherwise shows the bump picker. A
     /// no-op dismissal without a store or a completed hatchling.
-    fn on_add_to_roster_clicked(&mut self) {
+    fn on_keep_clicked(&mut self) {
         let Some(hatchling) = self.completed_hatchling() else {
             self.dismiss_hatch();
             return;
@@ -195,6 +236,12 @@ impl super::Hatchery {
         }
     }
 
+    /// Discards the hatchling permanently: adds nothing to the roster and
+    /// retires the egg the same way a placed hatch does.
+    fn on_discard_clicked(&mut self) {
+        self.dismiss_hatch();
+    }
+
     /// Bumps the picked candidate for the completed hatchling on disk and
     /// dismisses the hatch. A no-op dismissal without a store or a completed
     /// hatchling.
@@ -218,22 +265,26 @@ impl super::Hatchery {
         self.dismiss_hatch();
     }
 
-    /// Draws the current post-hatch roster action, if any: the offer button
-    /// below the reveal, the bump picker's title + candidate names, or
-    /// nothing once placed / before offered.
-    pub(super) fn draw_add_to_roster(&self, frame: &mut Frame, area: Rect) {
+    /// Draws the current post-hatch roster action, if any: the Keep/Discard
+    /// buttons in the settled dock's reserved bottom slot, the bump
+    /// picker's title + candidate names, or nothing once placed/discarded
+    /// or before offered.
+    pub(super) fn draw_dock_actions(&self, frame: &mut Frame, area: Rect) {
         let Some(action) = self.roster_action.as_ref() else { return };
-        let focus_cell = super::focus::focus_layout(area).0.to_cell_rect();
         let white = Style::default().fg(Color::Rgb(0xff, 0xff, 0xff));
 
         match action {
-            RosterAction::Offer { button } => {
-                let rect = add_button_rect(focus_cell);
-                let mut b = button.borrow_mut();
-                b.set_rect(rect);
-                b.render(frame.buffer_mut());
+            RosterAction::Offer { keep, discard } => {
+                let Some((keep_rect, discard_rect)) = self.dock_action_rects(area) else { return };
+                let mut k = keep.borrow_mut();
+                k.set_rect(keep_rect);
+                k.render(frame.buffer_mut());
+                let mut d = discard.borrow_mut();
+                d.set_rect(discard_rect);
+                d.render(frame.buffer_mut());
             }
             RosterAction::Picking { roster, buttons } => {
+                let focus_cell = super::focus::focus_layout(area).0.to_cell_rect();
                 let panel = picker_panel_rect(area, focus_cell);
                 let title_rect = Rect { x: panel.x, y: panel.y, width: panel.width, height: PICKER_TITLE_H_CELLS };
                 engine_render::label(

@@ -11,11 +11,17 @@ use ratatui::style::{Color, Style};
 use ratatui::Frame;
 
 use engine_render::dots::{Dot, DotBuffer};
-use engine_render::{AnimatedSprite, DotRect, TextAlign};
+use engine_render::{ui_primitives, AnimatedSprite, DotRect, TextAlign};
 
 use crate::player_data::{resolve_clip, Egg, EggState};
+use crate::scenes::detail_panel;
 
 use super::hatch::HatchPhase;
+use super::hatch_layout;
+
+/// Settled dock border color — the same grey as the roster details panel's
+/// own chrome.
+const DOCK_BORDER_COLOR: engine_core::color::Rgba = engine_core::color::Rgba::rgb(0x88, 0x88, 0x88);
 
 /// The launched-and-in-progress hatch sequence for one egg: the pure
 /// timeline plus the sprites its render needs, decoded once at launch.
@@ -253,14 +259,14 @@ impl super::Hatchery {
                 let dots = reveal_recolor(&still_to_dots(art, w, hh), t);
                 crate::scenes::post_battle::columns::blit_dots(buf, focus_dr, &dots);
             }
-            phase @ (HatchPhase::Beat | HatchPhase::Slide | HatchPhase::Done) => {
+            HatchPhase::Beat => {
                 if let Some(idle) = h.idle.as_ref() {
                     let dots = idle.dots_at(self.elapsed, w, hh);
                     crate::scenes::post_battle::columns::blit_dots(buf, focus_dr, &dots);
                 }
 
                 if let Some(hatchling) = &egg.hatchling {
-                    let t = if phase == HatchPhase::Beat { h.seq.phase_progress() } else { 1.0 };
+                    let t = h.seq.phase_progress();
                     let l = (t * 255.0).round().clamp(0.0, 255.0) as u8;
                     engine_render::wrapped_text(
                         buf,
@@ -270,10 +276,69 @@ impl super::Hatchery {
                         Style::default().fg(Color::Rgb(l, l, l)),
                         true,
                     );
-
-                    super::hatch_stats::draw_stats_panel(buf, area, focus_dr, hatchling);
                 }
+            }
+            phase @ (HatchPhase::Slide | HatchPhase::Done) => {
+                let Some(hatchling) = &egg.hatchling else { return };
+                let p = if phase == HatchPhase::Done { 1.0 } else { h.seq.phase_progress() };
+
+                let nr = name_rect(focus_dr);
+                let name_start = DotRect {
+                    x: nr.x as i32 * 2,
+                    y: nr.y as i32 * 4,
+                    w: nr.width as i32 * 2,
+                    h: nr.height as i32 * 4,
+                };
+                let pose = hatch_layout::slide_pose(area, strip, &hatchling.name, focus_dr, name_start, p);
+
+                if let Some(idle) = h.idle.as_ref() {
+                    let cw = pose.creature.w.max(0) as u32;
+                    let ch = pose.creature.h.max(0) as u32;
+                    let dots = idle.dots_at(self.elapsed, cw, ch);
+                    crate::scenes::post_battle::columns::blit_dots(buf, pose.creature, &dots);
+                }
+
+                engine_render::wrapped_text(
+                    buf,
+                    pose.name_zone.to_cell_rect(),
+                    &hatchling.name,
+                    TextAlign::Center,
+                    Style::default().fg(Color::Rgb(0xff, 0xff, 0xff)),
+                    true,
+                );
+
+                draw_stats_dock(buf, pose.dock_border, hatchling);
             }
         }
     }
+}
+
+/// Paints the settled-placement stats dock (border + shared stamina/
+/// abilities body) at `border`: clears the dock's cells first so the
+/// scene's background fill never bleeds through the border chrome or the
+/// gaps the shared body leaves unpainted between its label/bar and ability
+/// cells, then draws the rounded border and the shared `detail_panel` body
+/// — the sole dock-render site, called for both the sliding-in dock and its
+/// settled resting frame.
+fn draw_stats_dock(buf: &mut ratatui::buffer::Buffer, border: DotRect, hatchling: &crate::player_data::PersistedCreature) {
+    // `border` slides in from fully off the right edge during the Slide
+    // phase, so its cell rect can extend past the buffer's bounds; `Clear`
+    // indexes the buffer directly and panics on an out-of-bounds cell, so
+    // clip to the buffer's own area first (a zero-area clip is a no-op).
+    let clip = border.to_cell_rect().intersection(buf.area);
+    ratatui::widgets::Widget::render(ratatui::widgets::Clear, clip, buf);
+
+    let dock_dots = ui_primitives::rounded_rect(
+        border.w.max(0) as usize,
+        border.h.max(0) as usize,
+        1,
+        1,
+        DOCK_BORDER_COLOR,
+        Dot::Transparent,
+    );
+    crate::scenes::post_battle::columns::blit_dots(buf, border, &dock_dots);
+
+    let regions = detail_panel::interior_regions(border);
+    detail_panel::render_stamina_row(buf, regions.stamina, &hatchling.stamina);
+    detail_panel::render_abilities(buf, regions.abilities_header, regions.ability_cells, &hatchling.abilities);
 }
