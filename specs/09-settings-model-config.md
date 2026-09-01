@@ -13,11 +13,12 @@ Player-controlled configuration. Most importantly, which AI model powers their b
 ### Model Selection
 The model the player chooses runs their battle simulation locally. This is a meaningful choice — different models will interpret and execute skills differently, at different speeds and quality levels.
 
-**Recommended: Local Model (FLUX4)**
-- The game defaults to recommending FLUX4 (or equivalent capable local model)
-- Auto-setup is supported: if not installed, the game offers to download and configure it
-- Local models mean battles can be run without internet after opponent data is downloaded
-- Initial model setup happens during onboarding but can be changed here
+**Recommended: a bundled local model**
+- The concrete runtime, model registry, download/install, and defaults live in `73-local-text-model` (a bundled llama.cpp runtime; default `qwen3-4b-instruct`). "FLUX4" in earlier drafts was a placeholder for this; `73`'s registry replaces it.
+- **Model selection is this screen's job**: it lists `73`'s registry models, lets the player choose one, and triggers its install — driving `73`'s registry + install API. This screen is not built yet, so `73` defaults to one model until it is.
+- Auto-setup: if the selected model isn't installed, offer to download and configure it (via `73`'s install flow).
+- Local models mean battles can be run without internet after opponent data and the model are downloaded.
+- Initial model setup happens during onboarding but can be changed here.
 
 **Online Models**
 - Players may alternatively use Claude, OpenAI, or other API-compatible models
