@@ -140,8 +140,10 @@ impl RosterManager {
 
     /// Display label for `kind`'s slice (b1-t6) — an exhaustive `match`
     /// over `StatKind`, mirroring `Stats::value`'s discipline (single stat
-    /// list, no second enumeration to drift out of sync).
-    pub(super) fn stat_label(kind: crate::stats::StatKind) -> &'static str {
+    /// list, no second enumeration to drift out of sync). `pub(crate)` so
+    /// the hatchery's post-hatch stats panel reuses the same mapping
+    /// instead of hardcoding a second one.
+    pub(crate) fn stat_label(kind: crate::stats::StatKind) -> &'static str {
         match kind {
             crate::stats::StatKind::Strength => "STR",
             crate::stats::StatKind::Dexterity => "DEX",

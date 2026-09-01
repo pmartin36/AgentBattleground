@@ -20,7 +20,7 @@ use super::hatch::HatchPhase;
 /// The launched-and-in-progress hatch sequence for one egg: the pure
 /// timeline plus the sprites its render needs, decoded once at launch.
 pub(crate) struct HatchState {
-    egg: usize,
+    pub(super) egg: usize,
     /// Read by `handle_input`'s non-interruptible guard.
     pub(super) seq: super::hatch::HatchSequence,
     crack: Option<AnimatedSprite>,
@@ -222,6 +222,8 @@ impl super::Hatchery {
                         Style::default().fg(Color::Rgb(0xff, 0xff, 0xff)),
                         true,
                     );
+
+                    super::hatch_stats::draw_stats_panel(buf, area, focus_dr, hatchling);
                 }
             }
         }

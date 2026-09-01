@@ -66,6 +66,22 @@ impl super::Hatchery {
         self.poll_clip_jobs();
     }
 
+    /// Keeps `clip_jobs` in step with an egg removed from `self.eggs` at
+    /// `removed_index`: drops jobs that belonged to the removed egg and
+    /// shifts down the `egg` index of every job for an egg that sat above
+    /// it, mirroring the parallel-collection removal already applied to
+    /// `art_cache`/`egg_buttons`.
+    pub(super) fn remove_egg_from_clip_jobs(&mut self, removed_index: usize) {
+        self.clip_jobs.retain_mut(|job| match job.egg.cmp(&removed_index) {
+            std::cmp::Ordering::Equal => false,
+            std::cmp::Ordering::Greater => {
+                job.egg -= 1;
+                true
+            }
+            std::cmp::Ordering::Less => true,
+        });
+    }
+
     /// Scans `self.eggs` for an `Incubating` egg with a resolved `egg_art`
     /// and a hatchling missing an idle or attack clip, submitting a
     /// `generate_animation` job for each missing action not already

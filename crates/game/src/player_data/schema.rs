@@ -24,6 +24,27 @@ pub struct PlayerData {
     pub eggs: Vec<Egg>,
 }
 
+impl PlayerData {
+    /// Whether the roster has a free slot for a newly hatched creature.
+    pub fn roster_has_open_slot(&self) -> bool {
+        self.roster.len() < crate::squad_role::ROSTER_SIZE
+    }
+
+    /// Appends `creature` to the end of the roster, preserving the existing
+    /// members' order.
+    pub fn push_roster(&mut self, creature: PersistedCreature) {
+        self.roster.push(creature);
+    }
+
+    /// Replaces the roster member at `index` with `incoming`, returning the
+    /// displaced creature so the caller decides its fate. Out-of-range
+    /// `index` is a no-op returning `None`.
+    pub fn replace_roster_slot(&mut self, index: usize, incoming: PersistedCreature) -> Option<PersistedCreature> {
+        let slot = self.roster.get_mut(index)?;
+        Some(std::mem::replace(slot, incoming))
+    }
+}
+
 /// A creature's on-disk form: RPG data plus optional art handles. Handles
 /// are `None` for a bundled/handle-less creature (e.g. the first-run seed).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +120,7 @@ mod tests {
     use super::*;
     use crate::ability::{AbilityType, DamageClass, Modifier, StatRequirement, StatusKind};
     use crate::creatures::MAX_ABILITIES;
+    use crate::squad_role::ROSTER_SIZE;
     use crate::stats::StatKind;
     use std::path::PathBuf;
     use std::time::Duration;
@@ -240,6 +262,75 @@ mod tests {
             None,
             None,
         );
+    }
+
+    /// A roster member distinguishable only by name, for the roster-op
+    /// tests below.
+    fn roster_member(name: &str) -> PersistedCreature {
+        PersistedCreature::new(
+            name,
+            Element::Normal,
+            Stats::default(),
+            1,
+            0,
+            Vec::new(),
+            Stamina::default(),
+            None,
+            None,
+            None,
+        )
+    }
+
+    /// `push_roster` appends at the end, preserving the existing members'
+    /// order.
+    #[test]
+    fn push_roster_appends_preserving_order() {
+        let mut data = PlayerData { roster: vec![roster_member("Emberling")], eggs: Vec::new() };
+        data.push_roster(roster_member("Newbie"));
+        assert_eq!(data.roster.len(), 2, "roster must grow by one");
+        assert_eq!(data.roster[0].name, "Emberling", "existing member's order must be preserved");
+        assert_eq!(data.roster[1].name, "Newbie", "the new creature must be appended at the end");
+    }
+
+    /// `roster_has_open_slot` is true below `ROSTER_SIZE` and false once
+    /// full, computed from the constant rather than a hardcoded number.
+    #[test]
+    fn roster_has_open_slot_true_below_size_full_at_size() {
+        let mut data = PlayerData {
+            roster: (0..ROSTER_SIZE - 1).map(|i| roster_member(&format!("M{i}"))).collect(),
+            eggs: Vec::new(),
+        };
+        assert!(data.roster_has_open_slot(), "a roster below ROSTER_SIZE must report an open slot");
+
+        data.roster.push(roster_member("Last"));
+        assert!(!data.roster_has_open_slot(), "a full roster must report no open slot");
+    }
+
+    /// `replace_roster_slot` returns the displaced creature, leaves the
+    /// roster's length unchanged, and installs `incoming` at `index` —
+    /// the pick/dispose decoupling: the caller decides what happens to the
+    /// returned creature.
+    #[test]
+    fn replace_roster_slot_returns_bumped_and_keeps_len() {
+        let mut data = PlayerData {
+            roster: vec![roster_member("A"), roster_member("B"), roster_member("C")],
+            eggs: Vec::new(),
+        };
+        let bumped = data.replace_roster_slot(1, roster_member("Newbie"));
+        assert_eq!(bumped.map(|c| c.name), Some("B".to_string()), "must return the displaced creature");
+        assert_eq!(data.roster.len(), 3, "roster length must stay unchanged");
+        assert_eq!(data.roster[1].name, "Newbie", "the incoming creature must occupy the replaced slot");
+    }
+
+    /// An out-of-range `index` is a no-op: returns `None` and mutates
+    /// nothing.
+    #[test]
+    fn replace_roster_slot_out_of_range_is_none_no_mutation() {
+        let mut data = PlayerData { roster: vec![roster_member("A"), roster_member("B")], eggs: Vec::new() };
+        let before = data.roster.clone();
+        let result = data.replace_roster_slot(5, roster_member("Newbie"));
+        assert!(result.is_none(), "an out-of-range index must return None");
+        assert_eq!(data.roster, before, "an out-of-range index must not mutate the roster");
     }
 
     fn bincode_variant_index(bytes: &[u8]) -> u32 {

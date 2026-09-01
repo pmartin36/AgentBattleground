@@ -3,7 +3,7 @@
 use super::*;
 
 /// A `Ready` egg carrying a hatchling, for driving the hatch sequence.
-fn ready_egg_with_hatchling(hatchling: PersistedCreature) -> Egg {
+pub(super) fn ready_egg_with_hatchling(hatchling: PersistedCreature) -> Egg {
     Egg {
         element: Element::Fire,
         state: EggState::Ready,
@@ -15,7 +15,7 @@ fn ready_egg_with_hatchling(hatchling: PersistedCreature) -> Egg {
 
 /// Taps the single Ready egg at index 0 (recording a pending hatch
 /// request), then ticks `advance_hatch` once to launch the sequence.
-fn launch_hatch(scene: &mut Hatchery, w: u16, h: u16) {
+pub(super) fn launch_hatch(scene: &mut Hatchery, w: u16, h: u16) {
     let area = Rect::new(0, 0, w, h);
     let _ = render_to_buffer(scene, w, h);
     let rect = tray::tray_slots(tray::tray_band(area), scene.eggs.len())[0].to_cell_rect();

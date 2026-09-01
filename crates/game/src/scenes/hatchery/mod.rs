@@ -9,6 +9,8 @@ mod hatch_clips;
 #[cfg(debug_assertions)]
 mod hatch_dev;
 mod hatch_render;
+mod hatch_roster;
+mod hatch_stats;
 mod lifecycle;
 mod tray;
 pub mod define_modal;
@@ -105,6 +107,10 @@ pub struct Hatchery {
     /// `None` when no hatch is underway.
     #[inspect(hidden)]
     hatch: Option<hatch_render::HatchState>,
+    /// The post-hatch "Add to Roster" action state, or `None` before the
+    /// active hatch completes.
+    #[inspect(hidden)]
+    roster_action: Option<hatch_roster::RosterAction>,
 }
 
 impl Hatchery {
@@ -131,6 +137,7 @@ impl Hatchery {
             definition_error: None,
             clip_jobs: Vec::new(),
             hatch: None,
+            roster_action: None,
         }
     }
 
@@ -197,6 +204,7 @@ impl Hatchery {
             definition_error: None,
             clip_jobs: Vec::new(),
             hatch: None,
+            roster_action: None,
         };
         scene.tick(now);
         scene
@@ -342,6 +350,7 @@ impl Scene for Hatchery {
         self.poll_definition(SystemTime::now());
         self.advance_hatch_clips();
         self.advance_hatch(dt);
+        self.maybe_offer_add_to_roster();
         None
     }
 
@@ -350,6 +359,7 @@ impl Scene for Hatchery {
 
         if self.hatch.is_some() {
             self.draw_hatch(frame, area);
+            self.draw_add_to_roster(frame, area);
             return;
         }
 
@@ -424,8 +434,11 @@ impl Scene for Hatchery {
     }
 
     fn handle_input(&mut self, ev: InputEvent) -> Option<Transition> {
-        if self.hatch.as_ref().is_some_and(|h| h.seq.is_active()) {
-            return None;
+        if let Some(h) = self.hatch.as_ref() {
+            if h.seq.is_active() {
+                return None;
+            }
+            return self.handle_post_hatch_input(ev);
         }
 
         if let Some(modal) = self.define_modal.as_mut() {
@@ -938,6 +951,13 @@ mod tests {
     // `tests/hatch_sequence_tests.rs` (kept out of this file to stay under
     // the project's file-size budget).
     mod hatch_sequence_tests;
+    // Post-hatch stats panel tests live in `tests/hatch_stats_tests.rs`,
+    // kept out of this file for the same reason as hatch_sequence_tests.
+    mod hatch_stats_tests;
+    // Post-hatch "Add to Roster" action tests live in
+    // `tests/hatch_roster_tests.rs`, kept out of this file for the same
+    // reason as hatch_sequence_tests.
+    mod hatch_roster_tests;
     // Dev-only debug hotkey tests live in `tests/hatch_dev_tests.rs`,
     // compiled only alongside the debug-only `hatch_dev` module itself.
     #[cfg(debug_assertions)]
