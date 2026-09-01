@@ -20,6 +20,9 @@ pub use job::{CancelFlag, JobHandle, JobQueue, JobStatus};
 pub use types::{Provider, ResolvedModelConfig, TextError, TextRequest};
 
 #[cfg(test)]
+mod live_test;
+
+#[cfg(test)]
 mod boundary {
     // Paths are relative to this file's directory (`text_gen/`).
     const SOURCES: &[(&str, &str)] = &[
