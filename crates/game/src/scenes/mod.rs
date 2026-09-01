@@ -16,6 +16,7 @@ pub mod settings;
 
 pub(crate) mod bars;
 pub(crate) mod close_button;
+pub(crate) mod detail_panel;
 pub(crate) mod home_button;
 pub(crate) mod palette;
 pub(crate) mod title_logo;

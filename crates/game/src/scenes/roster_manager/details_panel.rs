@@ -1,4 +1,5 @@
 use super::*;
+use crate::scenes::detail_panel;
 
 impl RosterManager {
     /// The "Instructions" header label text — single source of truth so the
@@ -6,17 +7,15 @@ impl RosterManager {
     /// SAME width `draw_section_header` renders below.
     pub(super) const INSTRUCTIONS_HEADER_TEXT: &'static str = "Instructions";
 
-    /// Stamina status text colour (b2-t4) — white, matching
-    /// `LEVEL_COLOR`.
-    const STAMINA_COLOR: engine_core::color::Rgba = engine_core::color::Rgba::rgb(0xff, 0xff, 0xff);
-    /// Divisor for converting an `injured_until` remaining `Duration` into
-    /// whole days-remaining (b2-t4). Not `stamina::RECOVERY_DURATION`,
-    /// which is a recovery span, not a per-day unit.
-    const SECS_PER_DAY: u64 = 24 * 60 * 60;
+    /// Ability list text colour, aliasing the shared component's single
+    /// source of truth (`detail_panel::ABILITY_COLOR`).
+    const ABILITY_COLOR: engine_core::color::Rgba = detail_panel::ABILITY_COLOR;
 
-    /// Ability list text colour (b2-t5) — white, matching
-    /// `STAMINA_COLOR`/`LEVEL_COLOR` chrome.
-    const ABILITY_COLOR: engine_core::color::Rgba = engine_core::color::Rgba::rgb(0xff, 0xff, 0xff);
+    /// Header/underline color, aliasing the shared component's single
+    /// source of truth (`detail_panel::HEADER_UNDERLINE_COLOR`). Exercised
+    /// only by roster's own unit tests, not production code.
+    #[allow(dead_code)]
+    pub(super) const HEADER_UNDERLINE_COLOR: engine_core::color::Rgba = detail_panel::HEADER_UNDERLINE_COLOR;
 
     /// Edit-button rounded-rect border color when idle — grey, matching the
     /// panel's own border (`BORDER_COLOR`).
@@ -27,216 +26,45 @@ impl RosterManager {
     const EDIT_BUTTON_BORDER_ACTIVE: engine_core::color::Rgba =
         engine_core::color::Rgba::rgb(0xff, 0xd7, 0x00);
 
-    /// The stamina status line for `e` (b2-t4): `"Exhausted: {days} days
-    /// remain"` when injured (days derived from `injured_until()`), else
-    /// `"Stamina: {percent}%"`. Single source of both format strings.
-    pub(super) fn stamina_text(e: &crate::stamina::Stamina) -> String {
-        match e.injured_until() {
-            Some(remaining) => {
-                let days = remaining.as_secs().div_ceil(Self::SECS_PER_DAY);
-                format!("Exhausted: {days} days remain")
-            }
-            None => format!("Stamina: {}%", e.percent()),
-        }
-    }
-
-    /// Dot-rows tall for a header underline (spec Constants, b2-t1).
-    pub(super) const HEADER_UNDERLINE_THICKNESS_DOTS: i32 = 2;
-    /// Extra dot-width the underline runs past the header text's right edge.
-    pub(super) const HEADER_UNDERLINE_PAD_DOTS: i32 = 2;
-    /// Underline color — white, matching the header/label text color
-    /// (`ABILITY_COLOR`).
-    pub(super) const HEADER_UNDERLINE_COLOR: engine_core::color::Rgba =
-        engine_core::color::Rgba::rgb(0xff, 0xff, 0xff);
-
-    /// Draws a horizontal lit-dot underline `HEADER_UNDERLINE_THICKNESS_DOTS`
-    /// dot-rows tall, in the cell-row directly beneath `header`, spanning
-    /// `text`'s rendered width (`text.chars().count() * 2` dots, mirroring
-    /// `engine_render::label`'s width measure) plus
-    /// `HEADER_UNDERLINE_PAD_DOTS`, clamped to `header.w`. Anchored to
-    /// `header.to_cell_rect()` — the same cell-floored position `label` draws
-    /// the header text at (CLAUDE.md rule 5) — never a raw sub-cell `header`
-    /// field. Empty `text` or a zero clamped width paints nothing. Bespoke
-    /// dot-pipeline chrome (spec line 36): routed through the shared
-    /// `crate::scenes::post_battle::columns::blit_dots` sub-cell placer, not
-    /// a hand-rolled `dots_to_grid`/`draw_grid` call.
+    /// Draws a horizontal lit-dot underline in the cell-row directly beneath
+    /// `header`: delegates to the shared component's single source of truth
+    /// (`detail_panel::draw_header_underline`). Exercised only by roster's
+    /// own unit tests, not production code.
+    #[allow(dead_code)]
     pub(super) fn draw_header_underline(
         buf: &mut ratatui::buffer::Buffer,
         header: engine_render::DotRect,
         text: &str,
     ) {
-        if text.is_empty() {
-            return;
-        }
-        // A collapsed header (no vertical room — e.g. a short terminal;
-        // `panel_layout.rs`'s `.min(4)` clamp yields a genuine `h == 0` in
-        // this case) means the header text itself already painted nothing
-        // (`engine_render::label` no-ops on a zero-height cell rect); the
-        // underline must match by not drawing either. Without this guard,
-        // `target.y = header.y + header.h` collapses to `header.y` itself —
-        // whatever row immediately follows the (nonexistent) header band,
-        // which can be the details panel's own bottom border row — and the
-        // underline paints directly into it (a real bug first exposed once
-        // `render_instructions`/`render_abilities` were wired into
-        // production `render()`, b3-t3).
-        if header.h <= 0 {
-            return;
-        }
-        let text_w = text.chars().count() as i32 * 2;
-        let w = (text_w + Self::HEADER_UNDERLINE_PAD_DOTS).min(header.w).max(0);
-        if w == 0 {
-            return;
-        }
-
-        // Anchor the underline to the SAME cell grid `label` drew the header
-        // text at (`header.to_cell_rect()`), NOT the sub-cell `header.y`: the
-        // header text is cell-quantized terminal text, and the panel interior
-        // carries a structural ~2-dot y offset, so `header.y + header.h` lands
-        // ~2 dots low — in the BOTTOM rows of the cell below the text, leaving
-        // a visible gap. Flooring to the text's own cell places the underline
-        // in the TOP `HEADER_UNDERLINE_THICKNESS_DOTS` rows of the cell row
-        // directly beneath the text, hugging it. (For a cell-aligned header
-        // this is identical to the old computation.)
-        let header_cell = header.to_cell_rect();
-        let target = engine_render::DotRect {
-            x: header_cell.x as i32 * 2,
-            y: header_cell.bottom() as i32 * 4,
-            w,
-            h: Self::HEADER_UNDERLINE_THICKNESS_DOTS,
-        };
-        let mut local = engine_render::dots::DotBuffer::new(
-            target.w as usize,
-            target.h as usize,
-        );
-        for row in 0..target.h as usize {
-            for col in 0..target.w as usize {
-                local.set(col, row, engine_render::dots::Dot::Lit(Self::HEADER_UNDERLINE_COLOR));
-            }
-        }
-        crate::scenes::post_battle::columns::blit_dots(buf, target, &local);
+        detail_panel::draw_header_underline(buf, header, text);
     }
 
-    /// Dot gap between the stamina label slot and its bar slot.
-    pub(super) const STAMINA_LABEL_BAR_GAP_DOTS: i32 = 4;
-    /// 1-cell (2-dot) left/right margin the stamina row keeps off the panel
-    /// interior edges.
-    pub(super) const STAMINA_EDGE_MARGIN_DOTS: i32 = 2;
-
-    /// Paints, into `region`, a left `"Stamina"` label plus the stamina bar for
-    /// `creatures[index]`. Layout on one line: `[1-cell margin]` + label +
-    /// bar-area (grows to fill the rest) `[1-cell margin]`. The bar TRACK length
-    /// scales with the creature's `stamina().max()` —
-    /// `clamp(max / STAMINA_MAX_CAP, 0.25, 1.0)` of the bar area, so a full-cap
-    /// creature spans the whole line and a low-max one is shorter but never
-    /// below 25%. The FILL inside the track is `percent/100` (= `current/max`)
-    /// and can be anywhere from 0 to full (the 25% floor is on the track bounds,
-    /// not the fill). Injured shows `Self::stamina_text` in place of the label.
+    /// Paints, into `region`, a left `"Stamina"` label plus the stamina bar
+    /// for `creatures[index]`: delegates to the shared component's single
+    /// source of truth (`detail_panel::render_stamina_row`).
     pub(super) fn render_stamina_row(
         &self,
         buf: &mut ratatui::buffer::Buffer,
         region: engine_render::DotRect,
         index: usize,
     ) {
-        let stamina = self.creatures[index].stamina();
-        let percent = stamina.percent();
-        let max = stamina.max();
-        let label = if stamina.is_injured() {
-            Self::stamina_text(stamina)
-        } else {
-            "Stamina".to_string()
-        };
-        let fraction = percent as f32 / 100.0;
-        let fill = crate::scenes::post_battle::columns::stamina_fill_color(percent);
-
-        // The stamina band is 2 cells tall: label + bar on the top cell-row,
-        // and a braille header underline on the row beneath the "Stamina" label
-        // (matching the Abilities/Instructions headers). Constrain the label+bar
-        // to the top 4-dot row; the underline draws into the row below.
-        let top_row = engine_render::DotRect { h: 4, ..region };
-        // 1-cell L/R margin, then [label | bar-area]; the bar area grows to
-        // absorb all remaining width of the line.
-        // No LEFT inset — "Stamina" sits flush with the Abilities/Instructions
-        // headers at the interior's left edge; keep the RIGHT inset so the bar
-        // keeps its margin off the panel frame.
-        let inner = top_row.inset(0, Self::STAMINA_EDGE_MARGIN_DOTS, 0, 0);
-        let label_w = ((label.chars().count() as i32) * 2).min(inner.w.max(0));
-
-        let style = engine_render::FlexStyle {
-            direction: engine_render::Direction::Row,
-            justify_content: engine_render::Justify::Start,
-            align_items: engine_render::Align::Stretch,
-            gap: Self::STAMINA_LABEL_BAR_GAP_DOTS,
-        };
-        let children = [
-            engine_render::FlexChild { basis: engine_render::Basis::Fixed(label_w), grow: 0.0, shrink: 0.0 },
-            engine_render::FlexChild { basis: engine_render::Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
-        ];
-        let parts = engine_render::flex(inner, style, &children);
-        if parts.len() < 2 {
-            return;
-        }
-
-        engine_render::label(
-            buf,
-            parts[0].to_cell_rect(),
-            &label,
-            engine_render::TextAlign::Left,
-            ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(
-                Self::STAMINA_COLOR.r,
-                Self::STAMINA_COLOR.g,
-                Self::STAMINA_COLOR.b,
-            )),
-        );
-
-        // Header-style braille underline beneath the "Stamina" label, in the
-        // second cell-row of the band.
-        Self::draw_header_underline(buf, parts[0], &label);
-
-        // Track scales with max stamina, left-aligned in the bar area (all bars
-        // start at the same x). Floor to the cell grid so the bar shares the
-        // label's plane (the panel interior carries a sub-cell y offset).
-        let bar_cell = parts[1].to_cell_rect();
-        let bar_x = bar_cell.x as i32 * 2;
-        let bar_y = bar_cell.y as i32 * 4;
-        let bar_h = bar_cell.height as i32 * 4;
-        let bar_full_w = bar_cell.width as i32 * 2;
-        let track_frac = (max as f32 / crate::stamina::STAMINA_MAX_CAP as f32).clamp(0.25, 1.0);
-        let track_w = ((bar_full_w as f32) * track_frac).round() as i32;
-        let track_rect = engine_render::DotRect { x: bar_x, y: bar_y, w: track_w, h: bar_h };
-        crate::scenes::bars::draw_bar(buf, track_rect, fraction, fill);
+        detail_panel::render_stamina_row(buf, region, self.creatures[index].stamina());
     }
 
     /// Draws a left-aligned white section header label at `header`'s cell
-    /// rect, plus the b2-t1 braille underline beneath it. Shared by the
-    /// Abilities (b2-t3) and Instructions (b2-t4) headers so both stay
-    /// pixel-identical.
-    ///
+    /// rect, plus the braille underline beneath it: delegates to the shared
+    /// component's single source of truth (`detail_panel::draw_section_header`).
     pub(super) fn draw_section_header(
         buf: &mut ratatui::buffer::Buffer,
         header: engine_render::DotRect,
         text: &str,
     ) {
-        engine_render::label(
-            buf,
-            header.to_cell_rect(),
-            text,
-            engine_render::TextAlign::Left,
-            ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(
-                Self::HEADER_UNDERLINE_COLOR.r,
-                Self::HEADER_UNDERLINE_COLOR.g,
-                Self::HEADER_UNDERLINE_COLOR.b,
-            )),
-        );
-        Self::draw_header_underline(buf, header, text);
+        detail_panel::draw_section_header(buf, header, text);
     }
 
-    /// Renders the "Abilities" section header (via `draw_section_header`)
-    /// then `creatures[index].abilities()` into `cells` in reading order
-    /// `[TL, TR, BL, BR]` — each ability's `description()` left-aligned and
-    /// terminal-underlined in `ABILITY_COLOR`. A cell with no corresponding
-    /// ability (fewer than `MAX_ABILITIES`) paints nothing (blank, no
-    /// placeholder/border).
-    ///
+    /// Renders the "Abilities" section header then `creatures[index].abilities()`
+    /// into `cells`: delegates to the shared component's single source of
+    /// truth (`detail_panel::render_abilities`).
     pub(super) fn render_abilities(
         &self,
         buf: &mut ratatui::buffer::Buffer,
@@ -244,27 +72,7 @@ impl RosterManager {
         cells: [engine_render::DotRect; 4],
         index: usize,
     ) {
-        Self::draw_section_header(buf, header, "Abilities");
-
-        let abilities = self.creatures[index].abilities();
-        for (i, cell) in cells.iter().enumerate() {
-            let Some(ability) = abilities.get(i) else {
-                continue;
-            };
-            engine_render::label(
-                buf,
-                cell.to_cell_rect(),
-                ability.description(),
-                engine_render::TextAlign::Center,
-                ratatui::style::Style::default()
-                    .fg(ratatui::style::Color::Rgb(
-                        Self::ABILITY_COLOR.r,
-                        Self::ABILITY_COLOR.g,
-                        Self::ABILITY_COLOR.b,
-                    ))
-                    .add_modifier(ratatui::style::Modifier::UNDERLINED),
-            );
-        }
+        detail_panel::render_abilities(buf, header, cells, self.creatures[index].abilities());
     }
 
     /// Renders the "Instructions" section header (via `draw_section_header`)
@@ -494,6 +302,80 @@ mod panel_integration_tests {
         );
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+/// The stamina row and abilities section render through exactly one shared
+/// component (`scenes::detail_panel`): roster's own rendering and the
+/// shared free functions must decode identically for the same creature at
+/// the same regions, so a second caller (the hatchery stats dock) cannot
+/// silently diverge from what roster renders.
+#[cfg(test)]
+mod shared_component_never_drifts_tests {
+    use super::*;
+    use crate::ability::Ability;
+    use crate::creatures::Creature;
+    use crate::scenes::detail_panel;
+    use crate::scenes::test_util::region_cells;
+
+    fn regions() -> crate::scenes::roster_manager::panel_layout::PanelRegions {
+        RosterManager::panel_interior_regions(Rect::new(0, 0, 80, 30))
+    }
+
+    #[test]
+    fn stamina_row_matches_shared_component() {
+        let mut rm = RosterManager::new();
+        rm.creatures[0] = Creature::new("Test");
+        let r = regions();
+
+        let mut roster_buf = Buffer::empty(Rect::new(0, 0, 80, 30));
+        rm.render_stamina_row(&mut roster_buf, r.stamina, 0);
+
+        let mut shared_buf = Buffer::empty(Rect::new(0, 0, 80, 30));
+        detail_panel::render_stamina_row(&mut shared_buf, r.stamina, rm.creatures[0].stamina());
+
+        let rect = r.stamina.to_cell_rect();
+        assert_eq!(
+            region_cells(&roster_buf, rect),
+            region_cells(&shared_buf, rect),
+            "shared render_stamina_row must decode byte-identical to roster's own stamina row"
+        );
+    }
+
+    #[test]
+    fn abilities_match_shared_component() {
+        let mut rm = RosterManager::new();
+        rm.creatures[0] = Creature::new("Test").with_abilities(vec![
+            Ability::new("Fire Breath", vec![]),
+            Ability::new("Ice Shard", vec![]),
+        ]);
+        let r = regions();
+
+        let mut roster_buf = Buffer::empty(Rect::new(0, 0, 80, 30));
+        rm.render_abilities(&mut roster_buf, r.abilities_header, r.ability_cells, 0);
+
+        let mut shared_buf = Buffer::empty(Rect::new(0, 0, 80, 30));
+        detail_panel::render_abilities(
+            &mut shared_buf,
+            r.abilities_header,
+            r.ability_cells,
+            rm.creatures[0].abilities(),
+        );
+
+        let header_rect = r.abilities_header.to_cell_rect();
+        assert_eq!(
+            region_cells(&roster_buf, header_rect),
+            region_cells(&shared_buf, header_rect),
+            "shared render_abilities header must decode byte-identical to roster's own header"
+        );
+        for (i, cell) in r.ability_cells.iter().enumerate() {
+            let rect = cell.to_cell_rect();
+            assert_eq!(
+                region_cells(&roster_buf, rect),
+                region_cells(&shared_buf, rect),
+                "shared render_abilities cell {i} must decode byte-identical to roster's own cell"
+            );
+        }
     }
 }
 

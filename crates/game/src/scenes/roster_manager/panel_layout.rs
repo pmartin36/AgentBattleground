@@ -3,36 +3,36 @@
 // (ability hit-testing) in `mod.rs`.
 
 use super::*;
+use crate::scenes::detail_panel;
 
 impl RosterManager {
-    /// b1-t3: 1-cell blank top margin above the stamina row, measured from
-    /// the panel interior's top edge (`details_panel_rects` border inset 1
-    /// cell).
-    pub(super) const PANEL_TOP_MARGIN_CELLS: i32 = 1;
-    /// Stamina band height — 2 cells: the "Stamina" label + bar on the top
-    /// cell-row, and the braille header underline on the row beneath (like the
-    /// Abilities/Instructions header bands). `render_stamina_row` constrains the
-    /// label+bar to the top 4-dot row so `bars::draw_bar` still gets an
-    /// exact-height target.
-    pub(super) const STAMINA_ROW_H_CELLS: i32 = 2;
-    /// b1-t3: gap between the stamina row and the abilities header band.
-    pub(super) const STAMINA_ABILITIES_GAP_CELLS: i32 = 2;
-    /// b1-t3: header band height — row 0 is the header text, row 1 is the
-    /// blank row reserved for the b2-t1 braille underline. Shared by both
-    /// the abilities and instructions headers.
-    pub(super) const HEADER_BAND_H_CELLS: i32 = 2;
-    /// b1-t3: height of the 2x2 ability grid band (two 1-cell rows, no
-    /// inter-row gap).
-    pub(super) const ABILITY_GRID_H_CELLS: i32 = 2;
-    /// b1-t3: pinned inter-column gap between the ability grid's two
-    /// columns.
-    pub(super) const ABILITY_GRID_COL_GAP_CELLS: i32 = 1;
-    /// b1-t3: inter-row gap within an ability grid column (none — the two
-    /// rows sit flush).
-    pub(super) const ABILITY_GRID_ROW_GAP_CELLS: i32 = 0;
-    /// b1-t3: gap between the ability grid band and the instructions header
-    /// band.
-    pub(super) const ABILITIES_INSTRUCTIONS_GAP_CELLS: i32 = 2;
+    /// 1-cell blank top margin above the stamina row, measured from the
+    /// panel interior's top edge (`details_panel_rects` border inset 1
+    /// cell). Aliases the shared component's single source of truth
+    /// (`detail_panel::PANEL_TOP_MARGIN_CELLS`). Exercised only by roster's
+    /// own unit tests, not production code.
+    #[allow(dead_code)]
+    pub(super) const PANEL_TOP_MARGIN_CELLS: i32 = detail_panel::PANEL_TOP_MARGIN_CELLS;
+    /// Gap between the stamina row and the abilities header band. Aliases
+    /// `detail_panel::STAMINA_ABILITIES_GAP_CELLS`. Exercised only by
+    /// roster's own unit tests, not production code.
+    #[allow(dead_code)]
+    pub(super) const STAMINA_ABILITIES_GAP_CELLS: i32 = detail_panel::STAMINA_ABILITIES_GAP_CELLS;
+    /// Header band height — row 0 is the header text, row 1 is the blank
+    /// row reserved for the braille underline. Shared by both the abilities
+    /// and instructions headers. Aliases `detail_panel::HEADER_BAND_H_CELLS`.
+    pub(super) const HEADER_BAND_H_CELLS: i32 = detail_panel::HEADER_BAND_H_CELLS;
+    /// Pinned inter-column gap between the ability grid's two columns.
+    /// Aliases `detail_panel::ABILITY_GRID_COL_GAP_CELLS`. Exercised only
+    /// by roster's own unit tests, not production code.
+    #[allow(dead_code)]
+    pub(super) const ABILITY_GRID_COL_GAP_CELLS: i32 = detail_panel::ABILITY_GRID_COL_GAP_CELLS;
+    /// Gap between the ability grid band and the instructions header band.
+    /// Aliases the shared component's generic `detail_panel::GRID_BOTTOM_GAP_CELLS`
+    /// (roster names its own bottom neighbor "instructions" specifically).
+    /// Exercised only by roster's own unit tests, not production code.
+    #[allow(dead_code)]
+    pub(super) const ABILITIES_INSTRUCTIONS_GAP_CELLS: i32 = detail_panel::GRID_BOTTOM_GAP_CELLS;
     /// Width (cells) of the Edit-button SLOT in the instructions header row.
     /// The button itself is this minus `EDIT_BUTTON_RIGHT_MARGIN_CELLS` = 8
     /// cells (an even width, so "Edit" centers symmetrically between the borders)
@@ -49,21 +49,22 @@ impl RosterManager {
     /// `ABILITIES_INSTRUCTIONS` gap above it (never DOWN into preview text).
     pub(super) const EDIT_BUTTON_H_CELLS: i32 = 3;
 
-    /// b1-t3: carves the details-panel INTERIOR (inside the existing 1-cell
-    /// border inset already applied by `details_panel_rects`) into named
-    /// regions, composed entirely from `engine_render::flex` over
-    /// `DotRect` — no hand-computed cell offsets. See research.md b1-t3 for
-    /// the full column-then-subflex breakdown (top margin, stamina row,
-    /// gap, abilities header+grid band, gap, instructions header+edit-
-    /// button band, grow preview).
-    ///
+    /// Carves the details-panel INTERIOR (inside the existing 1-cell border
+    /// inset already applied by `details_panel_rects`) into named regions.
+    /// The shared body geometry (top margin, stamina row, gap, abilities
+    /// header+grid band, gap) is delegated to `detail_panel::interior_regions`;
+    /// this method then subdivides the returned `bottom` grow slot into
+    /// roster's own instructions-header/edit-button/preview split.
     pub(super) fn panel_interior_regions(area: Rect) -> PanelRegions {
         let [ex_dots, ab_dots] = Self::right_col_dots(area);
         let border = engine_render::DotRect { h: ex_dots.h + ab_dots.h, ..ex_dots };
-        let interior = border.inset(2, 2, 4, 4);
+        let dp = detail_panel::interior_regions(border);
+        let (stamina, abilities_header, ability_cells) = (dp.stamina, dp.abilities_header, dp.ability_cells);
 
-        let column = engine_render::flex(
-            interior,
+        // Split the shared `bottom` slot into the instructions header band
+        // (fixed) and the preview (sole grow child, absorbs remaining space).
+        let bottom_split = engine_render::flex(
+            dp.bottom,
             engine_render::FlexStyle {
                 direction: engine_render::Direction::Column,
                 justify_content: engine_render::Justify::Start,
@@ -71,103 +72,17 @@ impl RosterManager {
                 gap: 0,
             },
             &[
-                // top margin
-                engine_render::FlexChild {
-                    basis: engine_render::Basis::Fixed(Self::PANEL_TOP_MARGIN_CELLS * 4),
-                    grow: 0.0,
-                    shrink: 0.0,
-                },
-                // stamina row
-                engine_render::FlexChild {
-                    basis: engine_render::Basis::Fixed(Self::STAMINA_ROW_H_CELLS * 4),
-                    grow: 0.0,
-                    shrink: 0.0,
-                },
-                // gap
-                engine_render::FlexChild {
-                    basis: engine_render::Basis::Fixed(Self::STAMINA_ABILITIES_GAP_CELLS * 4),
-                    grow: 0.0,
-                    shrink: 0.0,
-                },
-                // abilities header band (text row + reserved underline row)
                 engine_render::FlexChild {
                     basis: engine_render::Basis::Fixed(Self::HEADER_BAND_H_CELLS * 4),
                     grow: 0.0,
                     shrink: 0.0,
                 },
-                // ability grid band
-                engine_render::FlexChild {
-                    basis: engine_render::Basis::Fixed(Self::ABILITY_GRID_H_CELLS * 4),
-                    grow: 0.0,
-                    shrink: 0.0,
-                },
-                // gap
-                engine_render::FlexChild {
-                    basis: engine_render::Basis::Fixed(Self::ABILITIES_INSTRUCTIONS_GAP_CELLS * 4),
-                    grow: 0.0,
-                    shrink: 0.0,
-                },
-                // instructions header band (text row + reserved underline row)
-                engine_render::FlexChild {
-                    basis: engine_render::Basis::Fixed(Self::HEADER_BAND_H_CELLS * 4),
-                    grow: 0.0,
-                    shrink: 0.0,
-                },
-                // preview — sole grow child, absorbs remaining space
                 engine_render::FlexChild { basis: engine_render::Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
             ],
         );
-        let [_top_margin, stamina, _gap1, abilities_header_band, grid_band, _gap2, instr_header_band, preview] =
-            column[..]
-        else {
-            unreachable!("flex() with 8 children returns exactly 8 rects")
-        };
-
-        // `.min(4)` (not a bare `4`) so a collapsed band (insufficient
-        // vertical room — e.g. a short terminal) yields a genuinely
-        // zero-height header instead of one whose height claims more than
-        // the band actually has, which would make `draw_header_underline`
-        // (anchored at `header.y + header.h`) draw past the band's real
-        // bottom edge — this shipped as a real bug: at a short area the
-        // "Instructions" header (see `instructions_header` below) painted
-        // its underline 1 dot into the `dot_row` band beneath the panel.
-        let abilities_header =
-            engine_render::DotRect { h: abilities_header_band.h.min(4), ..abilities_header_band };
-
-        // Ability grid: 2 columns x 2 rows, reading order [TL, TR, BL, BR].
-        // Names are centered within each column (no left indent).
-        let grid_cols = engine_render::flex(
-            grid_band,
-            engine_render::FlexStyle {
-                direction: engine_render::Direction::Row,
-                justify_content: engine_render::Justify::Start,
-                align_items: engine_render::Align::Stretch,
-                gap: Self::ABILITY_GRID_COL_GAP_CELLS * 2,
-            },
-            &[
-                engine_render::FlexChild { basis: engine_render::Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
-                engine_render::FlexChild { basis: engine_render::Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
-            ],
-        );
-        let [left_col, right_col] = grid_cols[..] else {
+        let [instr_header_band, preview] = bottom_split[..] else {
             unreachable!("flex() with 2 children returns exactly 2 rects")
         };
-
-        let grid_rows_style = engine_render::FlexStyle {
-            direction: engine_render::Direction::Column,
-            justify_content: engine_render::Justify::Start,
-            align_items: engine_render::Align::Stretch,
-            gap: Self::ABILITY_GRID_ROW_GAP_CELLS * 4,
-        };
-        let row_children = [
-            engine_render::FlexChild { basis: engine_render::Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
-            engine_render::FlexChild { basis: engine_render::Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
-        ];
-        let left_rows = engine_render::flex(left_col, grid_rows_style, &row_children);
-        let right_rows = engine_render::flex(right_col, grid_rows_style, &row_children);
-        let [tl, bl] = left_rows[..] else { unreachable!("flex() with 2 children returns exactly 2 rects") };
-        let [tr, br] = right_rows[..] else { unreachable!("flex() with 2 children returns exactly 2 rects") };
-        let ability_cells = [tl, tr, bl, br];
 
         // Instructions header band: left header slot | right edit-button slot.
         let instr_split = engine_render::flex(
