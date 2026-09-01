@@ -28,6 +28,16 @@ Out of scope (deferred, not distributing yet): a download/verify/registry flow f
 - The image and animation model files are not co-located today (diffusion GGUFs under `experiments/creature_lab/models` and `models_sdcpp`, both VAEs only under `ComfyUI/models/vae`, the LoRA under `ComfyUI/models/loras`). The configured assets-models directory must resolve each file's real location; the simplest path for now is one directory the setup step populates (symlinks) with every required file + a `loras` subdir.
 - `sd-cli` is invoked once per operation and is GPU-gated exactly as `66` already handles; nothing here changes the capability query or the no-GPU fallback.
 
+## Implementation & test-migration note (the extraction seam)
+The frame-extraction step (fix 5) is an **injectable seam**: a trait the production path implements with the real video-to-PNG-frames behavior, and a fake for tests. This matters because the output-contract change ripples to every fake runner that today writes PNG frames straight to the `-o` dir on the `generate_animation` path — if the seam defaulted to the real ffmpeg/extraction path, those fakes would feed it a missing video and the `cargo test -p game` gate would fail mid-run. All such fakes must migrate to the seam consistently. A full sweep finds **five** sites, and every one must be in the migrating task's TOUCHES + STALE_TESTS:
+- `crates/game/src/asset_gen/operations.rs`
+- `crates/game/src/asset_gen/compose.rs` (`CompositeRunner`, writes `f_000.png` to the `-o` dir)
+- `crates/game/src/asset_gen/preset.rs` (`CreatureRunner`, same)
+- `crates/game/src/scenes/hatchery/hatch_clips.rs` (`SyntheticRunner`; the module submits two `generate_animation` jobs per egg)
+- `crates/game/src/scenes/hatchery/tests/hatch_roster_tests.rs` (`write_synthetic_frame`, used by `SucceedingRunner`/`GatedRunner` driving idle/attack clip jobs)
+
+`crates/game/src/scenes/hatchery/definition.rs` uses `generate_image` (the still) only and is correctly excluded. The extraction seam's test default must let all five migrate to the same fake, not the real path.
+
 ## Dependencies
 - `66-asset-generation-api` — the orchestration, `RecipeBackend` trait, `SdCliRunner`, operations, and cache this fixes the generation half of; `66` is reopened until this lands and both paths are e2e-verified.
 - `experiments/creature_lab/findings/{05-proven-pipeline,12-attack-animation-pipeline}.md` — the proven real `sd-cli` commands this matches.
