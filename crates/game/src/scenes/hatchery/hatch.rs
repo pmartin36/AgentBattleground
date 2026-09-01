@@ -21,23 +21,21 @@ pub(crate) enum HatchPhase {
     Break,
     RevealFlash,
     RevealColor,
-    Name,
-    Idle,
-    Attack,
+    Beat,
+    Slide,
     Done,
 }
 
 /// Enum declaration order, used only by tests to assert monotonicity.
 #[cfg(test)]
-const PHASE_ORDER: [HatchPhase; 9] = [
+const PHASE_ORDER: [HatchPhase; 8] = [
     HatchPhase::Wiggle,
     HatchPhase::Crack,
     HatchPhase::Break,
     HatchPhase::RevealFlash,
     HatchPhase::RevealColor,
-    HatchPhase::Name,
-    HatchPhase::Idle,
-    HatchPhase::Attack,
+    HatchPhase::Beat,
+    HatchPhase::Slide,
     HatchPhase::Done,
 ];
 
@@ -51,15 +49,14 @@ const CRACK_HOLD_MS: u64 = 180;
 /// Per-phase nominal durations, in the same order as [`HatchPhase`]'s
 /// non-terminal variants. `phase_at` and `phase_progress` both walk this
 /// as cumulative thresholds, so it is the single source of the timeline.
-const PHASE_DURATIONS_MS: [(HatchPhase, u64); 8] = [
+const PHASE_DURATIONS_MS: [(HatchPhase, u64); 7] = [
     (HatchPhase::Wiggle, 500),
     (HatchPhase::Crack, CRACK_BURSTS * (CRACK_BURST_MS + CRACK_HOLD_MS)),
     (HatchPhase::Break, 400),
     (HatchPhase::RevealFlash, 300),
     (HatchPhase::RevealColor, 500),
-    (HatchPhase::Name, 900),
-    (HatchPhase::Idle, 400),
-    (HatchPhase::Attack, 500),
+    (HatchPhase::Beat, 900),
+    (HatchPhase::Slide, 500),
 ];
 
 /// Approximate total nominal duration of the non-terminal timeline, used
@@ -202,7 +199,7 @@ mod tests {
     /// order is reached at least once.
     #[test]
     fn phase_at_is_monotonic_and_covers_every_phase() {
-        let mut seen = [false; 9];
+        let mut seen = [false; 8];
         let mut last_ordinal = 0;
         let mut t = 0u64;
         while t <= APPROX_TOTAL_MS {
@@ -219,51 +216,51 @@ mod tests {
         assert!(seen.iter().all(|s| *s), "not every phase was reached: {seen:?}");
     }
 
-    /// `Name` is not reached until the last `t` where `phase_at(t) ==
+    /// `Beat` is not reached until the last `t` where `phase_at(t) ==
     /// RevealColor` has fully elapsed (name-reveal gated on color-lerp
     /// completion).
     #[test]
     fn name_not_reached_until_reveal_color_completes() {
         let mut latest_reveal_color = None;
-        let mut earliest_name = None;
+        let mut earliest_beat = None;
         let mut t = 0u64;
         while t <= APPROX_TOTAL_MS {
             match phase_at(Duration::from_millis(t)) {
                 HatchPhase::RevealColor => latest_reveal_color = Some(t),
-                HatchPhase::Name if earliest_name.is_none() => earliest_name = Some(t),
+                HatchPhase::Beat if earliest_beat.is_none() => earliest_beat = Some(t),
                 _ => {}
             }
             t += 1;
         }
         let latest_reveal_color = latest_reveal_color.expect("RevealColor phase never reached");
-        let earliest_name = earliest_name.expect("Name phase never reached");
+        let earliest_beat = earliest_beat.expect("Beat phase never reached");
         assert!(
-            earliest_name >= latest_reveal_color,
-            "Name reached at t={earliest_name} before RevealColor finished at t={latest_reveal_color}"
+            earliest_beat >= latest_reveal_color,
+            "Beat reached at t={earliest_beat} before RevealColor finished at t={latest_reveal_color}"
         );
     }
 
-    /// Idle precedes Attack, and both precede Done.
+    /// Beat precedes Slide, and both precede Done.
     #[test]
-    fn idle_precedes_attack_precedes_done() {
-        let mut earliest_idle = None;
-        let mut earliest_attack = None;
+    fn beat_precedes_slide_precedes_done() {
+        let mut earliest_beat = None;
+        let mut earliest_slide = None;
         let mut earliest_done = None;
         let mut t = 0u64;
         while t <= APPROX_TOTAL_MS {
             match phase_at(Duration::from_millis(t)) {
-                HatchPhase::Idle if earliest_idle.is_none() => earliest_idle = Some(t),
-                HatchPhase::Attack if earliest_attack.is_none() => earliest_attack = Some(t),
+                HatchPhase::Beat if earliest_beat.is_none() => earliest_beat = Some(t),
+                HatchPhase::Slide if earliest_slide.is_none() => earliest_slide = Some(t),
                 HatchPhase::Done if earliest_done.is_none() => earliest_done = Some(t),
                 _ => {}
             }
             t += 1;
         }
-        let idle = earliest_idle.expect("Idle phase never reached");
-        let attack = earliest_attack.expect("Attack phase never reached");
+        let beat = earliest_beat.expect("Beat phase never reached");
+        let slide = earliest_slide.expect("Slide phase never reached");
         let done = earliest_done.expect("Done phase never reached");
-        assert!(idle < attack, "Idle at {idle} did not precede Attack at {attack}");
-        assert!(attack < done, "Attack at {attack} did not precede Done at {done}");
+        assert!(beat < slide, "Beat at {beat} did not precede Slide at {slide}");
+        assert!(slide < done, "Slide at {slide} did not precede Done at {done}");
     }
 
     /// `is_active()` is true for the whole non-terminal timeline and false

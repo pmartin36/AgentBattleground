@@ -25,6 +25,11 @@ pub(crate) struct HatchState {
     pub(super) seq: super::hatch::HatchSequence,
     crack: Option<AnimatedSprite>,
     idle: Option<AnimatedSprite>,
+    /// Decoded for hatch-readiness parity with `hatch_assets_ready` (the
+    /// hatchling's attack clip must resolve before the reveal launches);
+    /// never rasterized during the hatch — the starting-attack clip does
+    /// not play in the reveal.
+    #[allow(dead_code)]
     attack: Option<AnimatedSprite>,
 }
 
@@ -45,14 +50,30 @@ impl HatchState {
     }
 }
 
-/// Rasterizes `art` (the egg's decoded still), falling back to the bundled
-/// `EGG_UNKNOWN` placeholder when there is no still — the same fallback
-/// `tray::draw_egg` uses for art-less eggs.
-fn still_dots(art: Option<&DynamicImage>, w: u32, h: u32) -> DotBuffer {
-    match art {
-        Some(img) => engine_render::dots::sprite_to_dots(img, w, h),
-        None => engine_render::asset_cache::sprite_to_dots(crate::assets::EGG_UNKNOWN, w, h),
-    }
+/// Rasterizes `art` (the egg's decoded still) at `w × h` dots.
+fn still_to_dots(art: &DynamicImage, w: u32, h: u32) -> DotBuffer {
+    engine_render::dots::sprite_to_dots(art, w, h)
+}
+
+/// The hatchling's name-label rect: centered under `focus_dr`, widened a
+/// few columns beyond the focus rect's width to admit a short wrap, three
+/// rows tall.
+pub(super) fn name_rect(focus_dr: DotRect) -> Rect {
+    let cell = focus_dr.to_cell_rect();
+    let width = cell.width.saturating_add(6);
+    let height = 3;
+    let x = (cell.x + cell.width / 2).saturating_sub(width / 2);
+    let y = cell.y + cell.height;
+    Rect { x, y, width, height }
+}
+
+/// The single readiness predicate consulted at the one hatch-launch site:
+/// an egg is ready to reveal only once its still and both hatchling clips
+/// have all resolved. Any hatch entry path (tap or dev force-hatch) that
+/// records a `pending_hatch` request before this is `true` waits in the
+/// generating state until it becomes so.
+fn hatch_assets_ready(egg: &Egg) -> bool {
+    egg.egg_art.is_some() && egg.hatchling.as_ref().is_some_and(|h| h.idle.is_some() && h.attack.is_some())
 }
 
 /// Recolors every lit dot toward its true color by linearly interpolating
@@ -116,22 +137,56 @@ fn stationary_copy(egg: &Egg) -> Egg {
 
 impl super::Hatchery {
     /// Single per-`update()` entry point: on the first tick with no sequence
-    /// active, consumes `pending_hatch` and launches a `HatchState`; every
-    /// tick after that advances the active sequence's clock. A no-op when
+    /// active, peeks `pending_hatch` and launches a `HatchState` only once
+    /// the requested egg's assets are fully generated
+    /// (`hatch_assets_ready`) — otherwise the request stays recorded and the
+    /// scene sits in the generating wait while the ordinary generation loop
+    /// (`poll_definition`/`advance_hatch_clips`) keeps resolving it. Every
+    /// tick after launch advances the active sequence's clock. A no-op when
     /// there is neither a pending request nor an active sequence.
     pub(super) fn advance_hatch(&mut self, dt: Duration) {
         if self.hatch.is_none() {
-            let Some(idx) = self.take_hatch_request() else {
+            let Some(idx) = self.pending_hatch else {
                 return;
             };
             let Some(egg) = self.eggs.get(idx) else {
+                self.pending_hatch = None;
                 return;
             };
+            if !hatch_assets_ready(egg) {
+                return;
+            }
+            self.pending_hatch = None;
             self.hatch = Some(HatchState::launch(idx, egg));
         }
         if let Some(h) = self.hatch.as_mut() {
             h.seq.advance(dt);
         }
+    }
+
+    /// Renders the wait shown while a `pending_hatch` request's egg has not
+    /// yet fully generated: the back button (so a no-GPU wait is always
+    /// escapable) plus a single centered "Generating..." line. No creature
+    /// or egg pixels are drawn — the reveal begins only once
+    /// `hatch_assets_ready` gates it open.
+    pub(super) fn draw_hatch_generating(&self, frame: &mut Frame, area: Rect) {
+        let dr = Self::back_dot_rect(area);
+        let mut b = self.back_button.borrow_mut();
+        b.set_rect(dr.to_cell_rect());
+        crate::scenes::home_button::draw_badge_button(
+            frame.buffer_mut(),
+            dr,
+            b.state(),
+            crate::assets::ICON_ARROW_LEFT,
+        );
+
+        engine_render::label(
+            frame.buffer_mut(),
+            area,
+            "Generating...",
+            TextAlign::Center,
+            Style::default().fg(Color::Rgb(0xff, 0xff, 0xff)),
+        );
     }
 
     /// Renders every hatch phase over the focused egg's rect. Only called
@@ -177,10 +232,8 @@ impl super::Hatchery {
                 }
             }
             HatchPhase::Break => {
-                let raw = match art {
-                    Some(img) => engine_render::dots::sprite_to_dots(img, w, hh),
-                    None => engine_render::asset_cache::sprite_to_dots(crate::assets::EGG_UNKNOWN, w, hh),
-                };
+                let Some(art) = art else { return };
+                let raw = still_to_dots(art, w, hh);
                 let dots = engine_render::dots::tint(&raw, crate::scenes::palette::element_color(egg.element));
                 let gap = ((focus_dr.h as f32) * 0.2 * h.seq.phase_progress()).round() as i32;
                 let (top, bottom) = split_top_bottom(&dots);
@@ -195,31 +248,26 @@ impl super::Hatchery {
                 }
             }
             phase @ (HatchPhase::RevealFlash | HatchPhase::RevealColor) => {
+                let Some(art) = art else { return };
                 let t = if phase == HatchPhase::RevealFlash { 0.0 } else { h.seq.phase_progress() };
-                let dots = reveal_recolor(&still_dots(art, w, hh), t);
+                let dots = reveal_recolor(&still_to_dots(art, w, hh), t);
                 crate::scenes::post_battle::columns::blit_dots(buf, focus_dr, &dots);
             }
-            phase @ (HatchPhase::Name | HatchPhase::Idle | HatchPhase::Attack | HatchPhase::Done) => {
-                let dots = match phase {
-                    HatchPhase::Attack => h.attack.as_ref().map(|s| s.dots_at(self.elapsed, w, hh)),
-                    HatchPhase::Idle | HatchPhase::Done => h.idle.as_ref().map(|s| s.dots_at(self.elapsed, w, hh)),
-                    _ => None,
+            phase @ (HatchPhase::Beat | HatchPhase::Slide | HatchPhase::Done) => {
+                if let Some(idle) = h.idle.as_ref() {
+                    let dots = idle.dots_at(self.elapsed, w, hh);
+                    crate::scenes::post_battle::columns::blit_dots(buf, focus_dr, &dots);
                 }
-                .unwrap_or_else(|| still_dots(art, w, hh));
-                crate::scenes::post_battle::columns::blit_dots(buf, focus_dr, &dots);
 
                 if let Some(hatchling) = &egg.hatchling {
-                    let cell = focus_dr.to_cell_rect();
-                    let width = cell.width.saturating_add(6);
-                    let height = 3;
-                    let x = (cell.x + cell.width / 2).saturating_sub(width / 2);
-                    let y = cell.y + cell.height;
+                    let t = if phase == HatchPhase::Beat { h.seq.phase_progress() } else { 1.0 };
+                    let l = (t * 255.0).round().clamp(0.0, 255.0) as u8;
                     engine_render::wrapped_text(
                         buf,
-                        Rect { x, y, width, height },
+                        name_rect(focus_dr),
                         &hatchling.name,
                         TextAlign::Center,
-                        Style::default().fg(Color::Rgb(0xff, 0xff, 0xff)),
+                        Style::default().fg(Color::Rgb(l, l, l)),
                         true,
                     );
 

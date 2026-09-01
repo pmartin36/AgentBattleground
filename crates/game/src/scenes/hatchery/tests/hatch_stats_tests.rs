@@ -77,7 +77,7 @@ fn panel_absent_before_name_reveal() {
     assert!(!text.contains("STR"), "stats panel must not render before the Name phase, got {text:?}");
 }
 
-/// From the Name phase onward, the panel's grey border chrome and the
+/// From the Beat phase onward, the panel's grey border chrome and the
 /// hatchling's stat values are both visible.
 #[test]
 fn panel_present_from_name_phase() {
@@ -91,7 +91,7 @@ fn panel_present_from_name_phase() {
     let mut scene = Hatchery::from_store_at(PlayerStore::with_dir(&dir), SystemTime::now());
     let (w, h) = (70u16, 24u16);
     hsq::launch_hatch(&mut scene, w, h);
-    advance_until_phase(&mut scene, hatch::HatchPhase::Name);
+    advance_until_phase(&mut scene, hatch::HatchPhase::Beat);
 
     let area = Rect::new(0, 0, w, h);
     let focus_dr = focus::focus_layout(area).0;
@@ -104,7 +104,7 @@ fn panel_present_from_name_phase() {
 }
 
 /// The panel does not wait for the attack to finish: it is still present
-/// during both the Idle and the Attack phase.
+/// during both the Slide and the Done phase.
 #[test]
 fn panel_persists_through_idle_and_attack() {
     let dir = temp_store_dir("hatch-stats-persist");
@@ -122,13 +122,13 @@ fn panel_persists_through_idle_and_attack() {
     let focus_dr = focus::focus_layout(area).0;
     let panel_cells = hatch_stats::stats_panel_rect(area, focus_dr).to_cell_rect();
 
-    advance_until_phase(&mut scene, hatch::HatchPhase::Idle);
+    advance_until_phase(&mut scene, hatch::HatchPhase::Slide);
     let idle_text = crate::scenes::test_util::rect_text(&render_to_buffer(&scene, w, h), panel_cells);
-    assert!(idle_text.contains("STR"), "expected stats panel during Idle, got {idle_text:?}");
+    assert!(idle_text.contains("STR"), "expected stats panel during Slide, got {idle_text:?}");
 
-    advance_until_phase(&mut scene, hatch::HatchPhase::Attack);
-    let attack_text = crate::scenes::test_util::rect_text(&render_to_buffer(&scene, w, h), panel_cells);
-    assert!(attack_text.contains("STR"), "expected stats panel during Attack, got {attack_text:?}");
+    advance_until_phase(&mut scene, hatch::HatchPhase::Done);
+    let done_text = crate::scenes::test_util::rect_text(&render_to_buffer(&scene, w, h), panel_cells);
+    assert!(done_text.contains("STR"), "expected stats panel during Done, got {done_text:?}");
 }
 
 /// The panel sits in the right gutter, disjoint from the centered reveal

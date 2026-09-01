@@ -1,9 +1,60 @@
 //! Hatch sequence render + scene wiring tests.
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use image::{Rgba, RgbaImage};
+
+use crate::asset_gen::types::{ClipAsset, ImageAsset};
+
 use super::*;
 
-/// A `Ready` egg carrying a hatchling, for driving the hatch sequence.
-pub(super) fn ready_egg_with_hatchling(hatchling: PersistedCreature) -> Egg {
+static ASSET_TAG: AtomicU32 = AtomicU32::new(0);
+
+/// Writes a synthetic opaque PNG to a unique temp path, standing in for an
+/// already-resolved still or clip frame.
+fn write_synthetic_png(tag: &str) -> std::path::PathBuf {
+    let n = ASSET_TAG.fetch_add(1, Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!(
+        "game-hatchery-sequence-asset-{}-{}-{}.png",
+        std::process::id(),
+        tag,
+        n
+    ));
+    let mut img = RgbaImage::from_pixel(4, 4, Rgba([200, 60, 40, 255]));
+    img.put_pixel(2, 2, Rgba([0, 0, 255, 255]));
+    img.save(&path).unwrap();
+    path
+}
+
+/// A resolved `ImageAsset` pointing at a fresh synthetic still PNG.
+pub(super) fn synthetic_still() -> ImageAsset {
+    ImageAsset { path: write_synthetic_png("still") }
+}
+
+/// A resolved single-frame `ClipAsset` pointing at a fresh synthetic PNG.
+pub(super) fn synthetic_clip() -> ClipAsset {
+    ClipAsset { frames: vec![write_synthetic_png("clip")] }
+}
+
+/// A `Ready` egg carrying a hatchling with its still and idle/attack clips
+/// all resolved, for driving the hatch sequence past the full-generation
+/// gate.
+pub(super) fn ready_egg_with_hatchling(mut hatchling: PersistedCreature) -> Egg {
+    hatchling.idle = Some(synthetic_clip());
+    hatchling.attack = Some(synthetic_clip());
+    Egg {
+        element: Element::Fire,
+        state: EggState::Ready,
+        mad_lib: None,
+        egg_art: Some(synthetic_still()),
+        hatchling: Some(hatchling),
+    }
+}
+
+/// A `Ready` egg carrying a hatchling with no still or clips resolved at
+/// all, standing in for a no-GPU environment where generation never
+/// completes.
+fn ready_egg_with_no_generated_assets(hatchling: PersistedCreature) -> Egg {
     Egg {
         element: Element::Fire,
         state: EggState::Ready,
@@ -23,9 +74,9 @@ pub(super) fn launch_hatch(scene: &mut Hatchery, w: u16, h: u16) {
     scene.advance_hatch(Duration::from_millis(0));
 }
 
-/// Whether `phase` is at or beyond the Name phase (i.e. the color-lerp
+/// Whether `phase` is at or beyond the Beat phase (i.e. the color-lerp
 /// reveal has completed).
-fn phase_at_least_name(phase: hatch::HatchPhase) -> bool {
+fn phase_at_least_beat(phase: hatch::HatchPhase) -> bool {
     !matches!(
         phase,
         hatch::HatchPhase::Wiggle
@@ -148,7 +199,7 @@ fn crack_bursts_change_dots_holds_do_not() {
 }
 
 /// The hatchling's name is never drawn before the color-lerp reveal
-/// completes, and is drawn from the Name phase onward.
+/// completes, and is drawn from the Beat phase onward.
 #[test]
 fn name_absent_before_color_lerp_then_present() {
     let dir = temp_store_dir("hatch-name-reveal");
@@ -164,14 +215,14 @@ fn name_absent_before_color_lerp_then_present() {
     launch_hatch(&mut scene, w, h);
 
     loop {
-        if phase_at_least_name(scene.hatch.as_ref().unwrap().seq.phase()) {
+        if phase_at_least_beat(scene.hatch.as_ref().unwrap().seq.phase()) {
             break;
         }
         let before = render_to_buffer(&scene, w, h);
         let before_text = crate::scenes::test_util::rect_text(&before, area);
         assert!(
             !before_text.contains("Emberling"),
-            "the hatchling's name must not appear before the Name phase, got {before_text:?}"
+            "the hatchling's name must not appear before the Beat phase, got {before_text:?}"
         );
         scene.advance_hatch(Duration::from_millis(20));
     }
@@ -180,11 +231,69 @@ fn name_absent_before_color_lerp_then_present() {
     let after_text = crate::scenes::test_util::rect_text(&after, area);
     assert!(
         after_text.contains("Emberling"),
-        "the hatchling's name must appear at/after the Name phase, got {after_text:?}"
+        "the hatchling's name must appear at/after the Beat phase, got {after_text:?}"
     );
     assert!(
-        phase_at_least_name(scene.hatch.as_ref().unwrap().seq.phase()),
-        "fixture must have actually reached the Name phase or later"
+        phase_at_least_beat(scene.hatch.as_ref().unwrap().seq.phase()),
+        "fixture must have actually reached the Beat phase or later"
+    );
+}
+
+/// The hatchling's name fades in during the Beat phase: sampled shortly
+/// after Beat begins, its foreground brightness is lower than once Beat
+/// has completed (Slide onward), where it is at full brightness.
+#[test]
+fn name_dimmer_at_beat_start_than_after_beat_completes() {
+    let dir = temp_store_dir("hatch-name-fade");
+    let seed = PlayerData {
+        roster: Vec::new(),
+        eggs: vec![ready_egg_with_hatchling(sample_creature("Emberling"))],
+    };
+    PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
+
+    let mut scene = Hatchery::from_store_at(PlayerStore::with_dir(&dir), SystemTime::now());
+    let (w, h) = (40u16, 20u16);
+    let area = Rect::new(0, 0, w, h);
+    launch_hatch(&mut scene, w, h);
+
+    while scene.hatch.as_ref().unwrap().seq.phase() != hatch::HatchPhase::Beat {
+        scene.advance_hatch(Duration::from_millis(20));
+    }
+    let focus_dr = focus::focus_layout(area).0;
+    let name_rect = hatch_render::name_rect(focus_dr);
+
+    // `name_rect` is wider than the name text itself (room for a wrap), so a
+    // plain first-non-space scan can land on background fill instead of a
+    // name glyph; find the fg of the first actual letter cell instead.
+    fn first_letter_fg(buf: &ratatui::buffer::Buffer, rect: Rect) -> Option<ratatui::style::Color> {
+        (rect.top()..rect.bottom())
+            .flat_map(|y| (rect.left()..rect.right()).map(move |x| (x, y)))
+            .find_map(|(x, y)| {
+                let cell = buf.cell((x, y))?;
+                cell.symbol().chars().next()?.is_alphabetic().then_some(cell.fg)
+            })
+    }
+
+    let early_buf = render_to_buffer(&scene, w, h);
+    let early_fg = first_letter_fg(&early_buf, name_rect)
+        .expect("the name must paint a letter cell early in the Beat phase");
+
+    while scene.hatch.as_ref().unwrap().seq.phase() == hatch::HatchPhase::Beat {
+        scene.advance_hatch(Duration::from_millis(5));
+    }
+    let late_buf = render_to_buffer(&scene, w, h);
+    let late_fg = first_letter_fg(&late_buf, name_rect)
+        .expect("the name must still paint a letter cell once Beat has completed");
+
+    fn luminance(c: ratatui::style::Color) -> u32 {
+        match c {
+            ratatui::style::Color::Rgb(r, g, b) => r as u32 + g as u32 + b as u32,
+            other => panic!("expected an Rgb name color, got {other:?}"),
+        }
+    }
+    assert!(
+        luminance(early_fg) < luminance(late_fg),
+        "expected the name dimmer near the start of Beat ({early_fg:?}) than once Beat completes ({late_fg:?})"
     );
 }
 
@@ -218,32 +327,33 @@ fn input_swallowed_mid_sequence() {
     assert!(scene.define_modal.is_none(), "an egg tap mid-hatch-sequence must not open the define modal");
 }
 
-/// With no idle/attack clips resolved (the no-GPU/dev-force-hatch case),
-/// the sequence still reaches completion within the sampled window,
-/// with no panic along the way.
+/// With no still or idle/attack clips ever resolving (a no-GPU
+/// environment), the gate holds indefinitely: the sequence never launches
+/// across the sampled window, and no half-generated creature is ever
+/// revealed. No panic along the way.
 #[test]
-fn no_gpu_fallback_completes_without_panic() {
+fn no_gpu_egg_holds_in_generating_wait_without_panic() {
     let dir = temp_store_dir("hatch-no-gpu-fallback");
     let seed = PlayerData {
         roster: Vec::new(),
-        eggs: vec![ready_egg_with_hatchling(sample_creature("Emberling"))],
+        eggs: vec![ready_egg_with_no_generated_assets(sample_creature("Emberling"))],
     };
     PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
 
     let mut scene = Hatchery::from_store_at(PlayerStore::with_dir(&dir), SystemTime::now());
     let (w, h) = (40u16, 20u16);
-    launch_hatch(&mut scene, w, h);
+    let area = Rect::new(0, 0, w, h);
+    let _ = render_to_buffer(&scene, w, h);
+    let rect = tray::tray_slots(tray::tray_band(area), scene.eggs.len())[0].to_cell_rect();
+    tap_at(&mut scene, rect.x, rect.y);
 
     for _ in 0..300 {
         scene.advance_hatch(Duration::from_millis(20));
         let _ = render_to_buffer(&scene, w, h);
-        if scene.hatch.as_ref().unwrap().seq.is_complete() {
-            break;
-        }
     }
 
     assert!(
-        scene.hatch.as_ref().unwrap().seq.is_complete(),
-        "the sequence must reach completion within the sampled window without panicking"
+        scene.hatch.is_none(),
+        "with no generated assets ever resolving, the gate must hold indefinitely rather than reveal a half-generated creature"
     );
 }

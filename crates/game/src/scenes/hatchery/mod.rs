@@ -62,8 +62,10 @@ pub struct Hatchery {
     /// `None` when every egg sits in the tray.
     #[inspect(hidden)]
     focused: Option<usize>,
-    /// Set by a completed tap on a `Ready` egg; consumed by
-    /// `take_hatch_request`.
+    /// Set by a completed tap on a `Ready` egg or a dev force-hatch. Persists
+    /// as the generating-wait flag (`render` draws "Generating..." while it
+    /// is set and `self.hatch` is `None`) until `advance_hatch`'s readiness
+    /// gate clears it and launches the sequence.
     #[inspect(hidden)]
     pending_hatch: Option<usize>,
     /// One click-state core per egg, index-aligned with `eggs`; its rect is
@@ -360,6 +362,10 @@ impl Scene for Hatchery {
         if self.hatch.is_some() {
             self.draw_hatch(frame, area);
             self.draw_add_to_roster(frame, area);
+            return;
+        }
+        if self.pending_hatch.is_some() {
+            self.draw_hatch_generating(frame, area);
             return;
         }
 

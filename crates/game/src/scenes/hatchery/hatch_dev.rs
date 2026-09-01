@@ -28,14 +28,16 @@ impl super::Hatchery {
         }
     }
 
-    /// With an egg focused: sets it `Ready`, persists, and records a hatch
-    /// request so the next `update()` tick launches the sequence on it. A
-    /// no-op when no egg is focused.
+    /// With an egg focused: records a hatch request so the next `update()`
+    /// tick launches the sequence once its assets are fully generated
+    /// (never forces the egg `Ready` — that would stall the clip-generation
+    /// loop, which only advances an `Incubating` egg). A no-op when no egg
+    /// is focused.
     fn force_hatch_focused(&mut self) {
         let Some(index) = self.focused else { return };
-        let Some(egg) = self.eggs.get_mut(index) else { return };
-        egg.state = crate::player_data::EggState::Ready;
-        self.persist_eggs();
+        if self.eggs.get(index).is_none() {
+            return;
+        }
         self.pending_hatch = Some(index);
     }
 

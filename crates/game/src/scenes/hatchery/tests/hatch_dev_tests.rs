@@ -2,6 +2,8 @@
 
 use super::*;
 
+use super::hatch_sequence_tests as hsq;
+
 /// A completed tap on the single egg at tray slot 0, focusing it.
 fn focus_first_egg(scene: &mut Hatchery, w: u16, h: u16) {
     let area = Rect::new(0, 0, w, h);
@@ -10,12 +12,13 @@ fn focus_first_egg(scene: &mut Hatchery, w: u16, h: u16) {
     tap_at(scene, rect.x, rect.y);
 }
 
-/// With an `Incubating` egg focused, pressing the force-hatch key sets that
-/// egg `Ready` and records a hatch request; the next `advance_hatch` tick
-/// launches an active `HatchSequence` for it.
+/// With an `Incubating` egg focused whose still/idle/attack are all
+/// unresolved, pressing the force-hatch key must not force the egg `Ready`
+/// — the egg must stay `Incubating` so the ordinary generation pipeline
+/// keeps advancing it.
 #[test]
-fn force_hatch_key_sets_focused_egg_ready_and_launches() {
-    let dir = temp_store_dir("force-hatch-launch");
+fn force_hatch_key_on_unresolved_egg_does_not_force_ready() {
+    let dir = temp_store_dir("force-hatch-gated-state");
     let now = SystemTime::now();
     let seed = PlayerData {
         roster: Vec::new(),
@@ -30,22 +33,46 @@ fn force_hatch_key_sets_focused_egg_ready_and_launches() {
 
     scene.handle_input(key_event(hatch_dev::FORCE_HATCH_KEY));
 
-    assert_eq!(scene.eggs[0].state, EggState::Ready, "force-hatch must set the focused egg Ready");
-    assert_eq!(scene.pending_hatch, Some(0), "force-hatch must record a hatch request for the focused egg");
-
-    scene.advance_hatch(Duration::from_millis(0));
-    assert!(scene.hatch.is_some(), "the next advance_hatch tick must launch a HatchState");
     assert!(
-        scene.hatch.as_ref().unwrap().seq.is_active(),
-        "the launched sequence must be active"
+        matches!(scene.eggs[0].state, EggState::Incubating { .. }),
+        "force-hatch on an egg whose assets are unresolved must not force it Ready"
     );
 }
 
-/// After force-hatch launches the sequence, a rendered frame draws
-/// something over the focus rect (no panic, a hatch frame is on screen).
+/// With an `Incubating` egg focused whose still/idle/attack are all
+/// unresolved, pressing the force-hatch key records the request but the
+/// gate holds: the sequence never launches across many ticks.
 #[test]
-fn force_hatch_renders_a_sequence_frame() {
-    let dir = temp_store_dir("force-hatch-renders");
+fn force_hatch_key_on_unresolved_egg_gates_the_sequence() {
+    let dir = temp_store_dir("force-hatch-gated-launch");
+    let now = SystemTime::now();
+    let seed = PlayerData {
+        roster: Vec::new(),
+        eggs: vec![incubating_egg(now - Duration::from_secs(3600))],
+    };
+    PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
+
+    let mut scene = Hatchery::from_store_at(PlayerStore::with_dir(&dir), now);
+    let (w, h) = (40u16, 20u16);
+    focus_first_egg(&mut scene, w, h);
+
+    scene.handle_input(key_event(hatch_dev::FORCE_HATCH_KEY));
+    assert_eq!(scene.pending_hatch, Some(0), "force-hatch must record a hatch request for the focused egg");
+
+    for _ in 0..50 {
+        scene.advance_hatch(Duration::from_millis(20));
+    }
+    assert!(
+        scene.hatch.is_none(),
+        "the gate must hold the sequence until still+idle+attack all resolve"
+    );
+}
+
+/// While the focused egg's assets are unresolved, force-hatch shows the
+/// generating wait instead of a hatch frame.
+#[test]
+fn force_hatch_on_unresolved_egg_renders_generating_wait() {
+    let dir = temp_store_dir("force-hatch-renders-wait");
     let now = SystemTime::now();
     let seed = PlayerData {
         roster: Vec::new(),
@@ -61,10 +88,40 @@ fn force_hatch_renders_a_sequence_frame() {
 
     let area = Rect::new(0, 0, w, h);
     let buf = render_to_buffer(&scene, w, h);
-    let focus_cells = focus::focus_layout(area).0.to_cell_rect();
+    let text = crate::scenes::test_util::rect_text(&buf, area);
+    assert!(text.contains("Generating"), "expected the generating wait text, got {text:?}");
+}
+
+/// Once a gated egg's still and idle/attack clips all resolve, the very
+/// next `advance_hatch` tick launches the sequence.
+#[test]
+fn force_hatch_launches_once_generation_completes_after_holding() {
+    let dir = temp_store_dir("force-hatch-resolves-then-launches");
+    let now = SystemTime::now();
+    let seed = PlayerData {
+        roster: Vec::new(),
+        eggs: vec![incubating_egg(now - Duration::from_secs(3600))],
+    };
+    PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
+
+    let mut scene = Hatchery::from_store_at(PlayerStore::with_dir(&dir), now);
+    let (w, h) = (40u16, 20u16);
+    focus_first_egg(&mut scene, w, h);
+    scene.handle_input(key_event(hatch_dev::FORCE_HATCH_KEY));
+    scene.advance_hatch(Duration::from_millis(0));
+    assert!(scene.hatch.is_none(), "fixture must start in the gated wait");
+
+    let mut hatchling = sample_creature("Newborn");
+    hatchling.idle = Some(hsq::synthetic_clip());
+    hatchling.attack = Some(hsq::synthetic_clip());
+    scene.eggs[0].hatchling = Some(hatchling);
+    scene.eggs[0].egg_art = Some(hsq::synthetic_still());
+    scene.art_cache[0] = image::open(&scene.eggs[0].egg_art.as_ref().unwrap().path).ok();
+
+    scene.advance_hatch(Duration::from_millis(0));
     assert!(
-        crate::scenes::test_util::has_non_space(&buf, focus_cells),
-        "a hatch frame must be drawn over the focus rect after force-hatch"
+        scene.hatch.is_some(),
+        "advance_hatch must launch once still+idle+attack are all resolved"
     );
 }
 
