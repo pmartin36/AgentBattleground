@@ -28,7 +28,7 @@ There is no settings menu built yet, so this spec does not gate on one. The game
 llama.cpp (MIT, freely redistributable) is the runtime, bundled as a sibling binary named `llm-cli`, located via `current_exe().parent()` the same way `asset_gen/runner.rs`'s `SdCliRunner` locates `sd-cli`. It shares the ggml/Vulkan toolchain the project already builds for `sd-cli`, so the same build matrix produces it per platform (Linux / macOS-Intel / macOS-ARM / Windows). A CPU build is the universal baseline; a Vulkan build is the optional accelerated path, the same GPU-optional story `sd-cli` already has. Provisioning the binary onto the player's machine is a packaging/onboarding concern; this spec's code treats it as present and reports a clear "runtime missing" error when it is not (mirroring the no-GPU handling in `66`).
 
 ## Model registry
-A manifest, in code, of the selectable models. Each entry: a stable `model_id`, display name, parameter size, GGUF download URL, **SHA-256**, byte size, an SPDX license id, and the recommended per-model invocation hints (e.g. chat-template handling). License is the gate: every registry entry MUST permit both redistribution of weights and unrestricted use of outputs.
+A manifest, in code, of the selectable models. Each entry: a stable `model_id`, display name, parameter size, GGUF download URL, **SHA-256**, byte size, and an SPDX license id. Per-model invocation flags are NOT stored this pass — a single fixed flag set serves all three models (per-model flags are Open Question 3), so the registry carries no invocation-hint field. License is the gate: every registry entry MUST permit both redistribution of weights and unrestricted use of outputs.
 
 Initial registry:
 - **`qwen3-4b-instruct`** (default) — Qwen3-4B-Instruct, Q4_K_M GGUF (~2.5 GB), **Apache-2.0**. Strong instruction-following at its size; already validated on disk in this repo (`experiments/creature_lab`).
@@ -51,10 +51,14 @@ Llama and Gemma models are deliberately excluded from the default set: Llama's l
 - pass the weights: `-m <weights.gguf>`;
 - feed the framed prompt cross-platform: write it to a temporary prompt file and pass `-f <file>` (avoids llama-cli's missing stdin input and argv-quoting of a large prompt; superseding the current stdin-piping for the local path);
 - apply the model's chat template (`--jinja`) and single-turn output flags (`-no-cnv -st --no-display-prompt`) so an instruct model returns a clean completion on stdout;
-- map the sampling params to llama.cpp's real names: temperature -> `--temp`, max tokens -> `-n`, seed -> `-s`;
+- map the sampling params to llama.cpp's real names: temperature -> `--temp`, max tokens -> `-n`, seed -> `-s`; the `TextRequest.stop` sequences are dropped on the llm-cli path this pass (the sole local caller, `parts.rs`, sets none — mapping them is deferred), and the existing `backend_local.rs` `returns_completion_text` test is reconciled to the new argv;
 - optionally constrain an enumerated field with a GBNF `--grammar` (this is `70`'s "constrained decoding" open question; llama.cpp answers it natively — useful for the `ARCHETYPE` pick in `parts.rs`).
 
 `70`'s `TextBackend` trait, conformance suite, routing (`operation.rs`), cache, and `types.rs` are unchanged; the change is the registry + a richer `Local` config + corrected argv + the prompt-file mechanism.
+
+## Implementation placement & verification
+- New registry / download / config code lives in its own modules; files already near the ~1000-line budget (`docs/large-file-split-plan.md`) get only thin hooks. In particular the hatchery-side behavioral test (production `text_gen_factory` + `resolve_model_config` + an injected capturing transport, asserting `Provider::Local`, the resolved `model_id`, and the resolved argv) goes in a NEW sibling test file (e.g. `crates/game/src/scenes/hatchery/local_model_e2e_tests.rs` with a `mod` declaration), NOT in `hatchery/mod.rs` (already ~975 lines).
+- The offline `cargo test` gate cannot spawn `llm-cli` over the multi-GB GGUF, so the automated test asserts the resolved argv (weights path, `-f` prompt file, `--jinja` + single-turn flags) via an injected transport. The real end-to-end generation — a mad-lib Done producing parts on the bundled local model — is a manual verification step, not gate-provable, per the project's "passing tests != working software" rule.
 
 ## Dependencies
 - `70-text-generation-api` — the `Provider::Local` backend and transport this makes real; the change is additive to `backend_local.rs` / `model_config.rs`.
