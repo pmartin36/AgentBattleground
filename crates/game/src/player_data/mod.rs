@@ -30,14 +30,13 @@ pub fn default_seed() -> PlayerData {
 /// further eggs is a separate concern (see `65-hatchery`).
 fn starter_eggs() -> Vec<Egg> {
     use crate::ability::Element;
-    [Element::Fire, Element::Ice, Element::Earth, Element::Normal]
-        .into_iter()
-        .map(|element| Egg {
-            element,
-            state: EggState::Undefined,
-            mad_lib: None,
-            egg_art: None,
-            hatchling: None,
-        })
-        .collect()
+    // Every player starts with a single Undefined starter egg. Further eggs
+    // are acquired through gameplay (see `65-hatchery`).
+    vec![Egg {
+        element: Element::Fire,
+        state: EggState::Undefined,
+        mad_lib: None,
+        egg_art: None,
+        hatchling: None,
+    }]
 }
