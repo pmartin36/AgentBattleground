@@ -1,8 +1,10 @@
+> # ✅ DONE! — Completed 2026-09-01
+
 # Asset Generation API
 
-> **Status: reopened — orchestration built, generation invocation broken.** The single in-game API and pipeline for producing creature art assets: still images, animations of a still, or a still plus a set of animations. One API any scene calls; it removes backgrounds and caches results. Game-specific (`crates/game/`). Supersedes the former split across `17-creature-art-asset-pipeline` and `64-creature-animation-pipeline`, whose content is folded in here.
+> **Status: done.** The single in-game API and pipeline for producing creature art assets: still images, animations of a still, or a still plus a set of animations. One API any scene calls; it really generates (Z-Image for stills, MiniMax H3 for animation, both via the native `sd-cli` subprocess), removes backgrounds, and caches results. Game-specific (`crates/game/`). Supersedes the former split across `17-creature-art-asset-pipeline` and `64-creature-animation-pipeline`, whose content is folded in here.
 >
-> **Was prematurely marked done.** A skeptical fresh-context evaluation ran the production `sd-cli` argv against the real binary and found both generation paths broken: the image backend emits `sd-cli z_image_turbo …` (rejected: `unknown argument: z_image_turbo`; no `-M img_gen`, model as a bare positional, missing `--vae`/`--llm`), and the animation backend emits `sd-cli vid_gen …` (rejected: missing `-M`), with filename-only model refs and an output contract mismatch (`sd-cli` writes a video; `materialize_clip` scans for PNG frames, with no extraction step). The orchestration (lifecycle, cache, GPU-gating, bg-removal, the three operations) is correct; the `RecipeBackend` invocations were only unit-tested against a fake runner and never run against a real `sd-cli`. Fixed by `74-asset-generation-real-sd-cli`, which corrects the argv, resolves model paths, and reconciles the output contract, and e2e-verifies real generation.
+> The real `sd-cli` invocation (`-M` mode + `-m`/`--diffusion-model`/`--vae`/`--llm` resolved paths), model-path resolution, and the video→PNG-frames output contract live in `74-asset-generation-real-sd-cli`; a live end-to-end run against the real `sd-cli` + local models produces a real still and a real PNG frame sequence, so generation is verified, not only unit-tested.
 
 ## Delivered
 All of this feature is implemented and committed under `crates/game/src/asset_gen/`:

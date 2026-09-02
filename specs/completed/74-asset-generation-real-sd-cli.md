@@ -1,6 +1,8 @@
+> # ✅ DONE! — Completed 2026-09-01
+
 # Asset Generation — Real sd-cli Invocation & Output
 
-> **Status: draft (not started).** Fixes `66-asset-generation-api`'s generation half so it actually runs against the real `sd-cli` binary: correct the image and animation argv to `sd-cli`'s real interface, resolve model files to absolute paths, and reconcile the animation output contract (`sd-cli` writes a video; the pipeline reads PNG frames). Proves image and animation generation end-to-end with a live RED/GREEN, the way `73` proved the local text model. Bundling, a model download/registry flow, and licensing are explicitly deferred — the goal here is to prove generation works, not to distribute.
+> **Status: done.** Fixes `66-asset-generation-api`'s generation half so it actually runs against the real `sd-cli` binary: correct the image and animation argv to `sd-cli`'s real interface, resolve model files to absolute paths, and reconcile the animation output contract (`sd-cli` writes a video; the pipeline reads PNG frames). Proves image and animation generation end-to-end with a live RED/GREEN, the way `73` proved the local text model. Bundling, a model download/registry flow, and licensing are explicitly deferred — the goal here is to prove generation works, not to distribute.
 
 ## Why
 `66`'s orchestration (lifecycle, cache, GPU-gating, background removal, the three operations) is correct and stays. But its two `RecipeBackend` implementations build an argv that does not match the real `sd-cli`, and were only ever unit-tested against a fake runner. A fresh-context evaluation ran the production argv against the real binary + models on this machine and both failed:
