@@ -324,8 +324,6 @@ impl Hatchery {
         }
     }
 
-    /// Background fill color — teal, distinct from every other scene's fill.
-    const COLOR: engine_core::color::Rgba = engine_core::color::Rgba::rgb(0x1a, 0x66, 0x66);
 
     /// Dot-space placement of the back button within `area`; reuses the
     /// roster's shared home-button geometry (same top-right slot, since the
@@ -359,8 +357,6 @@ impl Scene for Hatchery {
     }
 
     fn render(&self, frame: &mut Frame, area: Rect) {
-        engine_render::fill(frame.buffer_mut(), area, Self::COLOR);
-
         if self.hatch.is_some() {
             self.draw_hatch(frame, area);
             self.draw_dock_actions(frame, area);
@@ -393,7 +389,6 @@ impl Scene for Hatchery {
                         self.art_cache.get(i).and_then(|a| a.as_ref()),
                         self.elapsed,
                     );
-                    tray::draw_unfilled_sentence(frame.buffer_mut(), *slot, &self.eggs[i], i);
                     if let Some(btn) = buttons.get_mut(i) {
                         btn.set_rect(slot.to_cell_rect());
                     }
@@ -413,7 +408,6 @@ impl Scene for Hatchery {
                         self.art_cache.get(i).and_then(|a| a.as_ref()),
                         self.elapsed,
                     );
-                    tray::draw_unfilled_sentence(frame.buffer_mut(), *slot, &self.eggs[i], i);
                     if let Some(btn) = buttons.get_mut(i) {
                         btn.set_rect(slot.to_cell_rect());
                     }
@@ -714,37 +708,6 @@ mod tests {
         assert!(found, "expected a warm yellow-gold cell somewhere in the rendered frame for the undefined egg's `?`");
     }
 
-    /// The Hatchery tray shows an `Undefined` egg's unfilled mad-lib
-    /// sentence beside it: the selected template's literal words appear
-    /// somewhere in the rendered frame.
-    #[test]
-    fn render_shows_unfilled_sentence_for_undefined_egg() {
-        let dir = temp_store_dir("render-unfilled-sentence");
-        let seed = PlayerData { roster: Vec::new(), eggs: vec![undefined_egg()] };
-        PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
-
-        let scene = Hatchery::from_store_at(PlayerStore::with_dir(&dir), SystemTime::now());
-        let (w, h) = (40u16, 20u16);
-        let buf = render_to_buffer(&scene, w, h);
-
-        let template = mad_lib::select_template(0);
-        let word = template
-            .segments()
-            .iter()
-            .filter_map(|s| match s {
-                mad_lib::Segment::Literal(text) => Some(*text),
-                mad_lib::Segment::Blank { .. } => None,
-            })
-            .flat_map(str::split_whitespace)
-            .find(|word| word.len() > 3)
-            .expect("selected template must contain a literal word longer than 3 characters");
-
-        let text = crate::scenes::test_util::rect_text(&buf, Rect::new(0, 0, w, h));
-        assert!(
-            text.contains(word),
-            "expected the rendered frame to contain the unfilled sentence's {word:?}, got {text:?}"
-        );
-    }
 
     fn ready_egg() -> Egg {
         Egg {

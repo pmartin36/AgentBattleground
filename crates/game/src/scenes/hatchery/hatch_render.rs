@@ -215,7 +215,6 @@ impl super::Hatchery {
                 self.art_cache.get(i).and_then(|a| a.as_ref()),
                 self.elapsed,
             );
-            super::tray::draw_unfilled_sentence(buf, *slot, &self.eggs[i], i);
         }
 
         let art = self.art_cache.get(h.egg).and_then(|a| a.as_ref());
