@@ -22,7 +22,7 @@ use ratatui::Frame;
 
 use engine_core::color::Rgba;
 use engine_core::scene::InputEvent;
-use engine_render::dots::Dot;
+use engine_render::dots::{Dot, DotBuffer};
 use engine_render::{
     draw_dots, label, ui_primitives, Button, ButtonCore, DotRect, Sizing, TextAlign, TextEditor,
     TextEditorConfig,
@@ -133,16 +133,17 @@ enum FlowItem {
 }
 
 impl DefineModal {
-    /// One single-line `TextEditor` per blank (placeholder = the blank's
-    /// label), all initially empty; focus defaults to the first blank.
+    /// One single-line `TextEditor` per blank, all initially empty with no
+    /// placeholder (an empty blank shows only its underline; the surrounding
+    /// sentence is the hint); focus defaults to the first blank.
     pub(crate) fn new(template: &'static MadLibTemplate) -> Self {
         let blanks = template
             .blank_labels()
-            .map(|label| {
+            .map(|_label| {
                 RefCell::new(TextEditor::new(TextEditorConfig {
                     sizing: Sizing::Fixed,
                     submit_on_enter: false,
-                    placeholder: label.to_string(),
+                    placeholder: String::new(),
                 }))
             })
             .collect();
@@ -230,14 +231,27 @@ impl DefineModal {
         self.done_button.borrow_mut().render(buf);
     }
 
-    /// Draws a solid one-cell-tall underline rule across `slot`, via the dot
+    /// Advances every blank editor's cursor-blink accumulator, so the focused
+    /// blank blinks like the roster's text field. Called from the scene's
+    /// `update` each frame.
+    pub(crate) fn tick(&self, dt: std::time::Duration) {
+        for blank in &self.blanks {
+            blank.borrow_mut().tick(dt);
+        }
+    }
+
+    /// Draws a thin fill-in underline rule along `slot`'s bottom dot-row, via
+    /// the dot
     /// pipeline (CLAUDE.md rule 4), so an empty blank still reads as a
     /// fillable slot before its editor draws over part of it.
     fn draw_slot_underline(buf: &mut Buffer, slot: Rect) {
         let w_dots = slot.width as usize * 2;
-        // Thickness covering half the 4-dot cell height from each edge fills
-        // the whole row solid rather than leaving a hollow interior.
-        let dots = ui_primitives::rect(w_dots, 4, 2, SLOT_UNDERLINE_COLOR, Dot::Transparent);
+        // A thin rule along the cell's bottom dot-row — a fill-in underline,
+        // not a solid bar filling the whole slot.
+        let mut dots = DotBuffer::new(w_dots, 4);
+        for x in 0..w_dots {
+            dots.set(x, 3, Dot::Lit(SLOT_UNDERLINE_COLOR));
+        }
         draw_dots(buf, slot, &dots);
     }
 
@@ -641,10 +655,10 @@ mod tests {
         }
     }
 
-    /// An empty blank must show its label as a placeholder within its
-    /// laid-out slot rect.
+    /// An empty blank shows only its underline rule — no placeholder label
+    /// text (clean underlines, not `size`/`temperament`).
     #[test]
-    fn render_shows_blank_placeholder_labels() {
+    fn render_empty_blank_shows_underline_not_label() {
         let template = &mad_lib::pool()[0];
         let modal = DefineModal::new(template);
         let (w, h) = (80u16, 30u16);
@@ -654,8 +668,12 @@ mod tests {
         for (label, slot) in template.blank_labels().zip(layout.slots.iter()) {
             let text = rect_text(&buf, *slot);
             assert!(
-                text.contains(label),
-                "blank placeholder {label:?} missing from its slot, got {text:?}"
+                !text.contains(label),
+                "empty blank must not show its label {label:?}, got {text:?}"
+            );
+            assert!(
+                crate::scenes::test_util::has_non_space(&buf, *slot),
+                "empty blank must still show its underline rule"
             );
         }
     }
@@ -863,4 +881,5 @@ mod tests {
         assert_eq!(action, ModalAction::None);
         assert_eq!(modal.focus(), 1);
     }
+
 }

@@ -348,6 +348,9 @@ impl Scene for Hatchery {
 
     fn update(&mut self, _ctx: &mut EngineCtx, dt: Duration) -> Option<Transition> {
         self.elapsed += dt;
+        if let Some(modal) = self.define_modal.as_ref() {
+            modal.tick(dt);
+        }
         self.tick(SystemTime::now());
         self.poll_definition(SystemTime::now());
         self.advance_hatch_clips();
