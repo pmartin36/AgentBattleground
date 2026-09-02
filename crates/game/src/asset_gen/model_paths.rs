@@ -8,8 +8,14 @@
 use std::path::{Path, PathBuf};
 
 /// Env var pointing at the directory holding sd-cli model files and the
-/// `loras` subdir.
+/// `loras` subdir. Optional: absent, it defaults to
+/// [`DEFAULT_MODELS_DIRNAME`] under the OS data dir (mirroring how the text
+/// model resolves under `<data_dir>/models`), so a bare `cargo run -p game`
+/// finds the art models with no env plumbing.
 pub const ENV_MODELS_DIR: &str = "AGENTBATTLEGROUND_SDCLI_MODELS_DIR";
+/// Default sd-cli models directory name under `base_data_dir` when
+/// [`ENV_MODELS_DIR`] is unset.
+pub const DEFAULT_MODELS_DIRNAME: &str = "sdcli-models";
 /// Subdir (under the configured dir) holding LoRA weights.
 pub const LORAS_SUBDIR: &str = "loras";
 
@@ -57,10 +63,18 @@ pub struct ModelPaths {
 }
 
 impl ModelPaths {
-    /// Production entry: reads `ENV_MODELS_DIR` — the only env read in this
-    /// module — and delegates to the pure `from_dir_str`.
+    /// Production entry: uses `ENV_MODELS_DIR` when set, otherwise defaults to
+    /// `<base_data_dir>/DEFAULT_MODELS_DIRNAME` (parallel to the text model's
+    /// `<base_data_dir>/models`), so a bare `cargo run -p game` resolves the
+    /// art models with no env plumbing. Delegates to the pure `from_dir_str`.
     pub fn from_env() -> Result<Self, ModelPathError> {
-        Self::from_dir_str(std::env::var(ENV_MODELS_DIR).ok().as_deref())
+        match std::env::var(ENV_MODELS_DIR).ok().filter(|d| !d.is_empty()) {
+            Some(dir) => Self::from_dir_str(Some(&dir)),
+            None => {
+                let default = crate::instructions::base_data_dir(None).join(DEFAULT_MODELS_DIRNAME);
+                Self::from_dir_str(default.to_str())
+            }
+        }
     }
 
     /// Pure, hermetic core: takes the configured dir value as an argument
