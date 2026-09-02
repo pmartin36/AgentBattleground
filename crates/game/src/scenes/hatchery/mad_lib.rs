@@ -43,35 +43,68 @@ impl MadLibTemplate {
     }
 }
 
+// A varied starter pool: different openings, themes (appearance, origin,
+// defense, temper, element-power, legend), and blank sets, so consecutive
+// eggs don't all read as "a <adjective> creature".
 const T0: MadLibTemplate = MadLibTemplate::new(&[
     Segment::Literal("A "),
     Segment::Blank { label: "size" },
     Segment::Literal(" creature with "),
     Segment::Blank { label: "temperament" },
-    Segment::Literal(" eyes that fights by "),
+    Segment::Literal(" eyes that strikes with its "),
     Segment::Blank { label: "signature move" },
     Segment::Literal("."),
 ]);
 
 const T1: MadLibTemplate = MadLibTemplate::new(&[
-    Segment::Literal("A "),
-    Segment::Blank { label: "texture" },
-    Segment::Literal(" hide covers this "),
-    Segment::Blank { label: "size" },
-    Segment::Literal(" beast."),
+    Segment::Literal("Forged in the "),
+    Segment::Blank { label: "habitat" },
+    Segment::Literal(", it hunts with "),
+    Segment::Blank { label: "hunting style" },
+    Segment::Literal(" and dreads only "),
+    Segment::Blank { label: "weakness" },
+    Segment::Literal("."),
 ]);
 
 const T2: MadLibTemplate = MadLibTemplate::new(&[
-    Segment::Literal("Born in "),
-    Segment::Blank { label: "habitat" },
-    Segment::Literal(", it moves with a "),
-    Segment::Blank { label: "gait" },
-    Segment::Literal(" gait and a "),
+    Segment::Literal("Its "),
+    Segment::Blank { label: "texture" },
+    Segment::Literal(" hide guards a "),
     Segment::Blank { label: "temperament" },
-    Segment::Literal(" nature."),
+    Segment::Literal(" heart; foes flinch at its "),
+    Segment::Blank { label: "signature move" },
+    Segment::Literal("."),
 ]);
 
-static POOL: &[MadLibTemplate] = &[T0, T1, T2];
+const T3: MadLibTemplate = MadLibTemplate::new(&[
+    Segment::Literal("Small but "),
+    Segment::Blank { label: "temperament" },
+    Segment::Literal(", it "),
+    Segment::Blank { label: "idle habit" },
+    Segment::Literal(" until threatened, then lashes out with a "),
+    Segment::Blank { label: "attack" },
+    Segment::Literal("."),
+]);
+
+const T4: MadLibTemplate = MadLibTemplate::new(&[
+    Segment::Literal("Wreathed in "),
+    Segment::Blank { label: "element" },
+    Segment::Literal(", it funnels raw power through its "),
+    Segment::Blank { label: "body part" },
+    Segment::Literal(" to "),
+    Segment::Blank { label: "devastating effect" },
+    Segment::Literal("."),
+]);
+
+const T5: MadLibTemplate = MadLibTemplate::new(&[
+    Segment::Literal("Old tales claim it can "),
+    Segment::Blank { label: "impossible feat" },
+    Segment::Literal(", and it stalks the field with a "),
+    Segment::Blank { label: "gait" },
+    Segment::Literal(" grace."),
+]);
+
+static POOL: &[MadLibTemplate] = &[T0, T1, T2, T3, T4, T5];
 
 /// Fixed in-code starter pool (non-empty).
 pub fn pool() -> &'static [MadLibTemplate] {
