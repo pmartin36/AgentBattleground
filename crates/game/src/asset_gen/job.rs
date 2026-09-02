@@ -203,10 +203,11 @@ mod tests {
         Arc::new(FnRunner(f))
     }
 
-    fn invocation(model: &str) -> SdCliInvocation {
+    /// Builds a minimal invocation whose one arg (`label`) doubles as the
+    /// job label these tests read back from `inv.args[0]`.
+    fn invocation(label: &str) -> SdCliInvocation {
         SdCliInvocation {
-            model: model.to_string(),
-            args: Vec::new(),
+            args: vec![label.to_string()],
         }
     }
 
@@ -294,11 +295,11 @@ mod tests {
         let log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let log_write = log.clone();
         let queue = JobQueue::new(fn_runner(move |inv, _cancel| {
-            log_write.lock().unwrap().push(format!("start:{}", inv.model));
+            log_write.lock().unwrap().push(format!("start:{}", inv.args[0]));
             std::thread::sleep(Duration::from_millis(30));
-            log_write.lock().unwrap().push(format!("end:{}", inv.model));
+            log_write.lock().unwrap().push(format!("end:{}", inv.args[0]));
             Ok(RunOutput {
-                stdout: inv.model.clone(),
+                stdout: inv.args[0].clone(),
             })
         }));
 

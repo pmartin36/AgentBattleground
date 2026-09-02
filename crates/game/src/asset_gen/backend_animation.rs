@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 
+use super::model_paths::{ModelPathError, ModelPaths};
 use super::recipe::{RecipeBackend, SdCliInvocation};
 use super::types::KeyColor;
 
@@ -23,6 +24,15 @@ pub const CONSISTENCY_CLAUSE: &str = "The creature's proportions, colors, and fl
 /// The Turbo LoRA prompt tag (a prompt tag, not a CLI flag), locked at
 /// strength 1.0.
 pub const LORA_TAG: &str = "<lora:minimax_h3_turbo_v4_step600_ema:1.0>";
+
+/// The diffusion model filename resolved under the configured models dir.
+const DIFFUSION_MODEL: &str = "minimax_h3_fl2va_pruned-Q4_K_M.gguf";
+/// The VAE filename resolved under the configured models dir.
+const VAE_MODEL: &str = "minimax_h3_video_vae_fp16.safetensors";
+/// The audio VAE filename resolved under the configured models dir.
+const AUDIO_VAE_MODEL: &str = "minimax_h3_audio_vae_fp32.safetensors";
+/// The LLM (text encoder) filename resolved under the configured models dir.
+const LLM_MODEL: &str = "qwen3vl_32b_minimax_h3-Q4_K_M.gguf";
 
 /// The resolved per-clip inputs `generate_animation` hands the backend: the
 /// pre-cleaned flat-background init image, the output path, the caller's
@@ -45,26 +55,33 @@ pub struct MiniMaxH3Backend;
 impl RecipeBackend for MiniMaxH3Backend {
     type Request = H3Job;
 
-    fn invocation(&self, job: &H3Job) -> SdCliInvocation {
+    fn invocation(&self, job: &H3Job, models: &ModelPaths) -> Result<SdCliInvocation, ModelPathError> {
+        let diffusion_model = models.resolve(DIFFUSION_MODEL)?;
+        let vae = models.resolve(VAE_MODEL)?;
+        let audio_vae = models.resolve(AUDIO_VAE_MODEL)?;
+        let llm = models.resolve(LLM_MODEL)?;
+        let loras_dir = models.resolve_loras_dir()?;
+
         let prompt = format!(
             "{}, {STYLE_PRESERVATION}. {CONSISTENCY_CLAUSE}. {}. {LORA_TAG}",
             job.prompt,
             h3_background_clause(&job.key)
         );
 
-        SdCliInvocation {
-            model: "vid_gen".to_string(),
+        Ok(SdCliInvocation {
             args: vec![
+                "-M".to_string(),
+                "vid_gen".to_string(),
                 "--diffusion-model".to_string(),
-                "minimax_h3_fl2va_pruned-Q4_K_M.gguf".to_string(),
+                diffusion_model.to_string_lossy().into_owned(),
                 "--vae".to_string(),
-                "minimax_h3_video_vae_fp16.safetensors".to_string(),
+                vae.to_string_lossy().into_owned(),
                 "--audio-vae".to_string(),
-                "minimax_h3_audio_vae_fp32.safetensors".to_string(),
+                audio_vae.to_string_lossy().into_owned(),
                 "--llm".to_string(),
-                "qwen3vl_32b_minimax_h3-Q4_K_M.gguf".to_string(),
+                llm.to_string_lossy().into_owned(),
                 "--lora-model-dir".to_string(),
-                "loras".to_string(),
+                loras_dir.to_string_lossy().into_owned(),
                 "--cfg-scale".to_string(),
                 "1.0".to_string(),
                 "--flow-shift".to_string(),
@@ -99,7 +116,7 @@ impl RecipeBackend for MiniMaxH3Backend {
                 "-o".to_string(),
                 job.output.to_string_lossy().into_owned(),
             ],
-        }
+        })
     }
 }
 
@@ -144,22 +161,38 @@ mod tests {
         inv.args[i + 1].clone()
     }
 
-    /// The model selector and every locked flag/value pair from the verified
-    /// config are present, and `--init-img`/`-o` match the job's paths.
+    /// The invocation carries the explicit `-M vid_gen` mode; every model
+    /// flag (`--diffusion-model`/`--vae`/`--audio-vae`/`--llm`) followed by
+    /// an absolute path under the resolver's configured dir;
+    /// `--lora-model-dir` followed by the resolved `loras` dir; every other
+    /// locked flag/value pair from the verified config; and `--init-img`/
+    /// `-o` matching the job's paths.
     #[test]
-    fn h3_invocation_locks_config() {
+    fn h3_invocation_has_mode_and_resolved_paths() {
         let backend = MiniMaxH3Backend;
         let j = job(GREEN, 56, 24);
-        let inv = backend.invocation(&j);
+        let models = ModelPaths::unchecked("/abs/models");
+        let inv = backend.invocation(&j, &models).expect("resolver has every file");
 
-        assert_eq!(inv.model, "vid_gen");
+        assert!(
+            inv.args.windows(2).any(|w| w == ["-M", "vid_gen"]),
+            "got args: {:?}",
+            inv.args
+        );
 
-        let pairs: [[&str; 2]; 14] = [
-            ["--diffusion-model", "minimax_h3_fl2va_pruned-Q4_K_M.gguf"],
-            ["--vae", "minimax_h3_video_vae_fp16.safetensors"],
-            ["--audio-vae", "minimax_h3_audio_vae_fp32.safetensors"],
-            ["--llm", "qwen3vl_32b_minimax_h3-Q4_K_M.gguf"],
-            ["--lora-model-dir", "loras"],
+        let path_for = |flag: &str, filename: &str| {
+            let idx = inv.args.iter().position(|a| a == flag).unwrap_or_else(|| panic!("missing {flag} in {:?}", inv.args));
+            let path = std::path::PathBuf::from(&inv.args[idx + 1]);
+            assert!(path.is_absolute(), "{flag} value {path:?} must be absolute");
+            assert_eq!(path, std::path::PathBuf::from("/abs/models").join(filename));
+        };
+        path_for("--diffusion-model", "minimax_h3_fl2va_pruned-Q4_K_M.gguf");
+        path_for("--vae", "minimax_h3_video_vae_fp16.safetensors");
+        path_for("--audio-vae", "minimax_h3_audio_vae_fp32.safetensors");
+        path_for("--llm", "qwen3vl_32b_minimax_h3-Q4_K_M.gguf");
+        path_for("--lora-model-dir", "loras");
+
+        for pair in [
             ["--cfg-scale", "1.0"],
             ["--flow-shift", "12.0"],
             ["--strength", "1.0"],
@@ -169,8 +202,7 @@ mod tests {
             ["-H", "512"],
             ["--steps", "8"],
             ["--rng", "cpu"],
-        ];
-        for pair in pairs {
+        ] {
             assert!(
                 inv.args.windows(2).any(|w| w == pair),
                 "missing {pair:?} in {:?}",
@@ -203,12 +235,37 @@ mod tests {
         assert_eq!(inv.args[o_idx + 1], j.output.to_string_lossy());
     }
 
+    /// A missing model file under the configured dir surfaces the typed
+    /// resolver error naming it, never a bad argv.
+    #[test]
+    fn h3_invocation_missing_model_errors() {
+        let dir = std::env::temp_dir().join(format!(
+            "abg-test-h3-missing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let models = ModelPaths::from_dir_str(Some(dir.to_str().unwrap())).expect("dir exists");
+
+        let backend = MiniMaxH3Backend;
+        let err = backend
+            .invocation(&job(GREEN, 56, 24), &models)
+            .expect_err("no model files present");
+        assert!(
+            matches!(err, ModelPathError::MissingFile { .. } | ModelPathError::MissingDir { .. }),
+            "expected a missing-file/dir resolver error, got {err:?}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// `--video-frames`/`--fps` come from the job's `frames`/`fps`, not a
     /// hard-locked value.
     #[test]
     fn h3_video_frames_and_fps_from_request() {
         let backend = MiniMaxH3Backend;
-        let inv = backend.invocation(&job(GREEN, 56, 24));
+        let models = ModelPaths::unchecked("/abs/models");
+        let inv = backend.invocation(&job(GREEN, 56, 24), &models).expect("resolver has every file");
         assert!(
             inv.args.windows(2).any(|w| w == ["--video-frames", "56"]),
             "got args: {:?}",
@@ -228,7 +285,8 @@ mod tests {
     fn h3_prompt_has_style_preservation_and_beats() {
         let backend = MiniMaxH3Backend;
         let j = job(GREEN, 56, 24);
-        let prompt = prompt_arg(&backend.invocation(&j));
+        let models = ModelPaths::unchecked("/abs/models");
+        let prompt = prompt_arg(&backend.invocation(&j, &models).expect("resolver has every file"));
         assert!(prompt.contains("flat 2D cartoon"), "got prompt: {prompt}");
         assert!(prompt.contains("camera locked static"), "got prompt: {prompt}");
         assert!(prompt.contains("thick black outlines"), "got prompt: {prompt}");
@@ -245,15 +303,16 @@ mod tests {
     #[test]
     fn h3_prompt_background_clause_matches_key() {
         let backend = MiniMaxH3Backend;
+        let models = ModelPaths::unchecked("/abs/models");
 
-        let green_prompt = prompt_arg(&backend.invocation(&job(GREEN, 56, 24)));
+        let green_prompt = prompt_arg(&backend.invocation(&job(GREEN, 56, 24), &models).expect("ok"));
         assert!(
             green_prompt.contains("solid flat green screen"),
             "got prompt: {green_prompt}"
         );
         assert!(!green_prompt.contains("magenta"), "got prompt: {green_prompt}");
 
-        let magenta_prompt = prompt_arg(&backend.invocation(&job(MAGENTA, 56, 24)));
+        let magenta_prompt = prompt_arg(&backend.invocation(&job(MAGENTA, 56, 24), &models).expect("ok"));
         assert!(
             magenta_prompt.contains("solid flat magenta screen"),
             "got prompt: {magenta_prompt}"

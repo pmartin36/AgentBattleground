@@ -444,7 +444,12 @@ impl JobRunner for SucceedingRunner {
 }
 
 fn succeeding_asset_gen(calls: Arc<AtomicUsize>) -> AssetGen {
-    AssetGen::new(Arc::new(SucceedingRunner { calls }), Box::new(ZImageBackend), GpuCapability::Available)
+    AssetGen::new(
+        Arc::new(SucceedingRunner { calls }),
+        Box::new(ZImageBackend),
+        GpuCapability::Available,
+        AssetGen::test_models(),
+    )
 }
 
 /// A `JobRunner` that succeeds on every call, but blocks calls numbered
@@ -472,7 +477,12 @@ impl JobRunner for GatedRunner {
 }
 
 fn gated_asset_gen(calls: Arc<AtomicUsize>, hold_from: usize, gate: Arc<(Mutex<bool>, Condvar)>) -> AssetGen {
-    AssetGen::new(Arc::new(GatedRunner { calls, hold_from, gate }), Box::new(ZImageBackend), GpuCapability::Available)
+    AssetGen::new(
+        Arc::new(GatedRunner { calls, hold_from, gate }),
+        Box::new(ZImageBackend),
+        GpuCapability::Available,
+        AssetGen::test_models(),
+    )
 }
 
 fn release_gate(gate: &Arc<(Mutex<bool>, Condvar)>) {

@@ -287,7 +287,12 @@ mod tests {
     }
 
     fn fake_asset_gen(calls: Arc<AtomicUsize>, fail: bool, capability: GpuCapability) -> AssetGen {
-        AssetGen::new(Arc::new(ClipRunner { calls, fail }), Box::new(ZImageBackend), capability)
+        AssetGen::new(
+            Arc::new(ClipRunner { calls, fail }),
+            Box::new(ZImageBackend),
+            capability,
+            AssetGen::test_models(),
+        )
     }
 
     /// Builds a hermetic store seeded with one egg and a `Hatchery` scene

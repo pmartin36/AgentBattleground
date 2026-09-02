@@ -115,9 +115,9 @@ mod tests {
         }
     }
 
-    /// One fake `JobRunner` for the whole composite: branches on
-    /// `invocation.model` (`"z_image_turbo"` for the still,
-    /// `"vid_gen"` for each animation clip, mirroring operations.rs's own
+    /// One fake `JobRunner` for the whole composite: branches on the
+    /// invocation's mode arg (`-M img_gen` for the still,
+    /// `-M vid_gen` for each animation clip, mirroring operations.rs's own
     /// `KeyColorPngRunner`/`KeyColorFramesRunner`), so a single `AssetGen`
     /// (which owns one runner for both backends) can drive the whole
     /// still-then-clips pipeline. Optionally fails a specific 1-based
@@ -134,7 +134,7 @@ mod tests {
             let o_idx = invocation.args.iter().position(|a| a == "-o").expect("-o arg present");
             let out_path = PathBuf::from(&invocation.args[o_idx + 1]);
 
-            if invocation.model == "z_image_turbo" {
+            if invocation.args.windows(2).any(|w| w == ["-M", "img_gen"]) {
                 std::fs::create_dir_all(out_path.parent().unwrap()).unwrap();
                 let mut img = RgbaImage::from_pixel(4, 4, Rgba([0, 255, 0, 255]));
                 img.put_pixel(2, 2, Rgba([0, 0, 255, 255]));
@@ -171,7 +171,7 @@ mod tests {
     }
 
     fn gen_with(runner: CompositeRunner, capability: GpuCapability) -> AssetGen {
-        AssetGen::new(Arc::new(runner), Box::new(ZImageBackend), capability)
+        AssetGen::new(Arc::new(runner), Box::new(ZImageBackend), capability, AssetGen::test_models())
     }
 
     fn plain_runner() -> CompositeRunner {

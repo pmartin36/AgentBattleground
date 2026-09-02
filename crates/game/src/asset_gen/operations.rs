@@ -16,6 +16,7 @@ use super::bg_removal::{remove_frame_background, remove_still_background};
 use super::cache::AssetCache;
 use super::capability::GpuCapability;
 use super::job::{JobHandle, JobQueue, JobStatus};
+use super::model_paths::{ModelPathError, ModelPaths};
 use super::recipe::RecipeBackend;
 use super::runner::{JobError, JobRunner, RunOutput};
 use super::types::{AnimationRequest, ClipAsset, ImageAsset, ImageRequest, KeyColor};
@@ -110,6 +111,7 @@ pub struct AssetGen {
     capability: GpuCapability,
     image_backend: Box<dyn RecipeBackend<Request = ImageRequest>>,
     timeout: Duration,
+    resolver: Result<ModelPaths, ModelPathError>,
 }
 
 impl AssetGen {
@@ -117,8 +119,9 @@ impl AssetGen {
         runner: Arc<dyn JobRunner>,
         image_backend: Box<dyn RecipeBackend<Request = ImageRequest>>,
         capability: GpuCapability,
+        models: ModelPaths,
     ) -> Self {
-        Self::with_timeout(runner, image_backend, capability, DEFAULT_JOB_TIMEOUT)
+        Self::with_timeout(runner, image_backend, capability, models, DEFAULT_JOB_TIMEOUT)
     }
 
     /// Same as `new`, with an injectable timeout so a test can use a short
@@ -127,6 +130,7 @@ impl AssetGen {
         runner: Arc<dyn JobRunner>,
         image_backend: Box<dyn RecipeBackend<Request = ImageRequest>>,
         capability: GpuCapability,
+        models: ModelPaths,
         timeout: Duration,
     ) -> Self {
         AssetGen {
@@ -135,7 +139,35 @@ impl AssetGen {
             capability,
             image_backend,
             timeout,
+            resolver: Ok(models),
         }
+    }
+
+    /// Production entry: the ONLY constructor that reads
+    /// `AGENTBATTLEGROUND_SDCLI_MODELS_DIR` (via `ModelPaths::from_env`).
+    /// Every test constructs an explicit `ModelPaths` instead (see
+    /// `test_models`), so tests stay hermetic.
+    pub(crate) fn with_env_models(
+        runner: Arc<dyn JobRunner>,
+        image_backend: Box<dyn RecipeBackend<Request = ImageRequest>>,
+        capability: GpuCapability,
+    ) -> Self {
+        AssetGen {
+            cache: Arc::new(AssetCache::new()),
+            queue: JobQueue::new(runner),
+            capability,
+            image_backend,
+            timeout: DEFAULT_JOB_TIMEOUT,
+            resolver: ModelPaths::from_env(),
+        }
+    }
+
+    /// The one shared non-verifying resolver every test site constructs an
+    /// `AssetGen` with, so resolution never needs a real models dir in the
+    /// offline gate.
+    #[cfg(test)]
+    pub(crate) fn test_models() -> ModelPaths {
+        ModelPaths::unchecked(std::env::temp_dir().join("abg-test-models"))
     }
 
     /// The GPU capability this `AssetGen` was constructed with, so a caller
@@ -166,7 +198,14 @@ impl AssetGen {
             return JobHandle::resolved(JobStatus::Failed(JobError::NoGpu));
         }
 
-        let invocation = self.image_backend.invocation(&request);
+        let models = match &self.resolver {
+            Ok(models) => models,
+            Err(e) => return JobHandle::resolved(JobStatus::Failed(JobError::ModelPath(e.clone()))),
+        };
+        let invocation = match self.image_backend.invocation(&request, models) {
+            Ok(invocation) => invocation,
+            Err(e) => return JobHandle::resolved(JobStatus::Failed(JobError::ModelPath(e))),
+        };
         let cache = Arc::clone(&self.cache);
         let materialize_request = request.clone();
         self.queue.submit(invocation, self.timeout, move |output: RunOutput| {
@@ -189,6 +228,11 @@ impl AssetGen {
         if self.capability != GpuCapability::Available {
             return JobHandle::resolved(JobStatus::Failed(JobError::NoGpu));
         }
+
+        let models = match &self.resolver {
+            Ok(models) => models,
+            Err(e) => return JobHandle::resolved(JobStatus::Failed(JobError::ModelPath(e.clone()))),
+        };
 
         let still = match image::open(&image.path) {
             Ok(still) => still.to_rgba8(),
@@ -226,7 +270,10 @@ impl AssetGen {
             frames: request.params.frames,
             fps: request.params.fps,
         };
-        let invocation = MiniMaxH3Backend.invocation(&job);
+        let invocation = match MiniMaxH3Backend.invocation(&job, models) {
+            Ok(invocation) => invocation,
+            Err(e) => return JobHandle::resolved(JobStatus::Failed(JobError::ModelPath(e))),
+        };
 
         let cache = Arc::clone(&self.cache);
         let materialize_image = image.clone();
@@ -477,7 +524,7 @@ mod tests {
     fn generate_image_generates_and_removes_bg() {
         let calls = Arc::new(AtomicUsize::new(0));
         let runner: Arc<dyn JobRunner> = Arc::new(KeyColorPngRunner { calls: calls.clone() });
-        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available);
+        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available, AssetGen::test_models());
 
         let asset = match gen.generate_image(req(1, None)).wait() {
             JobStatus::Success(asset) => asset,
@@ -494,7 +541,7 @@ mod tests {
     fn generate_image_import_skips_runner() {
         let calls = Arc::new(AtomicUsize::new(0));
         let runner: Arc<dyn JobRunner> = Arc::new(KeyColorPngRunner { calls: calls.clone() });
-        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available);
+        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available, AssetGen::test_models());
         let import = std::env::temp_dir().join("abg_assets_test_import.png");
 
         match gen.generate_image(req(2, Some(import.clone()))).wait() {
@@ -510,7 +557,7 @@ mod tests {
     fn generate_image_repeat_hits_cache() {
         let calls = Arc::new(AtomicUsize::new(0));
         let runner: Arc<dyn JobRunner> = Arc::new(KeyColorPngRunner { calls: calls.clone() });
-        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available);
+        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available, AssetGen::test_models());
         let request = req(3, None);
 
         let first = gen.generate_image(request.clone()).wait();
@@ -533,7 +580,7 @@ mod tests {
                 })
             }
         }
-        let gen = AssetGen::new(Arc::new(FailingRunner), Box::new(ZImageBackend), GpuCapability::Available);
+        let gen = AssetGen::new(Arc::new(FailingRunner), Box::new(ZImageBackend), GpuCapability::Available, AssetGen::test_models());
         match gen.generate_image(req(4, None)).wait() {
             JobStatus::Failed(JobError::Process { code: Some(1), .. }) => {}
             other => panic!("expected Failed(Process), got {other:?}"),
@@ -558,6 +605,7 @@ mod tests {
             Arc::new(BlockingRunner),
             Box::new(ZImageBackend),
             GpuCapability::Available,
+            AssetGen::test_models(),
             Duration::from_millis(50),
         );
         let status = gen.generate_image(req(5, None)).wait();
@@ -572,7 +620,7 @@ mod tests {
         let runner: Arc<dyn JobRunner> = Arc::new(KeyColorPngRunner {
             calls: Arc::new(AtomicUsize::new(0)),
         });
-        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Unavailable);
+        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Unavailable, AssetGen::test_models());
         assert_eq!(
             gen.generate_image(req(6, None)).wait(),
             JobStatus::Failed(JobError::NoGpu)
@@ -622,7 +670,7 @@ mod tests {
             captured_init_img: Arc::new(Mutex::new(None)),
             captured_prompt: Arc::new(Mutex::new(None)),
         });
-        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available);
+        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available, AssetGen::test_models());
         let still = synthetic_still("anim_frames", [0, 0, 255, 255]);
 
         let clip = match gen
@@ -653,7 +701,7 @@ mod tests {
             captured_init_img: captured_init_img.clone(),
             captured_prompt: Arc::new(Mutex::new(None)),
         });
-        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available);
+        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available, AssetGen::test_models());
         let still = synthetic_still("anim_preclean", [0, 0, 255, 255]);
 
         gen.generate_animation(&still, animation_req("idle", 1, 24)).wait();
@@ -690,7 +738,7 @@ mod tests {
             captured_init_img: Arc::new(Mutex::new(None)),
             captured_prompt: captured_prompt.clone(),
         });
-        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available);
+        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available, AssetGen::test_models());
         let still = synthetic_still("anim_green_family", [0, 220, 80, 255]);
 
         let clip = match gen.generate_animation(&still, animation_req("hatch", 1, 24)).wait() {
@@ -725,7 +773,7 @@ mod tests {
             captured_init_img: Arc::new(Mutex::new(None)),
             captured_prompt: Arc::new(Mutex::new(None)),
         });
-        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available);
+        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available, AssetGen::test_models());
         let still = synthetic_still("anim_repeat", [0, 0, 255, 255]);
         let request = animation_req("idle", 2, 24);
 
@@ -753,7 +801,7 @@ mod tests {
             captured_init_img: Arc::new(Mutex::new(None)),
             captured_prompt: Arc::new(Mutex::new(None)),
         });
-        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Unavailable);
+        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Unavailable, AssetGen::test_models());
         let still = synthetic_still("anim_no_gpu", [0, 0, 255, 255]);
 
         assert_eq!(
@@ -776,7 +824,7 @@ mod tests {
                 })
             }
         }
-        let gen = AssetGen::new(Arc::new(FailingRunner), Box::new(ZImageBackend), GpuCapability::Available);
+        let gen = AssetGen::new(Arc::new(FailingRunner), Box::new(ZImageBackend), GpuCapability::Available, AssetGen::test_models());
         let still = synthetic_still("anim_error", [0, 0, 255, 255]);
 
         match gen.generate_animation(&still, animation_req("idle", 1, 24)).wait() {
@@ -803,6 +851,7 @@ mod tests {
             Arc::new(BlockingRunner),
             Box::new(ZImageBackend),
             GpuCapability::Available,
+            AssetGen::test_models(),
             Duration::from_millis(50),
         );
         let still = synthetic_still("anim_timeout", [0, 0, 255, 255]);
@@ -812,5 +861,32 @@ mod tests {
             .wait();
         assert_eq!(status, JobStatus::TimedOut);
         assert!(start.elapsed() < Duration::from_secs(2), "took {:?}", start.elapsed());
+    }
+
+    /// A resolver with no model files present under its configured dir
+    /// surfaces `Failed(ModelPath(MissingFile))` from `generate_image`, not
+    /// a hang and not a bad argv reaching the runner.
+    #[test]
+    fn generate_image_missing_model_errors() {
+        let dir = std::env::temp_dir().join(format!(
+            "abg-test-ops-missing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let models = crate::asset_gen::model_paths::ModelPaths::from_dir_str(Some(dir.to_str().unwrap()))
+            .expect("dir exists");
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let runner: Arc<dyn JobRunner> = Arc::new(KeyColorPngRunner { calls: calls.clone() });
+        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available, models);
+
+        match gen.generate_image(req(7, None)).wait() {
+            JobStatus::Failed(JobError::ModelPath(ModelPathError::MissingFile { .. })) => {}
+            other => panic!("expected Failed(ModelPath(MissingFile)), got {other:?}"),
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "a missing model must never reach the runner");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

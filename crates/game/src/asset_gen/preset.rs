@@ -195,10 +195,10 @@ mod tests {
         assert_eq!(image.background_key, key_color_for(green.dominant_color));
     }
 
-    /// One fake `JobRunner` branching on `invocation.model`, mirroring
-    /// `compose.rs`'s `CompositeRunner`: writes a flat-key still for the
-    /// image backend's model and a single flat-key frame for the animation
-    /// backend's model.
+    /// One fake `JobRunner` branching on the invocation's mode arg,
+    /// mirroring `compose.rs`'s `CompositeRunner`: writes a flat-key still
+    /// for the image backend's mode and a single flat-key frame for the
+    /// animation backend's mode.
     struct CreatureRunner {
         anim_calls: Arc<AtomicUsize>,
     }
@@ -208,7 +208,7 @@ mod tests {
             let o_idx = invocation.args.iter().position(|a| a == "-o").expect("-o arg present");
             let out_path = PathBuf::from(&invocation.args[o_idx + 1]);
 
-            if invocation.model == "z_image_turbo" {
+            if invocation.args.windows(2).any(|w| w == ["-M", "img_gen"]) {
                 std::fs::create_dir_all(out_path.parent().unwrap()).unwrap();
                 let mut img = RgbaImage::from_pixel(4, 4, Rgba([0, 255, 0, 255]));
                 img.put_pixel(2, 2, Rgba([0, 0, 255, 255]));
@@ -235,6 +235,7 @@ mod tests {
             Arc::new(CreatureRunner { anim_calls: anim_calls.clone() }),
             Box::new(ZImageBackend),
             GpuCapability::Available,
+            AssetGen::test_models(),
         );
 
         let result = gen.generate_creature(spec()).wait();

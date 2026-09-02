@@ -4,6 +4,7 @@
 //! Also owns the ONE place the key-color selection rule lives,
 //! `key_color_for`, so callers cannot bypass it.
 
+use super::model_paths::{ModelPathError, ModelPaths};
 use super::recipe::{RecipeBackend, SdCliInvocation};
 use super::types::{Fidelity, ImageRequest, KeyColor};
 
@@ -12,6 +13,13 @@ use super::types::{Fidelity, ImageRequest, KeyColor};
 /// fields.
 pub const STYLE_GUIDANCE: &str = "flat 2D cartoon illustration style, thick black outlines, cel-shaded flat colors, vivid saturated colors, simple low-detail creature, high-contrast clear silhouette, no dark low-contrast fields";
 
+/// The diffusion model filename resolved under the configured models dir.
+const DIFFUSION_MODEL: &str = "z_image_turbo-Q4_K.gguf";
+/// The VAE filename resolved under the configured models dir.
+const VAE_MODEL: &str = "ae.safetensors";
+/// The LLM (text encoder) filename resolved under the configured models dir.
+const LLM_MODEL: &str = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf";
+
 /// The Z-Image Turbo backend: fixed model, locked cfg/steps flags, and a
 /// style + key-color-steered prompt. Owns no execution.
 pub struct ZImageBackend;
@@ -19,7 +27,10 @@ pub struct ZImageBackend;
 impl RecipeBackend for ZImageBackend {
     type Request = ImageRequest;
 
-    fn invocation(&self, request: &ImageRequest) -> SdCliInvocation {
+    fn invocation(&self, request: &ImageRequest, models: &ModelPaths) -> Result<SdCliInvocation, ModelPathError> {
+        let diffusion_model = models.resolve(DIFFUSION_MODEL)?;
+        let vae = models.resolve(VAE_MODEL)?;
+        let llm = models.resolve(LLM_MODEL)?;
         let (width, height) = fidelity_dims(&request.fidelity);
         let prompt = format!(
             "{}, {}, {}",
@@ -28,9 +39,16 @@ impl RecipeBackend for ZImageBackend {
             key_screen_clause(&request.background_key)
         );
         let out_path = super::operations::image_raw_path(request);
-        SdCliInvocation {
-            model: "z_image_turbo".to_string(),
+        Ok(SdCliInvocation {
             args: vec![
+                "-M".to_string(),
+                "img_gen".to_string(),
+                "--diffusion-model".to_string(),
+                diffusion_model.to_string_lossy().into_owned(),
+                "--vae".to_string(),
+                vae.to_string_lossy().into_owned(),
+                "--llm".to_string(),
+                llm.to_string_lossy().into_owned(),
                 "--cfg-scale".to_string(),
                 "1.0".to_string(),
                 "--steps".to_string(),
@@ -47,7 +65,7 @@ impl RecipeBackend for ZImageBackend {
                 "-o".to_string(),
                 out_path.to_string_lossy().into_owned(),
             ],
-        }
+        })
     }
 }
 
@@ -125,7 +143,8 @@ mod tests {
     #[test]
     fn zimage_prompt_has_style_guidance() {
         let backend = ZImageBackend;
-        let inv = backend.invocation(&req(GREEN));
+        let models = ModelPaths::unchecked("/abs/models");
+        let inv = backend.invocation(&req(GREEN), &models).expect("resolver has every file");
         let prompt = prompt_arg(&inv);
         assert!(prompt.contains("flat 2D cartoon"), "got prompt: {prompt}");
         assert!(prompt.contains("cel-shaded"), "got prompt: {prompt}");
@@ -137,7 +156,8 @@ mod tests {
     #[test]
     fn zimage_prompt_green_key_default() {
         let backend = ZImageBackend;
-        let inv = backend.invocation(&req(GREEN));
+        let models = ModelPaths::unchecked("/abs/models");
+        let inv = backend.invocation(&req(GREEN), &models).expect("resolver has every file");
         let prompt = prompt_arg(&inv);
         assert!(prompt.contains("green"), "got prompt: {prompt}");
         assert!(!prompt.contains("magenta"), "got prompt: {prompt}");
@@ -147,7 +167,8 @@ mod tests {
     #[test]
     fn zimage_prompt_magenta_for_magenta_key() {
         let backend = ZImageBackend;
-        let inv = backend.invocation(&req(MAGENTA));
+        let models = ModelPaths::unchecked("/abs/models");
+        let inv = backend.invocation(&req(MAGENTA), &models).expect("resolver has every file");
         let prompt = prompt_arg(&inv);
         assert!(prompt.contains("magenta"), "got prompt: {prompt}");
     }
@@ -164,14 +185,33 @@ mod tests {
         assert_eq!(key_color_for([40, 200, 60]), MAGENTA);
     }
 
-    /// The model name, locked cfg/steps flags, and the shared deterministic
-    /// output-path helper all appear in the invocation.
+    /// The invocation carries the explicit `-M img_gen` mode, every model
+    /// flag followed by an absolute path under the resolver's configured
+    /// dir, the locked cfg/steps flags, and the shared deterministic
+    /// output-path helper for `-o`.
     #[test]
-    fn zimage_invocation_locks_model_and_flags() {
+    fn zimage_invocation_has_mode_and_resolved_model_flags() {
         let backend = ZImageBackend;
         let request = req(GREEN);
-        let inv = backend.invocation(&request);
-        assert_eq!(inv.model, "z_image_turbo");
+        let models = ModelPaths::unchecked("/abs/models");
+        let inv = backend.invocation(&request, &models).expect("resolver has every file");
+
+        assert!(
+            inv.args.windows(2).any(|w| w == ["-M", "img_gen"]),
+            "got args: {:?}",
+            inv.args
+        );
+
+        let path_for = |flag: &str, filename: &str| {
+            let idx = inv.args.iter().position(|a| a == flag).unwrap_or_else(|| panic!("missing {flag} in {:?}", inv.args));
+            let path = std::path::PathBuf::from(&inv.args[idx + 1]);
+            assert!(path.is_absolute(), "{flag} value {path:?} must be absolute");
+            assert_eq!(path, std::path::PathBuf::from("/abs/models").join(filename));
+        };
+        path_for("--diffusion-model", "z_image_turbo-Q4_K.gguf");
+        path_for("--vae", "ae.safetensors");
+        path_for("--llm", "Qwen3-4B-Instruct-2507-Q4_K_M.gguf");
+
         assert!(
             inv.args.windows(2).any(|w| w == ["--cfg-scale", "1.0"]),
             "got args: {:?}",
@@ -188,5 +228,29 @@ mod tests {
             image_raw_path(&request).to_string_lossy(),
             "-o must match the shared deterministic raw-output path"
         );
+    }
+
+    /// A missing model file under the configured dir surfaces the typed
+    /// resolver error naming it, never a bad argv.
+    #[test]
+    fn zimage_invocation_missing_model_errors() {
+        let dir = std::env::temp_dir().join(format!(
+            "abg-test-zimage-missing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let models = ModelPaths::from_dir_str(Some(dir.to_str().unwrap())).expect("dir exists");
+
+        let backend = ZImageBackend;
+        let err = backend.invocation(&req(GREEN), &models).expect_err("no model files present");
+        match err {
+            ModelPathError::MissingFile { name, .. } => {
+                assert_eq!(name, "z_image_turbo-Q4_K.gguf");
+            }
+            other => panic!("expected MissingFile, got {other:?}"),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

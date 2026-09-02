@@ -367,7 +367,12 @@ ARCHETYPE: Ranged\n";
     }
 
     fn fake_asset_gen(calls: Arc<AtomicUsize>) -> AssetGen {
-        AssetGen::new(Arc::new(RecordingRunner { calls }), Box::new(ZImageBackend), GpuCapability::Available)
+        AssetGen::new(
+            Arc::new(RecordingRunner { calls }),
+            Box::new(ZImageBackend),
+            GpuCapability::Available,
+            AssetGen::test_models(),
+        )
     }
 
     /// Constructs a hermetic `Hatchery` with one `Undefined` egg, the given
@@ -652,8 +657,12 @@ ARCHETYPE: Ranged\n";
         let seed = PlayerData { roster: Vec::new(), eggs: vec![undefined_egg()] };
         PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
 
-        let asset_gen =
-            AssetGen::new(Arc::new(FailingRunner), Box::new(ZImageBackend), GpuCapability::Available);
+        let asset_gen = AssetGen::new(
+            Arc::new(FailingRunner),
+            Box::new(ZImageBackend),
+            GpuCapability::Available,
+            AssetGen::test_models(),
+        );
         let mut scene = super::super::Hatchery::from_store_with_gen(
             PlayerStore::with_dir(&dir),
             std::time::SystemTime::now(),

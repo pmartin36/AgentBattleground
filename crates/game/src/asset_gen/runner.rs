@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::model_paths::ModelPathError;
 use super::recipe::SdCliInvocation;
 
 /// Fixed poll interval `SdCliRunner` uses while waiting on the child
@@ -40,6 +41,9 @@ pub enum JobError {
     /// No GPU was available and the caller supplied no fallback (e.g. no
     /// import path), so generation could not be attempted.
     NoGpu,
+    /// A required model file or the `loras` dir could not be resolved under
+    /// the configured assets-models directory.
+    ModelPath(ModelPathError),
 }
 
 /// A cooperative cancellation signal a `JobRunner` polls so a timed-out or
@@ -100,7 +104,6 @@ impl SdCliRunner {
 impl JobRunner for SdCliRunner {
     fn run(&self, invocation: &SdCliInvocation, cancel: &CancelFlag) -> Result<RunOutput, JobError> {
         let mut child = Command::new(&self.bin)
-            .arg(&invocation.model)
             .args(&invocation.args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

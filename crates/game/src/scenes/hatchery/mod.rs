@@ -221,7 +221,7 @@ impl Hatchery {
     fn production_asset_gen() -> AssetGen {
         let runner = SdCliRunner::sibling()
             .unwrap_or_else(|_| SdCliRunner::with_bin(std::path::PathBuf::from("sd-cli")));
-        AssetGen::new(std::sync::Arc::new(runner), Box::new(ZImageBackend), capability())
+        AssetGen::with_env_models(std::sync::Arc::new(runner), Box::new(ZImageBackend), capability())
     }
 
     /// Production `TextGenFactory`: builds a real `TextGen` from whatever
