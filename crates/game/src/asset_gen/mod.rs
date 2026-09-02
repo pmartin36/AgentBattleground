@@ -9,7 +9,9 @@ pub mod bg_removal;
 pub mod cache;
 pub mod capability;
 pub mod compose;
+pub mod frame_extract;
 pub mod job;
+mod live_test;
 pub mod model_paths;
 pub mod operations;
 pub mod preset;
@@ -25,6 +27,7 @@ pub use bg_removal::{
 pub use cache::AssetCache;
 pub use capability::{capability, GpuCapability};
 pub use compose::{AnimationSetHandle, ImageWithAnimations};
+pub use frame_extract::{FfmpegExtractor, FrameExtractError, FrameExtractor};
 pub use job::{JobHandle, JobQueue, JobStatus};
 pub use model_paths::{ModelPathError, ModelPaths, ENV_MODELS_DIR};
 pub use operations::{resolve_status, AssetError, AssetGen, DEFAULT_JOB_TIMEOUT};

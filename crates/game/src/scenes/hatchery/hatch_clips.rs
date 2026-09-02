@@ -277,11 +277,10 @@ mod tests {
             }
             let o_idx = invocation.args.iter().position(|a| a == "-o").expect("-o arg present");
             let out_path = PathBuf::from(&invocation.args[o_idx + 1]);
-            let dir = out_path.parent().unwrap().to_path_buf();
-            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::create_dir_all(out_path.parent().unwrap()).unwrap();
             let mut img = RgbaImage::from_pixel(4, 4, Rgba([0, 255, 0, 255]));
             img.put_pixel(2, 2, Rgba([0, 0, 255, 255]));
-            img.save(dir.join("f_000.png")).unwrap();
+            img.save(&out_path).unwrap();
             Ok(RunOutput { stdout: String::new() })
         }
     }
@@ -293,6 +292,7 @@ mod tests {
             capability,
             AssetGen::test_models(),
         )
+        .with_extractor(AssetGen::test_extractor())
     }
 
     /// Builds a hermetic store seeded with one egg and a `Hatchery` scene

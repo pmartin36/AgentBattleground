@@ -15,6 +15,7 @@ use super::backend_image::key_color_for;
 use super::bg_removal::{remove_frame_background, remove_still_background};
 use super::cache::AssetCache;
 use super::capability::GpuCapability;
+use super::frame_extract::{FfmpegExtractor, FrameExtractor};
 use super::job::{JobHandle, JobQueue, JobStatus};
 use super::model_paths::{ModelPathError, ModelPaths};
 use super::recipe::RecipeBackend;
@@ -96,6 +97,18 @@ pub(crate) fn clip_out_frames_dir(image: &ImageAsset, action: &str) -> PathBuf {
         .join(format!("{:x}.frames", clip_hash(image, action)))
 }
 
+/// The path the runner's `-o` arg is pointed at for a `vid_gen` invocation's
+/// single video output, for a given `(image, action)`. Kept in a directory
+/// distinct from `clip_raw_frames_dir` so the video file the extractor reads
+/// is never mixed in with (and miscounted as) one of the frames
+/// `materialize_clip` reads.
+pub(crate) fn clip_video_out_path(image: &ImageAsset, action: &str) -> PathBuf {
+    std::env::temp_dir()
+        .join("abg_assets")
+        .join(format!("{:x}.video", clip_hash(image, action)))
+        .join("anim.png")
+}
+
 fn clip_hash(image: &ImageAsset, action: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     image.hash(&mut hasher);
@@ -112,6 +125,7 @@ pub struct AssetGen {
     image_backend: Box<dyn RecipeBackend<Request = ImageRequest>>,
     timeout: Duration,
     resolver: Result<ModelPaths, ModelPathError>,
+    extractor: Arc<dyn FrameExtractor>,
 }
 
 impl AssetGen {
@@ -140,7 +154,16 @@ impl AssetGen {
             image_backend,
             timeout,
             resolver: Ok(models),
+            extractor: Arc::new(FfmpegExtractor),
         }
+    }
+
+    /// Overrides the frame extractor, for a test that must observe or fake
+    /// the video-to-frames step without spawning a real `ffmpeg`.
+    #[cfg(test)]
+    pub(crate) fn with_extractor(mut self, extractor: Arc<dyn FrameExtractor>) -> Self {
+        self.extractor = extractor;
+        self
     }
 
     /// Production entry: the ONLY constructor that reads
@@ -159,6 +182,7 @@ impl AssetGen {
             image_backend,
             timeout: DEFAULT_JOB_TIMEOUT,
             resolver: ModelPaths::from_env(),
+            extractor: Arc::new(FfmpegExtractor),
         }
     }
 
@@ -168,6 +192,13 @@ impl AssetGen {
     #[cfg(test)]
     pub(crate) fn test_models() -> ModelPaths {
         ModelPaths::unchecked(std::env::temp_dir().join("abg-test-models"))
+    }
+
+    /// The one shared fake extractor every animation test site injects
+    /// instead of spawning a real `ffmpeg`.
+    #[cfg(test)]
+    pub(crate) fn test_extractor() -> Arc<dyn FrameExtractor> {
+        Arc::new(crate::asset_gen::frame_extract::DuplicatingFakeExtractor)
     }
 
     /// The GPU capability this `AssetGen` was constructed with, so a caller
@@ -264,7 +295,7 @@ impl AssetGen {
 
         let job = H3Job {
             init_img: clean_still_path,
-            output: clip_raw_frames_dir(image, &request.action).join("anim.png"),
+            output: clip_video_out_path(image, &request.action),
             prompt: request.prompt.clone(),
             key: key.clone(),
             frames: request.params.frames,
@@ -275,10 +306,19 @@ impl AssetGen {
             Err(e) => return JobHandle::resolved(JobStatus::Failed(JobError::ModelPath(e))),
         };
 
+        let extractor = Arc::clone(&self.extractor);
+        let video_out = job.output.clone();
+        let frames_dir = clip_raw_frames_dir(image, &request.action);
+        let frames = request.params.frames;
+        let fps = request.params.fps;
+
         let cache = Arc::clone(&self.cache);
         let materialize_image = image.clone();
         let materialize_action = request.action.clone();
         self.queue.submit(invocation, self.timeout, move |output: RunOutput| {
+            if let Err(e) = extractor.extract(&video_out, &frames_dir, frames, fps) {
+                tracing::warn!("frame extraction failed for {video_out:?}: {e}");
+            }
             materialize_clip(&cache, &materialize_image, &materialize_action, key, output)
         })
     }
@@ -459,15 +499,15 @@ mod tests {
         }
     }
 
-    /// Stands in for `sd-cli` + the frame-extraction step: reads the `-o`
-    /// invocation arg (an `anim.png` path inside the clip's raw-frames dir)
-    /// and writes `frame_count` synthetic solid-`field` PNG frames (each
-    /// with an opaque blue subject rect) into that directory, zero-padded in
-    /// playback order. Captures the `--init-img` and `-p` args it received,
-    /// and counts how many times it ran.
+    /// Stands in for `sd-cli`'s video-generation step: reads the `-o`
+    /// invocation arg and writes ONE synthetic solid-`field` PNG (with an
+    /// opaque blue subject rect) to that exact path, standing in for the
+    /// single video a real `vid_gen` run produces. Captures the `--init-img`
+    /// and `-p` args it received, and counts how many times it ran; frame
+    /// extraction (multiplying this one image into a sequence) is the
+    /// injected `FrameExtractor`'s job, not the runner's.
     struct KeyColorFramesRunner {
         calls: Arc<AtomicUsize>,
-        frame_count: u32,
         field: [u8; 4],
         captured_init_img: Arc<Mutex<Option<PathBuf>>>,
         captured_prompt: Arc<Mutex<Option<String>>>,
@@ -479,13 +519,10 @@ mod tests {
 
             let o_idx = invocation.args.iter().position(|a| a == "-o").expect("-o arg present");
             let out_path = PathBuf::from(&invocation.args[o_idx + 1]);
-            let dir = out_path.parent().unwrap().to_path_buf();
-            std::fs::create_dir_all(&dir).unwrap();
-            for i in 0..self.frame_count {
-                let mut img = RgbaImage::from_pixel(4, 4, Rgba(self.field));
-                img.put_pixel(2, 2, Rgba([0, 0, 255, 255]));
-                img.save(dir.join(format!("f_{i:03}.png"))).unwrap();
-            }
+            std::fs::create_dir_all(out_path.parent().unwrap()).unwrap();
+            let mut img = RgbaImage::from_pixel(4, 4, Rgba(self.field));
+            img.put_pixel(2, 2, Rgba([0, 0, 255, 255]));
+            img.save(&out_path).unwrap();
 
             if let Some(idx) = invocation.args.iter().position(|a| a == "--init-img") {
                 *self.captured_init_img.lock().unwrap() = Some(PathBuf::from(&invocation.args[idx + 1]));
@@ -665,12 +702,12 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let runner: Arc<dyn JobRunner> = Arc::new(KeyColorFramesRunner {
             calls: calls.clone(),
-            frame_count: 3,
             field: [0, 255, 0, 255],
             captured_init_img: Arc::new(Mutex::new(None)),
             captured_prompt: Arc::new(Mutex::new(None)),
         });
-        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available, AssetGen::test_models());
+        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available, AssetGen::test_models())
+            .with_extractor(AssetGen::test_extractor());
         let still = synthetic_still("anim_frames", [0, 0, 255, 255]);
 
         let clip = match gen
@@ -696,12 +733,12 @@ mod tests {
         let captured_init_img = Arc::new(Mutex::new(None));
         let runner: Arc<dyn JobRunner> = Arc::new(KeyColorFramesRunner {
             calls: Arc::new(AtomicUsize::new(0)),
-            frame_count: 1,
             field: [0, 255, 0, 255],
             captured_init_img: captured_init_img.clone(),
             captured_prompt: Arc::new(Mutex::new(None)),
         });
-        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available, AssetGen::test_models());
+        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available, AssetGen::test_models())
+            .with_extractor(AssetGen::test_extractor());
         let still = synthetic_still("anim_preclean", [0, 0, 255, 255]);
 
         gen.generate_animation(&still, animation_req("idle", 1, 24)).wait();
@@ -733,12 +770,12 @@ mod tests {
         let captured_prompt = Arc::new(Mutex::new(None));
         let runner: Arc<dyn JobRunner> = Arc::new(KeyColorFramesRunner {
             calls: Arc::new(AtomicUsize::new(0)),
-            frame_count: 1,
             field: [255, 0, 255, 255],
             captured_init_img: Arc::new(Mutex::new(None)),
             captured_prompt: captured_prompt.clone(),
         });
-        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available, AssetGen::test_models());
+        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available, AssetGen::test_models())
+            .with_extractor(AssetGen::test_extractor());
         let still = synthetic_still("anim_green_family", [0, 220, 80, 255]);
 
         let clip = match gen.generate_animation(&still, animation_req("hatch", 1, 24)).wait() {
@@ -768,12 +805,12 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let runner: Arc<dyn JobRunner> = Arc::new(KeyColorFramesRunner {
             calls: calls.clone(),
-            frame_count: 2,
             field: [0, 255, 0, 255],
             captured_init_img: Arc::new(Mutex::new(None)),
             captured_prompt: Arc::new(Mutex::new(None)),
         });
-        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available, AssetGen::test_models());
+        let gen = AssetGen::new(runner, Box::new(ZImageBackend), GpuCapability::Available, AssetGen::test_models())
+            .with_extractor(AssetGen::test_extractor());
         let still = synthetic_still("anim_repeat", [0, 0, 255, 255]);
         let request = animation_req("idle", 2, 24);
 
@@ -796,7 +833,6 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let runner: Arc<dyn JobRunner> = Arc::new(KeyColorFramesRunner {
             calls: calls.clone(),
-            frame_count: 1,
             field: [0, 255, 0, 255],
             captured_init_img: Arc::new(Mutex::new(None)),
             captured_prompt: Arc::new(Mutex::new(None)),
@@ -888,5 +924,81 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 0, "a missing model must never reach the runner");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Writes a single opaque byte blob to the invocation's `-o` path,
+    /// standing in for the one video file a `vid_gen` run produces (as
+    /// opposed to a frame sequence written directly there).
+    struct VideoFileRunner;
+
+    impl JobRunner for VideoFileRunner {
+        fn run(&self, invocation: &SdCliInvocation, _cancel: &CancelFlag) -> Result<RunOutput, JobError> {
+            let o_idx = invocation.args.iter().position(|a| a == "-o").expect("-o arg present");
+            let out_path = PathBuf::from(&invocation.args[o_idx + 1]);
+            std::fs::create_dir_all(out_path.parent().unwrap()).unwrap();
+            std::fs::write(&out_path, b"not-a-real-video").unwrap();
+            Ok(RunOutput { stdout: String::new() })
+        }
+    }
+
+    /// Records the `video_out` path it was invoked with and writes `frames`
+    /// synthetic PNGs into `frames_dir`, standing in for a real
+    /// video-to-frames extraction step.
+    struct RecordingExtractor {
+        captured_video_out: Arc<Mutex<Option<PathBuf>>>,
+    }
+
+    impl crate::asset_gen::frame_extract::FrameExtractor for RecordingExtractor {
+        fn extract(
+            &self,
+            video_out: &std::path::Path,
+            frames_dir: &std::path::Path,
+            frames: u32,
+            _fps: u32,
+        ) -> Result<(), crate::asset_gen::frame_extract::FrameExtractError> {
+            *self.captured_video_out.lock().unwrap() = Some(video_out.to_path_buf());
+            std::fs::create_dir_all(frames_dir).unwrap();
+            for i in 0..frames {
+                let mut img = RgbaImage::from_pixel(4, 4, Rgba([0, 255, 0, 255]));
+                img.put_pixel(2, 2, Rgba([0, 0, 255, 255]));
+                img.save(frames_dir.join(format!("f_{i:03}.png"))).unwrap();
+            }
+            Ok(())
+        }
+    }
+
+    /// The injected frame extractor runs against a video-output path
+    /// distinct from `clip_raw_frames_dir`, the directory `materialize_clip`
+    /// reads frames from, so the raw video is never miscounted as a frame.
+    #[test]
+    fn generate_animation_extracts_from_a_dedicated_video_path() {
+        let captured_video_out = Arc::new(Mutex::new(None));
+        let gen = AssetGen::new(
+            Arc::new(VideoFileRunner),
+            Box::new(ZImageBackend),
+            GpuCapability::Available,
+            AssetGen::test_models(),
+        )
+        .with_extractor(Arc::new(RecordingExtractor {
+            captured_video_out: captured_video_out.clone(),
+        }));
+        let still = synthetic_still("anim_extract_path", [0, 0, 255, 255]);
+
+        match gen.generate_animation(&still, animation_req("attack", 2, 24)).wait() {
+            JobStatus::Success(_) => {}
+            other => panic!("expected Success, got {other:?}"),
+        }
+
+        let expected = clip_video_out_path(&still, "attack");
+        assert_eq!(
+            captured_video_out.lock().unwrap().clone(),
+            Some(expected.clone()),
+            "extraction must run on the dedicated video-output path"
+        );
+        assert_ne!(
+            expected,
+            clip_raw_frames_dir(&still, "attack").join("anim.png"),
+            "the video path must be distinct from the frames directory materialize_clip reads"
+        );
     }
 }

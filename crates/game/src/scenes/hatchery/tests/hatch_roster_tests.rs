@@ -417,16 +417,15 @@ fn incubating_egg_with_art(egg_art: Option<ImageAsset>, name: &str) -> Egg {
     }
 }
 
-/// Writes one synthetic frame to `invocation`'s output directory, standing
-/// in for a successful animation-generation run.
+/// Writes one synthetic video-like image to `invocation`'s `-o` path,
+/// standing in for a successful animation-generation run.
 fn write_synthetic_frame(invocation: &SdCliInvocation) {
     let o_idx = invocation.args.iter().position(|a| a == "-o").expect("-o arg present");
     let out_path = PathBuf::from(&invocation.args[o_idx + 1]);
-    let dir = out_path.parent().unwrap().to_path_buf();
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(out_path.parent().unwrap()).unwrap();
     let mut img = RgbaImage::from_pixel(4, 4, Rgba([0, 255, 0, 255]));
     img.put_pixel(2, 2, Rgba([0, 0, 255, 255]));
-    img.save(dir.join("f_000.png")).unwrap();
+    img.save(&out_path).unwrap();
 }
 
 /// A `JobRunner` that counts invocations and always succeeds immediately,
@@ -450,6 +449,7 @@ fn succeeding_asset_gen(calls: Arc<AtomicUsize>) -> AssetGen {
         GpuCapability::Available,
         AssetGen::test_models(),
     )
+    .with_extractor(AssetGen::test_extractor())
 }
 
 /// A `JobRunner` that succeeds on every call, but blocks calls numbered
@@ -483,6 +483,7 @@ fn gated_asset_gen(calls: Arc<AtomicUsize>, hold_from: usize, gate: Arc<(Mutex<b
         GpuCapability::Available,
         AssetGen::test_models(),
     )
+    .with_extractor(AssetGen::test_extractor())
 }
 
 fn release_gate(gate: &Arc<(Mutex<bool>, Condvar)>) {
