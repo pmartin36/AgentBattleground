@@ -4,6 +4,7 @@
 //! the tray (via `detail_layout`) that shows an `Incubating` egg's countdown.
 
 mod detail_layout;
+mod edit;
 mod focus;
 mod hatch;
 mod hatch_clips;
@@ -15,6 +16,9 @@ mod hatch_roster;
 mod lifecycle;
 #[cfg(test)]
 mod local_model_e2e_tests;
+mod mad_lib_paragraph;
+#[cfg(test)]
+mod mad_lib_paragraph_tests;
 mod selection;
 mod tray;
 pub mod definition;
@@ -86,6 +90,11 @@ pub struct Hatchery {
     /// `enter_edit` and cleared by `exit_edit`; empty while browsing.
     #[inspect(hidden)]
     blank_editors: Vec<RefCell<TextEditor>>,
+    /// The inline submit affordance shown only while editing, positioned
+    /// over the detail body region's bottom-right corner each render; see
+    /// `edit::try_submit_edit`.
+    #[inspect(hidden)]
+    submit_button: RefCell<engine_render::Button>,
     /// Image-generation dependency, read by the definition pipeline once a
     /// sentence is submitted.
     #[inspect(hidden)]
@@ -138,6 +147,7 @@ impl Hatchery {
             selected: None,
             mode: HatcheryMode::Browsing { hover: 0 },
             blank_editors: Vec::new(),
+            submit_button: RefCell::new(Self::new_submit_button()),
             asset_gen: Self::production_asset_gen(),
             model_config: resolve_model_config(),
             text_gen_factory: Self::production_text_gen_factory(),
@@ -205,6 +215,7 @@ impl Hatchery {
             selected: None,
             mode: HatcheryMode::Browsing { hover: 0 },
             blank_editors: Vec::new(),
+            submit_button: RefCell::new(Self::new_submit_button()),
             asset_gen,
             model_config,
             text_gen_factory,
@@ -366,6 +377,12 @@ impl Hatchery {
     fn back_dot_rect(area: Rect) -> engine_render::DotRect {
         crate::scenes::home_button::home_dot_rect(area)
     }
+
+    /// A fresh, idle "Submit" button with no rect yet — positioned every
+    /// render by `edit::draw_submit_button`.
+    fn new_submit_button() -> engine_render::Button {
+        engine_render::Button::new(Rect::default(), crate::assets::FRAME_PANEL).label("Submit")
+    }
 }
 
 impl Default for Hatchery {
@@ -420,7 +437,7 @@ impl Scene for Hatchery {
         self.draw_tray(frame.buffer_mut(), area);
 
         if let Some(f) = self.selected {
-            let (egg_dr, _body, _tray) = detail_layout::detail_layout(area);
+            let (egg_dr, body, _tray) = detail_layout::detail_layout(area);
             tray::draw_egg(
                 frame.buffer_mut(),
                 egg_dr,
@@ -430,6 +447,10 @@ impl Scene for Hatchery {
             );
             if let Some(rem) = lifecycle::remaining(&self.eggs[f], SystemTime::now()) {
                 focus::draw_countdown(frame.buffer_mut(), egg_dr, rem);
+            }
+            if let Some(editing) = self.editing_egg() {
+                self.draw_editing_paragraph(frame.buffer_mut(), body, editing);
+                self.draw_submit_button(frame.buffer_mut(), body);
             }
         }
 
@@ -452,8 +473,8 @@ impl Scene for Hatchery {
         }
 
         if let InputEvent::Key(key) = &ev {
-            if let HatcheryMode::Browsing { hover } = self.mode {
-                match key.code {
+            match self.mode {
+                HatcheryMode::Browsing { hover } => match key.code {
                     KeyCode::Left | KeyCode::Up | KeyCode::BackTab => {
                         self.mode =
                             HatcheryMode::Browsing { hover: Self::step_hover(hover, self.eggs.len(), false) };
@@ -464,7 +485,31 @@ impl Scene for Hatchery {
                     }
                     KeyCode::Enter => self.on_egg_tapped(hover),
                     _ => {}
-                }
+                },
+                HatcheryMode::Editing { active_blank } => match key.code {
+                    // Esc is the standard close/back affordance: return to
+                    // browsing and leave the egg undefined, exactly like the
+                    // old modal's X.
+                    KeyCode::Esc => self.exit_edit(),
+                    // Tab/Shift-Tab mean "next/previous blank" while editing
+                    // — they must never fall through to the egg-switching
+                    // meaning they carry in Browsing.
+                    KeyCode::Tab => {
+                        self.mode = HatcheryMode::Editing {
+                            active_blank: Self::step_hover(active_blank, self.blank_editors.len(), true),
+                        };
+                    }
+                    KeyCode::BackTab => {
+                        self.mode = HatcheryMode::Editing {
+                            active_blank: Self::step_hover(active_blank, self.blank_editors.len(), false),
+                        };
+                    }
+                    _ => {
+                        if let Some(editor) = self.blank_editors.get(active_blank) {
+                            editor.borrow_mut().handle_key(*key);
+                        }
+                    }
+                },
             }
         }
 
@@ -474,6 +519,13 @@ impl Scene for Hatchery {
                     target: crate::scene_id::SceneId::RosterManager.into(),
                     params: None,
                 });
+            }
+
+            if matches!(self.mode, HatcheryMode::Editing { .. })
+                && self.submit_button.get_mut().handle_mouse(&me)
+            {
+                self.try_submit_edit();
+                return None;
             }
 
             let mut tapped = None;
@@ -753,4 +805,8 @@ mod tests {
     // `tests/browse_tests.rs`, kept out of this file for the same reason as
     // hatch_sequence_tests.
     mod browse_tests;
+    // Inline edit-mode input routing + submit-gate tests live in
+    // `tests/edit_tests.rs`, kept out of this file for the same reason as
+    // hatch_sequence_tests.
+    mod edit_tests;
 }
