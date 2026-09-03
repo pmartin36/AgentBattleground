@@ -2,65 +2,17 @@ use super::*;
 
 impl RosterManager {
     /// Border thickness in dots per edge — shared by every procedurally drawn
-    /// border on this screen (details panel + stat-bar outlines).
-    const BORDER_THICKNESS: usize = 1;
+    /// border on this screen (details panel + stat-bar outlines). `pub(super)`
+    /// so the sibling `stat_bar` module can pass it into the shared
+    /// `stat_bar::StatBarChrome` as this screen's chrome.
+    pub(super) const BORDER_THICKNESS: usize = 1;
     /// Corner chamfer in dots — the outermost `CHAMFER` dots at each of the 4
     /// corners are clipped along a 45° diagonal so the corner reads as
     /// rounded rather than a hard square. At `BORDER_THICKNESS == 1` this
     /// clips exactly the single corner dot per corner (visually confirmed as
     /// "rounded enough" against a live prototype; a 2-dot chamfer read as too
-    /// heavy).
-    const CHAMFER: usize = 1;
-
-    /// Like `engine_render::draw_dot_border`'s underlying `rounded_rect`, but
-    /// with an asymmetric edge thickness: left/right sides stay
-    /// `BORDER_THICKNESS` dots thick, while the top/bottom caps are
-    /// `v_thickness` dots thick — e.g. the stat bars' 2-dot hug caps, which a
-    /// uniform border thickness can't produce (it would need either a
-    /// 2-dot-thick border on every side, or a 1-dot cap that isn't what was
-    /// asked for). Same single-dot `CHAMFER` corner clip as
-    /// `engine_render::draw_dot_border` — the clip only compares
-    /// distance-from-edge on each axis independently, so it reads
-    /// identically rounded regardless of this box's differing
-    /// horizontal/vertical thickness.
-    pub(super) fn draw_dot_cap_box(
-        dots: &mut DotBuffer,
-        left: usize,
-        top: usize,
-        right: usize,
-        bottom: usize,
-        v_thickness: usize,
-        color: engine_core::color::Rgba,
-    ) {
-        let h_thickness = Self::BORDER_THICKNESS;
-        let chamfer = Self::CHAMFER;
-        for row in top..=bottom {
-            for col in left..=right {
-                let d_left = col - left;
-                let d_right = right - col;
-                let d_top = row - top;
-                let d_bottom = bottom - row;
-
-                let in_border = d_left < h_thickness
-                    || d_right < h_thickness
-                    || d_top < v_thickness
-                    || d_bottom < v_thickness;
-                if !in_border {
-                    continue;
-                }
-
-                let clipped = (d_left < chamfer && d_top < chamfer && d_left + d_top < chamfer)
-                    || (d_right < chamfer && d_top < chamfer && d_right + d_top < chamfer)
-                    || (d_left < chamfer && d_bottom < chamfer && d_left + d_bottom < chamfer)
-                    || (d_right < chamfer && d_bottom < chamfer && d_right + d_bottom < chamfer);
-                if clipped {
-                    continue;
-                }
-
-                dots.set(col, row, Dot::Lit(color));
-            }
-        }
-    }
+    /// heavy). `pub(super)` for the same reason as `BORDER_THICKNESS`.
+    pub(super) const CHAMFER: usize = 1;
 
     /// Draws a chamfered-corner rectangular border filling `rect`'s perimeter
     /// via the dot pipeline — a thin delegation to

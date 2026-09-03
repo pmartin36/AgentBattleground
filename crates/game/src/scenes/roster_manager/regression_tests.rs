@@ -166,7 +166,7 @@ mod sub_cell_precision_tests {
 
         // First slice's left border edge column: its topmost lit dot must sit
         // exactly one dot lower in the shifted render.
-        let slices = RosterManager::stat_slice_parts(base.to_cell_rect());
+        let slices = crate::scenes::stat_bar::stat_slice_parts(base.to_cell_rect());
         let (outline, _fill, _label) = slices[0];
         let col = outline.left();
         let top_a = topmost_lit_dot_row(&a, col, outline.top());

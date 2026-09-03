@@ -1,36 +1,6 @@
 use super::*;
 
 impl RosterManager {
-    /// v1 fill cap for the stat bars (b2-t3): a stat value >= this cap paints
-    /// a full-length bar. Spec 35 explicitly defers the exact cap as an
-    /// implementation detail (see research.md); this value keeps every
-    /// `demo_roster()` stat (range 8..34) partially-filled with clearly
-    /// distinct lengths.
-    const STAT_DISPLAY_CAP: u32 = 40;
-    /// Lit-dot colour for filled stat-bar segments — distinct chrome from
-    /// `NAME_COLOR`/`LEVEL_COLOR` (b2-t3).
-    const STAT_BAR_COLOR: engine_core::color::Rgba = engine_core::color::Rgba::rgb(0x4a, 0xd0, 0x8a);
-
-    /// Thickness (in dots) of the grey cap directly above/below the fill —
-    /// see `STAT_BAR_OUTLINE_H`.
-    const STAT_BAR_HUG_CAP_DOTS: usize = 2;
-    /// Reserved blank cells on the RIGHT of `stat_bar` that the 4 slices never
-    /// occupy, so the rightmost bar keeps genuine horizontal clearance from
-    /// the details panel's left border. The panel's left edge sits
-    /// `EDGE_MARGIN + DETAILS_LEFT_SHIFT` (2) cells inside `stat_bar.right()`
-    /// after spec 38 item 4 pulled the panel left, so reserving 4 keeps a real
-    /// two-cell-or-wider gap between the last bar and the (now closer) panel at
-    /// every tested width.
-    const STAT_BAR_DETAILS_MARGIN: u16 = 4;
-    /// Reserved blank cells on the LEFT of `stat_bar`, before the first bar
-    /// slice, so the leftmost bar has a deliberate left margin off the screen
-    /// edge rather than starting flush at `area.x`. Mirrors how
-    /// `STAT_BAR_DETAILS_MARGIN` reserves space on the right; the 4 slices
-    /// divide the width remaining between the two margins, so adding this
-    /// narrows each bar by a few dots rather than widening the group.
-    const STAT_BAR_LEFT_MARGIN: u16 = 2;
-    /// Gap (in cells) between adjacent stat-bar slices (b1-t6).
-    const STAT_BAR_GAP: u16 = 1;
     /// Fill length (in dot-columns, out of `dot_cols`) for `kind`'s bar, for
     /// the CURRENT frame (b2-t3). At rest (no active slide), the current
     /// creature's stat value scaled against `STAT_DISPLAY_CAP`. During an
@@ -40,7 +10,7 @@ impl RosterManager {
     /// use, no second transition state machine.
     pub(super) fn stat_fill_dots(&self, kind: crate::stats::StatKind, dot_cols: usize) -> usize {
         let to_dots = |v: u32| {
-            (v as f32 / Self::STAT_DISPLAY_CAP as f32).clamp(0.0, 1.0) * dot_cols as f32
+            (v as f32 / crate::scenes::stat_bar::STAT_DISPLAY_CAP as f32).clamp(0.0, 1.0) * dot_cols as f32
         };
         let fill = match self.active_slide() {
             None => to_dots(self.creatures[self.current_index].stats().value(kind)),
@@ -54,204 +24,27 @@ impl RosterManager {
         fill.round() as usize
     }
 
-    /// The 4 stat slices across `stat_bar` (`StatKind::ALL` order,
-    /// left->right), each as `(outline_rect, fill_interior_rect,
-    /// label_rect)` — sole source of stat-bar geometry; `render_stat_bars`
-    /// and `stat_bar_tests` both call it (research.md b1-t6 blueprint).
-    /// Built on `engine_render::flex()`/`DotRect` (b8-t7) — a Row `flex()`
-    /// with `Justify::Start`/`Align::Stretch` over cell-floored `Basis::Fixed`
-    /// slices, never hand-rolled x-accumulation — computing a slice width
-    /// that FILLS the width remaining between the left/right margins (rather
-    /// than centering a fixed-size group). Each slice reserves its bottom
-    /// `STAT_LABEL_H` row for the label (immediately below the outline, no
-    /// gap row); the rows above become the outline. `fill` is the middle
-    /// interior cell of the outline (inset a full cell on every side);
-    /// `render_stat_bars` draws the border box around the full outline and
-    /// lights THIS `fill` cell, so the top/bottom border and the fill land in
-    /// separate braille cells and neither overwrites the other.
-    pub(super) fn stat_slice_parts(stat_bar: Rect) -> Vec<(Rect, Rect, Rect)> {
-        let n = crate::stats::StatKind::ALL.len();
-        // Reserve `STAT_BAR_LEFT_MARGIN` cells before the first slice and
-        // `STAT_BAR_DETAILS_MARGIN` cells after the last, so the leftmost bar
-        // clears the screen edge and the rightmost bar clears the details
-        // panel's left border. The 4 slices divide the width remaining between
-        // those two margins, so both margins narrow each bar rather than
-        // widening the group past `stat_bar`.
-        let container = Self::cell_rect_to_dots(stat_bar).inset(
-            Self::STAT_BAR_LEFT_MARGIN as i32 * 2,
-            Self::STAT_BAR_DETAILS_MARGIN as i32 * 2,
-            0,
-            0,
-        );
-        // Slice width MUST stay floored at CELL granularity before ×2 to
-        // dots — computing `(container.w - gap_dots*(n-1))/n` directly in
-        // dots rounds differently and would silently change the layout.
-        let usable_cells = container.w / 2;
-        let slice_w_cells =
-            (usable_cells - Self::STAT_BAR_GAP as i32 * (n as i32 - 1)).max(0) / n as i32;
-        let children: Vec<engine_render::FlexChild> = (0..n)
-            .map(|_| engine_render::FlexChild {
-                basis: engine_render::Basis::Fixed(slice_w_cells * 2),
-                grow: 0.0,
-                shrink: 0.0,
-            })
-            .collect();
-        let slices = engine_render::flex(
-            container,
-            engine_render::FlexStyle {
-                direction: engine_render::Direction::Row,
-                justify_content: engine_render::Justify::Start,
-                align_items: engine_render::Align::Stretch,
-                gap: Self::STAT_BAR_GAP as i32 * 2,
-            },
-            &children,
-        );
-
-        slices
-            .into_iter()
-            .map(|s| s.to_cell_rect())
-            .map(|s| {
-                // Fixed, compact outline height at the TOP of the slice (so the
-                // bar sits level with the details box top), then the label on
-                // the row immediately below it (no gap row). Any slice height
-                // beyond that is deliberate bottom breathing room. All
-                // saturating/clamped so a too-short slice degrades gracefully.
-                let outline_h = Self::STAT_BAR_OUTLINE_H.min(s.height);
-                let outline = Rect::new(s.x, s.y, s.width, outline_h);
-                let label_h = Self::STAT_LABEL_H.min(s.height.saturating_sub(outline_h));
-                // Label sits on the row IMMEDIATELY below the outline — no
-                // blank gap row between the bar and its label.
-                let label_y = (s.y + outline_h).min(s.bottom().saturating_sub(label_h));
-                let label = Rect::new(s.x, label_y, s.width, label_h);
-                // `fill` is exactly the outline's MIDDLE cell — inset one full
-                // cell on every side — so it never shares a braille cell with
-                // the hug caps drawn directly above/below it (see
-                // `STAT_BAR_OUTLINE_H`).
-                let fill = Rect::new(
-                    outline.x.saturating_add(1),
-                    outline.y.saturating_add(1),
-                    outline.width.saturating_sub(2),
-                    outline.height.saturating_sub(2),
-                );
-                (outline, fill, label)
-            })
-            .collect()
-    }
-
-    /// Display label for `kind`'s slice (b1-t6) — an exhaustive `match`
-    /// over `StatKind`, mirroring `Stats::value`'s discipline (single stat
-    /// list, no second enumeration to drift out of sync). `pub(crate)` so
-    /// the hatchery's post-hatch stats panel reuses the same mapping
-    /// instead of hardcoding a second one.
-    pub(crate) fn stat_label(kind: crate::stats::StatKind) -> &'static str {
-        match kind {
-            crate::stats::StatKind::Strength => "STR",
-            crate::stats::StatKind::Dexterity => "DEX",
-            crate::stats::StatKind::Intelligence => "INT",
-            crate::stats::StatKind::Vitality => "VIT",
-        }
-    }
-
     /// Draws 4 side-by-side outlined, labeled stat bars (STR/DEX/INT/VIT,
-    /// `StatKind::ALL` order) into `rect` — no `col_offset`, so it never
-    /// travels with an in-flight sprite slide (b1-t3: static panel, b2-t3).
-    /// Geometry comes solely from `stat_slice_parts` (research.md b1-t6
-    /// blueprint). Per slice the border box AND the proportional
-    /// `STAT_BAR_COLOR` fill are built into ONE `DotBuffer` spanning the
-    /// `outline` rect and drawn with a single `draw_grid` (non-text chrome, so
-    /// they render through the dot pipeline — never `engine_render::fill`,
-    /// CLAUDE.md constraint 4): a rounded "hug" bracket (via `draw_dot_cap_box`)
-    /// wraps just the fill's own cell — `STAT_BAR_HUG_CAP_DOTS`-thick grey caps
-    /// directly above/below it, 1-dot left/right sides connecting them, with
-    /// the same chamfered corner used everywhere else on this screen — and the
-    /// fill lights `fill` — the outline's own middle cell — proportionally to
-    /// `stat_fill_dots`. Because `fill` never shares a braille cell with the
-    /// caps (see `STAT_BAR_OUTLINE_H`), the border always renders as a
-    /// complete, crisp bracket at any fill amount, including zero. A
-    /// plain-text `stat_label(kind)` sits on the row immediately beneath.
-    ///
-    /// `rect` (the stat-bar band) is honored at DOT precision, not floored to
-    /// the nearest cell first — the same sub-cell placement technique
-    /// `draw_dot_border` uses. The band's whole-cell footprint (`to_cell_rect`)
-    /// drives `stat_slice_parts`' cell-granular slice/outline/label geometry,
-    /// while the band's sub-cell remainder `(dx, dy)` offsets every slice's
-    /// DOT content uniformly inside its buffer before the single per-slice
-    /// `draw_grid`, so the whole band's true dot position survives the floor.
-    /// Labels are text, so they render at cell granularity (offset by the
-    /// same floored origin) — text can't be placed sub-cell. Today `(dx, dy)`
-    /// is `(0, 0)` (the band is cell-aligned), so this is byte-identical to a
-    /// cell-only draw; the offset only bites once an upstream sub-cell dot
-    /// value is introduced, exactly as it did for `draw_dot_border`.
+    /// `StatKind::ALL` order) into `rect` — a thin forwarder onto the shared
+    /// `stat_bar::draw_stat_bars` renderer, passing this roster's own
+    /// interpolated fill (`stat_fill_dots`) at full opacity and this
+    /// screen's chrome. Byte-identical to the pre-migration inlined
+    /// renderer by construction (same arithmetic path, same closure,
+    /// opacity 1.0).
     pub(super) fn render_stat_bars(&self, buf: &mut Buffer, rect: engine_render::DotRect) {
-        let cell_rect = rect.to_cell_rect();
-        let (dxr, dyr) = rect.cell_remainder();
-        let (dx, dy) = (dxr as usize, dyr as usize);
-        for ((outline, fill, label), kind) in
-            Self::stat_slice_parts(cell_rect).into_iter().zip(crate::stats::StatKind::ALL)
-        {
-            let dot_cols = outline.width as usize * 2;
-            let dot_rows = outline.height as usize * 4;
-            if dot_cols > 0 && dot_rows > 0 && fill.width > 0 && fill.height > 0 {
-                // Buffer sized to include the sub-cell remainder; all content
-                // is drawn OFFSET by `(dx, dy)` within it, so the outline's
-                // true position survives the eventual cell floor.
-                let mut dots = DotBuffer::new(dot_cols + dx, dot_rows + dy);
-
-                // Fill-cell dot bounds within the outline's dot grid (the
-                // middle cell — see `stat_slice_parts`), shifted by `(dx, dy)`.
-                let fx0 = dx + (fill.x - outline.x) as usize * 2;
-                let fy0 = dy + (fill.y - outline.y) as usize * 4;
-                let fill_dot_cols = fill.width as usize * 2;
-                let fill_dot_rows = fill.height as usize * 4;
-
-                // Rounded hug bracket: `STAT_BAR_HUG_CAP_DOTS`-thick caps
-                // directly above/below the fill's own cell, 1-dot left/right
-                // sides spanning that same hugged range, chamfered corners.
-                let hug_top = fy0.saturating_sub(Self::STAT_BAR_HUG_CAP_DOTS);
-                let hug_bottom = (fy0 + fill_dot_rows + Self::STAT_BAR_HUG_CAP_DOTS)
-                    .min(dot_rows + dy)
-                    .saturating_sub(1);
-                Self::draw_dot_cap_box(
-                    &mut dots,
-                    dx,
-                    hug_top,
-                    dx + dot_cols - 1,
-                    hug_bottom,
-                    Self::STAT_BAR_HUG_CAP_DOTS,
-                    Self::BORDER_COLOR,
-                );
-
-                let n = self.stat_fill_dots(kind, fill_dot_cols);
-                for row in fy0..fy0 + fill_dot_rows {
-                    for col in 0..n {
-                        dots.set(fx0 + col, row, Dot::Lit(Self::STAT_BAR_COLOR));
-                    }
-                }
-
-                let grid = dots_to_grid(&dots);
-                let draw_area = Rect {
-                    x: outline.x,
-                    y: outline.y,
-                    width: grid.cols() as u16,
-                    height: grid.rows() as u16,
-                };
-                engine_render::draw_grid(buf, draw_area, &grid);
-            }
-
-            engine_render::label(
-                buf,
-                label,
-                Self::stat_label(kind),
-                engine_render::TextAlign::Center,
-                ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(
-                    Self::DOT_LABEL_COLOR.r,
-                    Self::DOT_LABEL_COLOR.g,
-                    Self::DOT_LABEL_COLOR.b,
-                )),
-            );
-        }
+        crate::scenes::stat_bar::draw_stat_bars(
+            buf,
+            rect,
+            |kind, cols| self.stat_fill_dots(kind, cols),
+            1.0,
+            crate::scenes::stat_bar::StatBarChrome {
+                border_color: Self::BORDER_COLOR,
+                label_color: Self::DOT_LABEL_COLOR,
+                h_thickness: Self::BORDER_THICKNESS,
+                chamfer: Self::CHAMFER,
+            },
+        );
     }
-
 }
 
 /// b1-t6: 4 stat bars (STR/DEX/INT/VIT, `StatKind::ALL` order) rendered as
@@ -310,7 +103,7 @@ mod stat_bar_tests {
         for (w, h) in [(80u16, 30u16), (40u16, 20u16), (60u16, 24u16)] {
             let area = Rect::new(0, 0, w, h);
             let stat_bar = RosterManager::stat_bar_rect(area);
-            let slices = RosterManager::stat_slice_parts(stat_bar);
+            let slices = crate::scenes::stat_bar::stat_slice_parts(stat_bar);
             let (last_outline, _fill, _label) = *slices.last().unwrap();
             let panel_left = RosterManager::stamina_rect(area).x; // details panel border's left column
 
@@ -334,10 +127,10 @@ mod stat_bar_tests {
     #[test]
     fn stat_bar_fill_is_short_and_band_is_tight() {
         let stat_bar = RosterManager::stat_bar_rect(area());
-        let slices = RosterManager::stat_slice_parts(stat_bar);
+        let slices = crate::scenes::stat_bar::stat_slice_parts(stat_bar);
         for (i, (outline, _fill, label)) in slices.iter().enumerate() {
             assert_eq!(
-                outline.height, RosterManager::STAT_BAR_OUTLINE_H,
+                outline.height, crate::scenes::stat_bar::STAT_BAR_OUTLINE_H,
                 "slice {i}: outline must be the fixed compact height, not stretched to fill the band"
             );
             // The band is exactly outline + label — no padding cell.
@@ -365,7 +158,7 @@ mod stat_bar_tests {
     fn stat_bar_band_is_tight_and_sprite_grows() {
         assert_eq!(
             RosterManager::STAT_BAR_BAND_H,
-            RosterManager::STAT_BAR_OUTLINE_H + RosterManager::STAT_LABEL_H,
+            crate::scenes::stat_bar::STAT_BAR_OUTLINE_H + crate::scenes::stat_bar::STAT_LABEL_H,
             "STAT_BAR_BAND_H must be exactly outline+label, with no padding cell"
         );
 
@@ -408,7 +201,7 @@ mod stat_bar_tests {
     fn slices_are_four_disjoint_ordered_columns() {
         for w in [40u16, 80u16] {
             let stat_bar = RosterManager::stat_bar_rect(Rect::new(0, 0, w, 30));
-            let slices = RosterManager::stat_slice_parts(stat_bar);
+            let slices = crate::scenes::stat_bar::stat_slice_parts(stat_bar);
             assert_eq!(slices.len(), 4, "expected 4 stat slices at width {w}");
 
             for i in 0..slices.len() - 1 {
@@ -434,7 +227,7 @@ mod stat_bar_tests {
     fn zero_fill_slice_still_outlined() {
         let buf = render_with_stats(only_stat(StatKind::Strength, 0));
         let stat_bar = RosterManager::stat_bar_rect(area());
-        let slices = RosterManager::stat_slice_parts(stat_bar);
+        let slices = crate::scenes::stat_bar::stat_slice_parts(stat_bar);
         let (outline, _fill, _label) = slices[0]; // Strength == StatKind::ALL[0]
 
         // Top and bottom edges of the border box, across the bar's width.
@@ -476,7 +269,7 @@ mod stat_bar_tests {
     #[test]
     fn fill_length_scales_with_stat_value() {
         let stat_bar = RosterManager::stat_bar_rect(area());
-        let slices = RosterManager::stat_slice_parts(stat_bar);
+        let slices = crate::scenes::stat_bar::stat_slice_parts(stat_bar);
         let (outline, _fill, _label) = slices[1]; // Dexterity == StatKind::ALL[1]
 
         // Rightmost column within `outline` whose fg is green-dominant (the
@@ -530,7 +323,7 @@ mod stat_bar_tests {
     fn label_renders_beneath_its_own_bar() {
         let buf = render_to_buffer(&RosterManager::new(), area().width, area().height);
         let stat_bar = RosterManager::stat_bar_rect(area());
-        let slices = RosterManager::stat_slice_parts(stat_bar);
+        let slices = crate::scenes::stat_bar::stat_slice_parts(stat_bar);
 
         for (i, kind) in StatKind::ALL.into_iter().enumerate() {
             let (outline, _fill, label_rect) = slices[i];
@@ -538,7 +331,7 @@ mod stat_bar_tests {
                 label_rect.y >= outline.bottom(),
                 "slice {i}'s label must sit at/below its own outline's bottom edge"
             );
-            let expected = RosterManager::stat_label(kind);
+            let expected = crate::scenes::stat_bar::stat_label(kind);
             let text = rect_text(&buf, label_rect);
             assert!(
                 text.contains(expected),
@@ -607,7 +400,7 @@ mod stat_bar_tests {
         // render path and this assertion, so this still exercises the real
         // lerp logic end-to-end via a real `RosterManager` slide.
         let stat_bar = RosterManager::stat_bar_rect(area());
-        let slices = RosterManager::stat_slice_parts(stat_bar);
+        let slices = crate::scenes::stat_bar::stat_slice_parts(stat_bar);
         let (_outline, dex_fill, _label) = slices[1]; // Dexterity == StatKind::ALL[1]
         let dot_cols = dex_fill.width as usize * 2;
 
@@ -651,7 +444,7 @@ mod stat_bar_tests {
         // to luma-blend over the border rows).
         let buf = render_with_stats(only_stat(StatKind::Strength, 0));
         let stat_bar = RosterManager::stat_bar_rect(area());
-        let slices = RosterManager::stat_slice_parts(stat_bar);
+        let slices = crate::scenes::stat_bar::stat_slice_parts(stat_bar);
         let (outline, _fill, label) = slices[0]; // Strength == StatKind::ALL[0]
 
         const CELL_TOP_HALF: u32 = (1 << 0) | (1 << 3) | (1 << 1) | (1 << 4);
@@ -703,11 +496,11 @@ mod stat_bar_tests {
     fn first_bar_has_left_margin() {
         for w in [40u16, 60u16, 80u16] {
             let stat_bar = RosterManager::stat_bar_rect(Rect::new(0, 0, w, 30));
-            let slices = RosterManager::stat_slice_parts(stat_bar);
+            let slices = crate::scenes::stat_bar::stat_slice_parts(stat_bar);
             let (first_outline, _fill, _label) = slices[0];
             assert_eq!(
                 first_outline.left(),
-                stat_bar.x + RosterManager::STAT_BAR_LEFT_MARGIN,
+                stat_bar.x + crate::scenes::stat_bar::STAT_BAR_LEFT_MARGIN,
                 "w={w}: first bar must start STAT_BAR_LEFT_MARGIN in from stat_bar.x, not flush at the edge"
             );
             assert!(
@@ -723,7 +516,7 @@ mod stat_bar_tests {
     #[test]
     fn label_sits_immediately_below_bar() {
         let stat_bar = RosterManager::stat_bar_rect(area());
-        let slices = RosterManager::stat_slice_parts(stat_bar);
+        let slices = crate::scenes::stat_bar::stat_slice_parts(stat_bar);
         for (i, (outline, _fill, label)) in slices.iter().enumerate() {
             assert_eq!(
                 label.y,

@@ -184,21 +184,7 @@ impl RosterManager {
     /// `sprite` band directly below fills all remaining vertical space down to
     /// its pinned baseline above `dot_row`.
     const STAT_BAR_BAND_H: u16 =
-        Self::STAT_BAR_OUTLINE_H + Self::STAT_LABEL_H;
-    /// Height (in cells) of each stat-bar OUTLINE. 3 cells = 12 dot rows: the
-    /// green fill occupies exactly the MIDDLE cell (dot rows 4-7, see
-    /// `stat_slice_parts`), and a rounded `STAT_BAR_HUG_CAP_DOTS`-thick grey
-    /// cap sits directly above and below it — the top cell's bottom
-    /// `STAT_BAR_HUG_CAP_DOTS` dots, and the bottom cell's top
-    /// `STAT_BAR_HUG_CAP_DOTS` dots — with 1-dot left/right sides connecting
-    /// them. Because the fill is confined to its own single cell and the caps
-    /// live in the cells directly above/below it, no braille cell ever
-    /// contains both a border dot and a fill dot, so the border always
-    /// renders as a complete, crisp shape at any fill amount.
-    const STAT_BAR_OUTLINE_H: u16 = 3;
-    /// Height (in rows) of the label row at the bottom of each stat-bar
-    /// slice (b1-t6).
-    const STAT_LABEL_H: u16 = 1;
+        crate::scenes::stat_bar::STAT_BAR_OUTLINE_H + crate::scenes::stat_bar::STAT_LABEL_H;
     /// Horizontal gap (in cells) between adjacent role clusters in the dot
     /// row (b2-t6, widened b1-t3). `5` is spec 38's explicit, final pin —
     /// not a range to tune. It guarantees the 3 role labels — each wider

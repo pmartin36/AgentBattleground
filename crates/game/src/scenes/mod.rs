@@ -19,6 +19,7 @@ pub(crate) mod close_button;
 pub(crate) mod detail_panel;
 pub(crate) mod home_button;
 pub(crate) mod palette;
+pub(crate) mod stat_bar;
 pub(crate) mod title_logo;
 pub(crate) mod tooltip;
 
