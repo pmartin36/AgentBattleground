@@ -56,13 +56,19 @@ const PHASE_DURATIONS_MS: [(HatchPhase, u64); 7] = [
     (HatchPhase::RevealFlash, 300),
     (HatchPhase::RevealColor, 500),
     (HatchPhase::Beat, 900),
-    (HatchPhase::Slide, 500),
+    (HatchPhase::Slide, SLIDE_MS),
 ];
 
 /// Approximate total nominal duration of the non-terminal timeline, used
 /// only to size the sampling window in tests.
 #[cfg(test)]
 const APPROX_TOTAL_MS: u64 = 5_000;
+
+/// Duration of the pre-reveal hatch-out transition (egg to screen-center,
+/// panel off the right edge) — the same duration as the reveal's own
+/// `Slide` phase, so the two movements read at one consistent pace.
+pub(super) const SLIDE_MS: u64 = 500;
+pub(super) const SLIDE_DURATION: Duration = Duration::from_millis(SLIDE_MS);
 
 /// Cumulative duration of every phase strictly before `Crack` (just
 /// `Wiggle`, in the phase list above) — the offset the Crack phase's

@@ -133,10 +133,20 @@ pub struct Hatchery {
     /// `None` when no hatch is underway.
     #[inspect(hidden)]
     hatch: Option<hatch_render::HatchState>,
+    /// The in-progress pre-reveal hatch-out transition (egg to center,
+    /// panel off-right) that plays once between a Ready-Hatch trigger and
+    /// `hatch` launching, or `None` when no hand-off is underway.
+    #[inspect(hidden)]
+    hatch_out: Option<hatch_render::HatchOut>,
     /// The post-hatch Keep/Discard action state, or `None` before the
     /// active hatch completes.
     #[inspect(hidden)]
     roster_action: Option<hatch_roster::RosterAction>,
+    /// The just-hatched creature (plus its resolved idle clip) retained for
+    /// the empty-dock settled view once no eggs remain in the tray; `None`
+    /// whenever any egg (hatched or not) is still present.
+    #[inspect(hidden)]
+    settled: Option<hatch_render::SettledCreature>,
 }
 
 impl Hatchery {
@@ -165,7 +175,9 @@ impl Hatchery {
             definition_error: None,
             clip_jobs: Vec::new(),
             hatch: None,
+            hatch_out: None,
             roster_action: None,
+            settled: None,
         }
     }
 
@@ -234,7 +246,9 @@ impl Hatchery {
             definition_error: None,
             clip_jobs: Vec::new(),
             hatch: None,
+            hatch_out: None,
             roster_action: None,
+            settled: None,
         };
         scene.tick(now);
         scene
@@ -440,8 +454,16 @@ impl Scene for Hatchery {
             self.draw_dock_actions(frame, area);
             return;
         }
+        if self.hatch_out.is_some() {
+            self.draw_hatch_out(frame, area);
+            return;
+        }
         if self.pending_hatch.is_some() {
             self.draw_hatch_generating(frame, area);
+            return;
+        }
+        if self.settled.is_some() {
+            self.draw_empty_dock(frame, area);
             return;
         }
 
@@ -473,6 +495,9 @@ impl Scene for Hatchery {
     }
 
     fn handle_input(&mut self, ev: InputEvent) -> Option<Transition> {
+        if self.hatch_out.is_some() {
+            return None;
+        }
         if let Some(h) = self.hatch.as_ref() {
             if h.seq.is_active() {
                 return None;
@@ -850,4 +875,12 @@ mod tests {
     // tests live in `tests/panel_button_tests.rs`, kept out of this file for
     // the same reason as hatch_sequence_tests.
     mod panel_button_tests;
+    // Hatch-out pre-reveal hand-off tests (animation gating, dock
+    // suppression, input gating) live in `tests/hatch_handoff_tests.rs`,
+    // kept out of this file for the same reason as hatch_sequence_tests.
+    mod hatch_handoff_tests;
+    // Empty-dock (no eggs remaining) settled-view retention tests live in
+    // `tests/empty_dock_tests.rs`, kept out of this file for the same
+    // reason as hatch_sequence_tests.
+    mod empty_dock_tests;
 }

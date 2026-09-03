@@ -13,8 +13,9 @@ use ratatui::Frame;
 use engine_render::dots::{Dot, DotBuffer};
 use engine_render::{ui_primitives, AnimatedSprite, DotRect, TextAlign};
 
-use crate::player_data::{resolve_clip, Egg, EggState};
+use crate::player_data::{resolve_clip, Egg, EggState, PersistedCreature};
 use crate::scenes::detail_panel;
+use crate::scenes::stat_bar::StatBarChrome;
 
 use super::hatch::HatchPhase;
 use super::hatch_layout;
@@ -22,6 +23,16 @@ use super::hatch_layout;
 /// Settled dock border color — the same grey as the roster details panel's
 /// own chrome.
 const DOCK_BORDER_COLOR: engine_core::color::Rgba = engine_core::color::Rgba::rgb(0x88, 0x88, 0x88);
+
+/// Chrome for the settled stat-bar band — the same grey border as the dock,
+/// white labels, a single-dot border thickness and chamfer (mirrors the
+/// roster's own stat-bar chrome shape).
+const HATCH_STAT_CHROME: StatBarChrome = StatBarChrome {
+    border_color: DOCK_BORDER_COLOR,
+    label_color: engine_core::color::Rgba::rgb(0xff, 0xff, 0xff),
+    h_thickness: 1,
+    chamfer: 1,
+};
 
 /// The launched-and-in-progress hatch sequence for one egg: the pure
 /// timeline plus the sprites its render needs, decoded once at launch.
@@ -39,6 +50,16 @@ pub(crate) struct HatchState {
     attack: Option<AnimatedSprite>,
 }
 
+/// The pre-reveal hatch-out transition for one egg: the egg flies from its
+/// browse left-slot to screen-center while the right panel slides off,
+/// before control passes to the crack/break/reveal sequence. Pure timer;
+/// poses are computed at render time from `browse_layout`'s unfloored
+/// resting rects via `hatch_layout::hatch_out_pose`.
+pub(super) struct HatchOut {
+    pub(super) egg: usize,
+    pub(super) elapsed: Duration,
+}
+
 impl HatchState {
     /// Decodes the shared crack overlay once and resolves the hatchling's
     /// idle/attack clips (falling back to `None`, never panicking, when a
@@ -46,14 +67,27 @@ impl HatchState {
     fn launch(egg_index: usize, egg: &Egg) -> Self {
         let crack = AnimatedSprite::from_gif(crate::assets::EGG_CRACK, crate::creatures::FRAME_DUR).ok();
         let (idle, attack) = match &egg.hatchling {
-            Some(hatchling) => (
-                hatchling.idle.as_ref().and_then(resolve_clip),
-                hatchling.attack.as_ref().and_then(resolve_clip),
-            ),
+            Some(hatchling) => (resolve_idle(hatchling), hatchling.attack.as_ref().and_then(resolve_clip)),
             None => (None, None),
         };
         Self { egg: egg_index, seq: super::hatch::HatchSequence::new(), crack, idle, attack }
     }
+}
+
+/// The just-hatched creature retained after the last egg leaves the dock:
+/// its persisted data plus its idle clip, resolved once at retention so the
+/// empty-dock view renders it read-only every frame with no active
+/// `HatchState`.
+pub(super) struct SettledCreature {
+    pub creature: PersistedCreature,
+    pub idle: Option<AnimatedSprite>,
+}
+
+/// The sole idle-clip resolve site for a hatchling: `HatchState::launch` and
+/// the empty-dock retention both call this, so idle resolution never forks
+/// into a second expression.
+pub(super) fn resolve_idle(hatchling: &PersistedCreature) -> Option<AnimatedSprite> {
+    hatchling.idle.as_ref().and_then(resolve_clip)
 }
 
 /// Rasterizes `art` (the egg's decoded still) at `w × h` dots.
@@ -143,13 +177,15 @@ fn stationary_copy(egg: &Egg) -> Egg {
 
 impl super::Hatchery {
     /// Single per-`update()` entry point: on the first tick with no sequence
-    /// active, peeks `pending_hatch` and launches a `HatchState` only once
-    /// the requested egg's assets are fully generated
-    /// (`hatch_assets_ready`) — otherwise the request stays recorded and the
-    /// scene sits in the generating wait while the ordinary generation loop
-    /// (`poll_definition`/`advance_hatch_clips`) keeps resolving it. Every
-    /// tick after launch advances the active sequence's clock. A no-op when
-    /// there is neither a pending request nor an active sequence.
+    /// active, peeks `pending_hatch` and plays the `hatch_out` pre-reveal
+    /// transition to completion, then launches a `HatchState` only once the
+    /// requested egg's assets are fully generated (`hatch_assets_ready`) —
+    /// otherwise the request stays recorded and the scene sits in the
+    /// generating wait (deferred behind the animation) while the ordinary
+    /// generation loop (`poll_definition`/`advance_hatch_clips`) keeps
+    /// resolving it. Every tick after launch advances the active sequence's
+    /// clock. A no-op when there is neither a pending request nor an active
+    /// sequence.
     pub(super) fn advance_hatch(&mut self, dt: Duration) {
         if self.hatch.is_none() {
             let Some(idx) = self.pending_hatch else {
@@ -157,13 +193,27 @@ impl super::Hatchery {
             };
             let Some(egg) = self.eggs.get(idx) else {
                 self.pending_hatch = None;
+                self.hatch_out = None;
                 return;
             };
+
+            // Play the pre-reveal hand-off animation exactly once, keyed to
+            // the tapped egg.
+            let ho = self.hatch_out.get_or_insert(HatchOut { egg: idx, elapsed: Duration::ZERO });
+            if ho.egg != idx {
+                *ho = HatchOut { egg: idx, elapsed: Duration::ZERO };
+            }
+            ho.elapsed += dt;
+            if ho.elapsed < super::hatch::SLIDE_DURATION {
+                return;
+            }
+
             if !hatch_assets_ready(egg) {
                 return;
             }
             self.pending_hatch = None;
             self.hatch = Some(HatchState::launch(idx, egg));
+            self.hatch_out = None;
         }
         if let Some(h) = self.hatch.as_mut() {
             h.seq.advance(dt);
@@ -193,6 +243,28 @@ impl super::Hatchery {
             TextAlign::Center,
             Style::default().fg(Color::Rgb(0xff, 0xff, 0xff)),
         );
+    }
+
+    /// Renders the hatch-out pre-reveal transition (egg to center, panel
+    /// off-right, dock suppressed) at `self.hatch_out`'s current elapsed
+    /// time; once the transition's duration has elapsed but the egg's
+    /// assets are still generating, falls back to the deferred generating
+    /// wait. Only called once `self.hatch_out` is `Some`.
+    pub(super) fn draw_hatch_out(&self, frame: &mut Frame, area: Rect) {
+        let Some(ho) = self.hatch_out.as_ref() else { return };
+        if ho.elapsed >= super::hatch::SLIDE_DURATION {
+            self.draw_hatch_generating(frame, area);
+            return;
+        }
+        let Some(egg) = self.eggs.get(ho.egg) else { return };
+        let layout = super::browse_layout::browse_layout(area);
+        let p = ho.elapsed.as_secs_f32() / super::hatch::SLIDE_DURATION.as_secs_f32();
+        let pose = hatch_layout::hatch_out_pose(area, layout.egg, layout.panel, p);
+        let buf = frame.buffer_mut();
+
+        self.draw_browse_panel(buf, pose.panel, ho.egg);
+        let art = self.art_cache.get(ho.egg).and_then(|a| a.as_ref());
+        super::tray::draw_egg(buf, pose.egg, &stationary_copy(egg), art, Duration::ZERO);
     }
 
     /// Renders every hatch phase over the focused egg's rect. Only called
@@ -307,8 +379,51 @@ impl super::Hatchery {
                 );
 
                 draw_stats_dock(buf, pose.dock_border, hatchling);
+                draw_hatch_stat_bars(buf, pose.stat_bars, hatchling, p);
             }
         }
+    }
+
+    /// Renders the empty-dock settled view: back button, the retained
+    /// creature idling read-only in the settled left slot, its name, its
+    /// stat bars at full undimmed opacity, and the shared stamina/abilities
+    /// dock — the settled Done frame held indefinitely, with no Keep/
+    /// Discard and no action button. Only called once `self.settled` is
+    /// `Some`.
+    pub(super) fn draw_empty_dock(&self, frame: &mut Frame, area: Rect) {
+        let Some(settled) = self.settled.as_ref() else { return };
+        let dr = Self::back_dot_rect(area);
+        let mut b = self.back_button.borrow_mut();
+        b.set_rect(dr.to_cell_rect());
+        crate::scenes::home_button::draw_badge_button(
+            frame.buffer_mut(),
+            dr,
+            b.state(),
+            crate::assets::ICON_ARROW_LEFT,
+        );
+
+        let (_focus_dr, strip) = super::focus::focus_layout(area);
+        let l = hatch_layout::settled_layout(area, strip, &settled.creature.name);
+        let buf = frame.buffer_mut();
+
+        if let Some(idle) = settled.idle.as_ref() {
+            let w = l.creature.w.max(0) as u32;
+            let h = l.creature.h.max(0) as u32;
+            let dots = idle.dots_at(self.elapsed, w, h);
+            crate::scenes::post_battle::columns::blit_dots(buf, l.creature, &dots);
+        }
+
+        engine_render::wrapped_text(
+            buf,
+            l.name_zone.to_cell_rect(),
+            &settled.creature.name,
+            TextAlign::Center,
+            Style::default().fg(Color::Rgb(0xff, 0xff, 0xff)),
+            true,
+        );
+
+        draw_stats_dock(buf, l.dock_border, &settled.creature);
+        draw_hatch_stat_bars(buf, l.stat_bars, &settled.creature, 1.0);
     }
 }
 
@@ -340,4 +455,28 @@ fn draw_stats_dock(buf: &mut ratatui::buffer::Buffer, border: DotRect, hatchling
     let regions = detail_panel::interior_regions(border);
     detail_panel::render_stamina_row(buf, regions.stamina, &hatchling.stamina);
     detail_panel::render_abilities(buf, regions.abilities_header, regions.ability_cells, &hatchling.abilities);
+}
+
+/// Paints `hatchling`'s 4 stat bars into `band` at `opacity` — the sole
+/// hatchery stat-bar render site, forwarding to the shared
+/// `stat_bar::draw_stat_bars` renderer with the hatchling's own stats (via
+/// the shared `stat_bar::stat_fill_scaled` scale) and the dock's grey chrome.
+/// Called from the Slide/Done arm at `opacity = p` (the settle's fade
+/// progress); the empty-dock view reuses this same helper at opacity 1.0
+/// rather than invoking `draw_stat_bars` a second time. A no-op at
+/// `opacity <= 0.0`: `draw_stat_bars` paints its border/fill GLYPH shape
+/// unconditionally regardless of alpha (only the color fades), which would
+/// otherwise stamp a fully-transparent ghost outline over cells this band
+/// has never touched before the fade begins.
+fn draw_hatch_stat_bars(buf: &mut ratatui::buffer::Buffer, band: DotRect, hatchling: &PersistedCreature, opacity: f32) {
+    if opacity <= 0.0 {
+        return;
+    }
+    crate::scenes::stat_bar::draw_stat_bars(
+        buf,
+        band,
+        |kind, cols| crate::scenes::stat_bar::stat_fill_scaled(hatchling.stats.value(kind), cols).round() as usize,
+        opacity,
+        HATCH_STAT_CHROME,
+    );
 }

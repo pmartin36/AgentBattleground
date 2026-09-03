@@ -9,9 +9,7 @@ impl RosterManager {
     /// `Slide`/`elapsed` window the sprite slide and name cross-fade already
     /// use, no second transition state machine.
     pub(super) fn stat_fill_dots(&self, kind: crate::stats::StatKind, dot_cols: usize) -> usize {
-        let to_dots = |v: u32| {
-            (v as f32 / crate::scenes::stat_bar::STAT_DISPLAY_CAP as f32).clamp(0.0, 1.0) * dot_cols as f32
-        };
+        let to_dots = |v: u32| crate::scenes::stat_bar::stat_fill_scaled(v, dot_cols);
         let fill = match self.active_slide() {
             None => to_dots(self.creatures[self.current_index].stats().value(kind)),
             Some(s) => {

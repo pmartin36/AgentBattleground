@@ -59,6 +59,16 @@ pub(crate) struct StatBarChrome {
     pub chamfer: usize,
 }
 
+/// The one arithmetic site for a stat value's fill length, in dot-columns
+/// out of `dot_cols` (pre-round, so a caller tweening between two values can
+/// still interpolate the raw `f32` before rounding to a dot count): `value`
+/// scaled against `STAT_DISPLAY_CAP`, clamped to `0.0..=1.0`, times
+/// `dot_cols`. Shared by the roster (which rounds and eases it) and the
+/// hatchery (which rounds it directly).
+pub(crate) fn stat_fill_scaled(value: u32, dot_cols: usize) -> f32 {
+    (value as f32 / STAT_DISPLAY_CAP as f32).clamp(0.0, 1.0) * dot_cols as f32
+}
+
 /// Scales `c`'s alpha by `opacity` — the sole mechanism `draw_stat_bars`
 /// uses to fade lit dots. At `opacity == 1.0` this returns `c` byte-
 /// identical (`(255.0 * 1.0).round() as u8 == 255`), so `draw_grid`'s

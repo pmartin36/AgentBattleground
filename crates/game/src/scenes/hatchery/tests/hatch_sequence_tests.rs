@@ -65,13 +65,21 @@ fn ready_egg_with_no_generated_assets(hatchling: PersistedCreature) -> Egg {
 }
 
 /// Taps the single Ready egg at index 0 (recording a pending hatch
-/// request), then ticks `advance_hatch` once to launch the sequence.
+/// request), then drives `advance_hatch` through the hatch-out hand-off
+/// until the sequence launches (bounded, so a stalled gate fails loudly
+/// rather than looping forever).
 pub(super) fn launch_hatch(scene: &mut Hatchery, w: u16, h: u16) {
     let area = Rect::new(0, 0, w, h);
     let _ = render_to_buffer(scene, w, h);
     let rect = tray::tray_slots(tray::tray_band(area), scene.eggs.len())[0].to_cell_rect();
     tap_at(scene, rect.x, rect.y);
-    scene.advance_hatch(Duration::from_millis(0));
+    for _ in 0..100 {
+        if scene.hatch.is_some() {
+            return;
+        }
+        scene.advance_hatch(Duration::from_millis(20));
+    }
+    assert!(scene.hatch.is_some(), "launch_hatch: sequence did not launch within the bounded advance window");
 }
 
 /// Whether `phase` is at or beyond the Beat phase (i.e. the color-lerp
@@ -87,9 +95,10 @@ fn phase_at_least_beat(phase: hatch::HatchPhase) -> bool {
     )
 }
 
-/// Tapping a `Ready` egg then advancing consumes `pending_hatch` and
-/// launches a `HatchState` — the sequence starts inside `advance_hatch`
-/// (the method `update()` calls), not synchronously inside the tap.
+/// Tapping a `Ready` egg then advancing plays the hatch-out transition
+/// before the reveal launches — the sequence starts inside `advance_hatch`
+/// (the method `update()` calls), not synchronously inside the tap, and not
+/// before the hatch-out hand-off has run its course.
 #[test]
 fn launch_consumes_pending_hatch_in_update() {
     let dir = temp_store_dir("hatch-launch");
@@ -108,9 +117,14 @@ fn launch_consumes_pending_hatch_in_update() {
     assert_eq!(scene.pending_hatch, Some(0), "tapping a Ready egg must record a pending hatch request");
 
     scene.advance_hatch(Duration::from_millis(5));
+    assert!(
+        scene.hatch_out.is_some() && scene.hatch.is_none(),
+        "a short advance must be inside the hatch-out transition, not the launched reveal"
+    );
 
-    assert!(scene.pending_hatch.is_none(), "advance_hatch must consume pending_hatch");
-    assert!(scene.hatch.is_some(), "advance_hatch must launch a HatchState for the tapped egg");
+    scene.advance_hatch(hatch::SLIDE_DURATION);
+    assert!(scene.pending_hatch.is_none(), "advance_hatch must consume pending_hatch once hatch-out completes");
+    assert!(scene.hatch.is_some(), "advance_hatch must launch a HatchState once hatch-out completes");
 }
 
 /// During the Crack phase, the black crack overlay is composited on top

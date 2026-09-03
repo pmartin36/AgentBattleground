@@ -17,15 +17,21 @@ const CONTENT_TOP_GAP_CELLS: i32 = 1;
 /// Gap, in cells, between the creature column and the stats-dock border —
 /// keeps the dock visibly separate from the creature, never touching.
 const DOCK_RIGHT_MARGIN_CELLS: i32 = 1;
+/// Height, in cells, of the settled stat-bar band: one bar outline plus its
+/// label row, the same basis the roster's `STAT_BAR_BAND_H` uses.
+const STAT_BAR_BAND_H_CELLS: i32 =
+    (crate::scenes::stat_bar::STAT_BAR_OUTLINE_H + crate::scenes::stat_bar::STAT_LABEL_H) as i32;
 
 /// Dot-space region split for the settled placement: `name_zone` sits
-/// directly above `creature` in the left column as flex siblings (a
-/// wrapping name grows `name_zone` and shrinks `creature`, never
-/// overlapping either); `dock_border` is the right column's stats-dock
-/// panel border, fed to `detail_panel::interior_regions`.
+/// directly above `stat_bars`, which sits directly above `creature`, all
+/// three as left-column flex siblings (a wrapping name grows `name_zone` and
+/// shrinks `creature`, never overlapping either); `stat_bars` is a fixed-
+/// height band spanning `creature`'s x/width; `dock_border` is the right
+/// column's stats-dock panel border, fed to `detail_panel::interior_regions`.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SettledLayout {
     pub name_zone: DotRect,
+    pub stat_bars: DotRect,
     pub creature: DotRect,
     pub dock_border: DotRect,
 }
@@ -74,12 +80,29 @@ pub(super) fn settled_layout(area: Rect, strip: Rect, name: &str) -> SettledLayo
         unreachable!("flex() with 2 children returns exactly 2 rects")
     };
 
-    // LEFT column Column flex: `name_zone` (a flex sibling above `creature`)
-    // is sized by the name's wrapped line count at the left column's width,
-    // clamped to a sane 1-3 line band; `creature` is the sole grow child, so
-    // a taller `name_zone` shrinks `creature` and the two never overlap.
+    // `stat_bars` mixes two colors (its green fill and grey border caps) in
+    // adjacent, but never the same, braille CELL — a cell-quantized
+    // guarantee `stat_bar::draw_stat_bars` only holds when its band starts
+    // on a whole-cell boundary. `left_col.y` inherits `back`'s own sub-cell
+    // dot remainder (the back button's hit-rect inset is not cell-aligned),
+    // so the column flex runs from a cell-snapped `left_col` (ceiling up by
+    // at most 3 dots — under one cell row, imperceptible for a resting
+    // placement) rather than `left_col` directly.
+    let left_col = {
+        let snapped_y = (left_col.y + 3) & !3;
+        DotRect { x: left_col.x, y: snapped_y, w: left_col.w, h: (left_col.y + left_col.h - snapped_y).max(0) }
+    };
+
+    // LEFT column Column flex: `name_zone` and `stat_bars` (flex siblings
+    // above `creature`) are fixed-height; `name_zone` is sized by the name's
+    // wrapped line count at the left column's width, clamped to a sane 1-3
+    // line band, and `stat_bars` is a fixed band the same basis as the
+    // roster's stat-bar band height; `creature` is the sole grow child, so a
+    // taller `name_zone` (or the fixed `stat_bars` band) shrinks `creature`
+    // and none of the three ever overlap.
     let name_lines = engine_render::wrapped_line_count(name, left_w_cells as usize).clamp(1, 3);
     let name_h_dots = name_lines as i32 * NAME_LINE_H_CELLS * 4;
+    let stat_bars_h_dots = STAT_BAR_BAND_H_CELLS * 4;
     let left_children = engine_render::flex(
         left_col,
         FlexStyle {
@@ -90,24 +113,28 @@ pub(super) fn settled_layout(area: Rect, strip: Rect, name: &str) -> SettledLayo
         },
         &[
             FlexChild { basis: Basis::Fixed(name_h_dots), grow: 0.0, shrink: 0.0 },
+            FlexChild { basis: Basis::Fixed(stat_bars_h_dots), grow: 0.0, shrink: 0.0 },
             FlexChild { basis: Basis::Fixed(0), grow: 1.0, shrink: 0.0 },
         ],
     );
-    let [name_zone, creature] = left_children[..] else {
-        unreachable!("flex() with 2 children returns exactly 2 rects")
+    let [name_zone, stat_bars, creature] = left_children[..] else {
+        unreachable!("flex() with 3 children returns exactly 3 rects")
     };
 
-    SettledLayout { name_zone, creature, dock_border }
+    SettledLayout { name_zone, stat_bars, creature, dock_border }
 }
 
-/// Dot-space poses for the three elements the Slide phase animates:
-/// `creature` and `name_zone` travel from their centered Beat poses to the
-/// settled layout's rects; `dock_border` enters from fully off the right
-/// edge of `area` and settles into the dock's border.
+/// Dot-space poses for the elements the Slide phase animates: `creature` and
+/// `name_zone` travel from their centered Beat poses to the settled layout's
+/// rects; `dock_border` enters from fully off the right edge of `area` and
+/// settles into the dock's border; `stat_bars` is a fixed pass-through of the
+/// settled band — it fades in place (driven by the caller's opacity), it
+/// never travels.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SlidePose {
     pub creature: DotRect,
     pub name_zone: DotRect,
+    pub stat_bars: DotRect,
     pub dock_border: DotRect,
 }
 
@@ -137,8 +164,35 @@ pub(super) fn slide_pose(
     SlidePose {
         creature: sample(creature_start, settled.creature),
         name_zone: sample(name_start, settled.name_zone),
+        stat_bars: settled.stat_bars,
         dock_border: sample(dock_start, settled.dock_border),
     }
+}
+
+/// Dot-space poses for the hatch-out pre-reveal transition: the egg and the
+/// right panel, each tweened between their browse-layout resting rect and
+/// their hatch-out destination.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct HatchOutPose {
+    pub egg: DotRect,
+    pub panel: DotRect,
+}
+
+/// Eased poses at hatch-out progress `p` (`0.0..=1.0`): the egg travels from
+/// its browse-layout resting `egg_from` to `focus::focus_layout(area).0`
+/// (screen center — where the reveal's Wiggle phase then continues, so the
+/// animation's last frame is the reveal's first frame); the panel travels
+/// from its resting `panel_from` to fully off `area`'s right edge. Reuses
+/// the same `DotRectTween` idiom as `slide_pose`.
+pub(super) fn hatch_out_pose(area: Rect, egg_from: DotRect, panel_from: DotRect, p: f32) -> HatchOutPose {
+    let (egg_to, _strip) = super::focus::focus_layout(area);
+    let panel_to = DotRect { x: (area.x as i32 + area.width as i32) * 2, ..panel_from };
+
+    const UNIT: Duration = Duration::from_secs(1);
+    let at = UNIT.mul_f32(p.clamp(0.0, 1.0));
+    let sample = |from: DotRect, to: DotRect| DotRectTween::new(from, to, UNIT).at(at);
+
+    HatchOutPose { egg: sample(egg_from, egg_to), panel: sample(panel_from, panel_to) }
 }
 
 #[cfg(test)]
@@ -147,6 +201,59 @@ mod tests {
 
     fn strip_for(area: Rect) -> Rect {
         super::super::focus::focus_layout(area).1
+    }
+
+    /// At `p == 0.0` the egg and panel sit exactly at their supplied
+    /// resting rects; at `p == 1.0` the egg equals `focus_layout(area).0`
+    /// (screen center) and the panel's x sits at `area`'s off-right edge.
+    #[test]
+    fn hatch_out_pose_endpoints() {
+        let area = Rect::new(0, 0, 90, 30);
+        let egg_from = DotRect { x: 10, y: 40, w: 22, h: 28 };
+        let panel_from = DotRect { x: 70, y: 10, w: 40, h: 60 };
+
+        let at0 = hatch_out_pose(area, egg_from, panel_from, 0.0);
+        assert_eq!(at0.egg, egg_from, "p=0 egg must equal the resting browse-layout rect");
+        assert_eq!(at0.panel, panel_from, "p=0 panel must equal the resting browse-layout rect");
+
+        let (focus_dr, _strip) = super::super::focus::focus_layout(area);
+        let at1 = hatch_out_pose(area, egg_from, panel_from, 1.0);
+        assert_eq!(at1.egg, focus_dr, "p=1 egg must equal the reveal's screen-center focus rect exactly");
+        let off_right_x = (area.x as i32 + area.width as i32) * 2;
+        assert_eq!(at1.panel.x, off_right_x, "p=1 panel must sit fully off the right edge");
+    }
+
+    /// Sweeping `p` from 0 to 1, the egg's x moves monotonically toward the
+    /// screen-center focus rect's x, and the panel's x is monotonically
+    /// non-decreasing (it slides right, off the screen), ending at the
+    /// off-right edge.
+    #[test]
+    fn hatch_out_pose_egg_to_center_panel_off_monotonic() {
+        let area = Rect::new(0, 0, 90, 30);
+        let egg_from = DotRect { x: 10, y: 40, w: 22, h: 28 };
+        let panel_from = DotRect { x: 70, y: 10, w: 40, h: 60 };
+        let (focus_dr, _strip) = super::super::focus::focus_layout(area);
+
+        let ps = [0.0f32, 0.25, 0.5, 0.75, 1.0];
+        let poses: Vec<HatchOutPose> = ps.iter().map(|&p| hatch_out_pose(area, egg_from, panel_from, p)).collect();
+
+        for w in poses.windows(2) {
+            let dist_before = (w[0].egg.x - focus_dr.x).abs();
+            let dist_after = (w[1].egg.x - focus_dr.x).abs();
+            assert!(
+                dist_after <= dist_before,
+                "egg.x must move monotonically toward the center focus x across the sweep: {:?}",
+                poses.iter().map(|s| s.egg.x).collect::<Vec<_>>()
+            );
+            assert!(
+                w[1].panel.x >= w[0].panel.x,
+                "panel.x must be non-decreasing (sliding off-right) across the sweep: {:?}",
+                poses.iter().map(|s| s.panel.x).collect::<Vec<_>>()
+            );
+        }
+
+        let off_right_x = (area.x as i32 + area.width as i32) * 2;
+        assert_eq!(poses.last().unwrap().panel.x, off_right_x, "final panel.x must sit fully off the right edge");
     }
 
     /// The creature sits in the left column, the stats-dock border in the
@@ -243,8 +350,56 @@ mod tests {
         let strip = strip_for(area);
         let s = settled_layout(area, strip, "X");
         assert!(s.name_zone.w >= 0 && s.name_zone.h >= 0);
+        assert!(s.stat_bars.w >= 0 && s.stat_bars.h >= 0);
         assert!(s.creature.w >= 0 && s.creature.h >= 0);
         assert!(s.dock_border.w >= 0 && s.dock_border.h >= 0);
+    }
+
+    /// The stat-bar band sits fully below the name zone and fully above the
+    /// creature zone, spans the creature zone's own width, and has a real,
+    /// non-zero height.
+    #[test]
+    fn settled_stat_bars_above_creature_below_name() {
+        let area = Rect::new(0, 0, 90, 30);
+        let strip = strip_for(area);
+        let s = settled_layout(area, strip, "Emberling");
+
+        assert!(
+            s.name_zone.y + s.name_zone.h <= s.stat_bars.y,
+            "stat-bar band {:?} must sit at/below the name zone's bottom {:?}",
+            s.stat_bars,
+            s.name_zone
+        );
+        assert!(
+            s.stat_bars.y + s.stat_bars.h <= s.creature.y,
+            "stat-bar band {:?} must sit at/above the creature zone's top {:?}",
+            s.stat_bars,
+            s.creature
+        );
+        assert_eq!(s.stat_bars.x, s.creature.x, "stat-bar band must align with the creature zone's left edge");
+        assert_eq!(s.stat_bars.w, s.creature.w, "stat-bar band must span the creature zone's width");
+        assert!(s.stat_bars.h > 0, "stat-bar band must have a real, non-zero height");
+    }
+
+    /// The Slide phase's stat-bar pose never slides — at every progress `p`
+    /// it equals the settled layout's own band exactly (it fades in place,
+    /// it does not travel).
+    #[test]
+    fn slide_pose_stat_bars_is_fixed_settled_band() {
+        let area = Rect::new(0, 0, 90, 30);
+        let strip = strip_for(area);
+        let name = "Emberling";
+        let settled = settled_layout(area, strip, name);
+        let creature_start = DotRect { x: 40, y: 20, w: 30, h: 40 };
+        let name_start = DotRect { x: 35, y: 10, w: 40, h: 12 };
+
+        for p in [0.0f32, 0.5, 1.0] {
+            let pose = slide_pose(area, strip, name, creature_start, name_start, p);
+            assert_eq!(
+                pose.stat_bars, settled.stat_bars,
+                "at p={p} the stat-bar pose must equal the settled band exactly (fixed, never tweened)"
+            );
+        }
     }
 
     /// At slide progress `p == 0.0` every element sits at its supplied

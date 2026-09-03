@@ -67,7 +67,8 @@ fn force_hatch_key_on_unresolved_egg_gates_the_sequence() {
 }
 
 /// While the focused egg's assets are unresolved, force-hatch shows the
-/// generating wait instead of a hatch frame.
+/// generating wait instead of a hatch frame, once the hatch-out transition
+/// has had time to run its course.
 #[test]
 fn force_hatch_on_unresolved_egg_renders_generating_wait() {
     let dir = temp_store_dir("force-hatch-renders-wait");
@@ -82,7 +83,7 @@ fn force_hatch_on_unresolved_egg_renders_generating_wait() {
     let (w, h) = (40u16, 20u16);
     focus_first_egg(&mut scene, w, h);
     scene.handle_input(key_event(hatch_dev::FORCE_HATCH_KEY));
-    scene.advance_hatch(Duration::from_millis(0));
+    scene.advance_hatch(hatch::SLIDE_DURATION);
 
     let area = Rect::new(0, 0, w, h);
     let buf = render_to_buffer(&scene, w, h);
@@ -91,7 +92,8 @@ fn force_hatch_on_unresolved_egg_renders_generating_wait() {
 }
 
 /// Once a gated egg's still and idle/attack clips all resolve, the very
-/// next `advance_hatch` tick launches the sequence.
+/// next `advance_hatch` tick launches the sequence, after the hatch-out
+/// transition (already elapsed by this point) has run its course.
 #[test]
 fn force_hatch_launches_once_generation_completes_after_holding() {
     let dir = temp_store_dir("force-hatch-resolves-then-launches");
@@ -106,7 +108,7 @@ fn force_hatch_launches_once_generation_completes_after_holding() {
     let (w, h) = (40u16, 20u16);
     focus_first_egg(&mut scene, w, h);
     scene.handle_input(key_event(hatch_dev::FORCE_HATCH_KEY));
-    scene.advance_hatch(Duration::from_millis(0));
+    scene.advance_hatch(hatch::SLIDE_DURATION);
     assert!(scene.hatch.is_none(), "fixture must start in the gated wait");
 
     let mut hatchling = sample_creature("Newborn");

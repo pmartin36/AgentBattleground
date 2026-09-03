@@ -183,21 +183,45 @@ impl super::Hatchery {
     /// The single post-hatch teardown: clears the active hatch, retires the
     /// hatched egg (removed from the tray, `art_cache`, `egg_buttons`, and
     /// `clip_jobs` in lockstep, then persisted), and clears the post-hatch
-    /// action and any stale focus — leaving the scene back at the base tray
-    /// with the back button and egg slots reachable again.
+    /// action and any stale focus. With eggs still remaining, selects the
+    /// nearest one (the removed index clamped into the shrunk tray) and
+    /// returns to the base browse tray immediately. With no eggs left,
+    /// stashes the just-hatched creature into `settled` instead, so the
+    /// empty-dock view takes over on the next render.
     fn dismiss_hatch(&mut self) {
+        let mut hatchling = None;
+        let mut removed_index = None;
         if let Some(h) = self.hatch.take() {
-            if h.egg < self.eggs.len() {
-                self.eggs.remove(h.egg);
-                self.art_cache.remove(h.egg);
-                self.egg_buttons.get_mut().remove(h.egg);
-                self.remove_egg_from_clip_jobs(h.egg);
+            let removed = h.egg;
+            if removed < self.eggs.len() {
+                hatchling = self.eggs[removed].hatchling.clone();
+                self.eggs.remove(removed);
+                self.art_cache.remove(removed);
+                self.egg_buttons.get_mut().remove(removed);
+                self.remove_egg_from_clip_jobs(removed);
+                removed_index = Some(removed);
             }
             self.persist_eggs();
         }
         self.roster_action = None;
-        self.selected = None;
         self.mode = super::selection::HatcheryMode::Browsing { hover: 0 };
+        match removed_index {
+            Some(_) if self.eggs.is_empty() => {
+                self.selected = None;
+                self.settled = hatchling.map(|creature| super::hatch_render::SettledCreature {
+                    idle: super::hatch_render::resolve_idle(&creature),
+                    creature,
+                });
+            }
+            Some(removed) => {
+                self.settled = None;
+                self.select(removed.min(self.eggs.len() - 1));
+            }
+            None => {
+                self.selected = None;
+                self.settled = None;
+            }
+        }
     }
 
     /// Loads the on-disk roster; with an open slot, appends the hatchling

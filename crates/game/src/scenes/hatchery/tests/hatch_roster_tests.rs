@@ -378,6 +378,85 @@ fn back_button_works_after_discard() {
     );
 }
 
+/// With another egg remaining, tapping Keep on egg 0 returns immediately to
+/// the browse layout with the nearest remaining egg (the one that shifted
+/// down into index 0) selected — no empty-dock hand-off.
+#[test]
+fn keep_with_remaining_eggs_selects_nearest() {
+    let dir = temp_store_dir("hatch-roster-keep-nearest");
+    let seed = PlayerData {
+        roster: Vec::new(),
+        eggs: vec![
+            hsq::ready_egg_with_hatchling(named_creature("Hatched0")),
+            hsq::ready_egg_with_hatchling(named_creature("Bystander1")),
+        ],
+    };
+    PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
+
+    let mut scene = Hatchery::from_store_at(PlayerStore::with_dir(&dir), SystemTime::now());
+    let (w, h) = (90u16, 30u16);
+    hsq::launch_hatch(&mut scene, w, h);
+    advance_to_complete(&mut scene);
+    scene.maybe_offer_dock_actions();
+
+    let area = Rect::new(0, 0, w, h);
+    let _ = render_dock_actions(&scene, w, h);
+    let (keep_rect, _discard_rect) = keep_discard_rects(&scene, area);
+    tap_at(&mut scene, keep_rect.x + keep_rect.width / 2, keep_rect.y + keep_rect.height / 2);
+
+    assert_eq!(scene.eggs.len(), 1, "the hatched egg must be retired, leaving the bystander");
+    assert_eq!(
+        scene.selected,
+        Some(0),
+        "the nearest remaining egg must be selected immediately after dismissal"
+    );
+    assert!(scene.settled.is_none(), "eggs remain, so the empty-dock view must not activate");
+}
+
+/// With two other eggs remaining, hatching and keeping the TAIL egg (the
+/// highest index) clamps the post-dismissal selection to the new last
+/// remaining egg rather than the removed index.
+#[test]
+fn keep_tail_egg_selects_new_last() {
+    let dir = temp_store_dir("hatch-roster-keep-tail");
+    let seed = PlayerData {
+        roster: Vec::new(),
+        eggs: vec![
+            hsq::ready_egg_with_hatchling(named_creature("Bystander0")),
+            hsq::ready_egg_with_hatchling(named_creature("Bystander1")),
+            hsq::ready_egg_with_hatchling(named_creature("HatchedTail")),
+        ],
+    };
+    PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
+
+    let mut scene = Hatchery::from_store_at(PlayerStore::with_dir(&dir), SystemTime::now());
+    let (w, h) = (90u16, 30u16);
+    let area = Rect::new(0, 0, w, h);
+    let _ = render_to_buffer(&scene, w, h);
+    let tail_rect = tray::tray_slots(tray::tray_band(area), scene.eggs.len())[2].to_cell_rect();
+    tap_at(&mut scene, tail_rect.x, tail_rect.y);
+    for _ in 0..100 {
+        if scene.hatch.is_some() {
+            break;
+        }
+        scene.advance_hatch(Duration::from_millis(5));
+    }
+    assert!(scene.hatch.is_some(), "fixture setup must launch the hatch on the tapped tail egg");
+    advance_to_complete(&mut scene);
+    scene.maybe_offer_dock_actions();
+
+    let _ = render_dock_actions(&scene, w, h);
+    let (keep_rect, _discard_rect) = keep_discard_rects(&scene, area);
+    tap_at(&mut scene, keep_rect.x + keep_rect.width / 2, keep_rect.y + keep_rect.height / 2);
+
+    assert_eq!(scene.eggs.len(), 2, "the hatched tail egg must be retired, leaving both bystanders");
+    assert_eq!(
+        scene.selected,
+        Some(1),
+        "removing the tail egg (index 2) must clamp selection to the new last remaining egg"
+    );
+}
+
 // --- multi-egg dismissal / clip_jobs index fixtures ---
 //
 // A `dismiss_hatch` removes the hatched egg from `eggs`/`art_cache`/
