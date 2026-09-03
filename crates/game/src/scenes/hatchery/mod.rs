@@ -1,10 +1,13 @@
 //! Hatchery scene shell: reachable from the roster, with a back button that
 //! returns to it, an egg tray along the bottom rendering every owned egg
-//! with a hover/selected/idle highlight, and a large selected-egg view above
-//! the tray (via `detail_layout`) that shows an `Incubating` egg's countdown.
+//! with a hover/selected/idle highlight, and a roster-style browse layout
+//! (via `browse_layout` + `browse_panel`) pairing a large selected-egg view
+//! on the left with a bordered right panel carrying the STATUS readout and
+//! the mad-lib body.
 
+mod browse_layout;
+mod browse_panel;
 mod detail;
-mod detail_layout;
 mod edit;
 mod focus;
 mod hatch;
@@ -91,11 +94,16 @@ pub struct Hatchery {
     /// `enter_edit` and cleared by `exit_edit`; empty while browsing.
     #[inspect(hidden)]
     blank_editors: Vec<RefCell<TextEditor>>,
-    /// The inline submit affordance shown only while editing, positioned
-    /// over the detail body region's bottom-right corner each render; see
-    /// `edit::try_submit_edit`.
+    /// The panel action button while editing an `Undefined` egg ("Submit"),
+    /// positioned into the panel's reserved button slot each render; see
+    /// `browse_panel::draw_panel_action`.
     #[inspect(hidden)]
     submit_button: RefCell<engine_render::Button>,
+    /// The panel action button for a selected Incubating/Ready egg
+    /// ("Hatch"), positioned into the panel's reserved button slot each
+    /// render; see `browse_panel::draw_panel_action`.
+    #[inspect(hidden)]
+    hatch_button: RefCell<engine_render::Button>,
     /// Image-generation dependency, read by the definition pipeline once a
     /// sentence is submitted.
     #[inspect(hidden)]
@@ -149,6 +157,7 @@ impl Hatchery {
             mode: HatcheryMode::Browsing { hover: 0 },
             blank_editors: Vec::new(),
             submit_button: RefCell::new(Self::new_submit_button()),
+            hatch_button: RefCell::new(Self::new_hatch_button()),
             asset_gen: Self::production_asset_gen(),
             model_config: resolve_model_config(),
             text_gen_factory: Self::production_text_gen_factory(),
@@ -217,6 +226,7 @@ impl Hatchery {
             mode: HatcheryMode::Browsing { hover: 0 },
             blank_editors: Vec::new(),
             submit_button: RefCell::new(Self::new_submit_button()),
+            hatch_button: RefCell::new(Self::new_hatch_button()),
             asset_gen,
             model_config,
             text_gen_factory,
@@ -380,9 +390,15 @@ impl Hatchery {
     }
 
     /// A fresh, idle "Submit" button with no rect yet — positioned every
-    /// render by `edit::draw_submit_button`.
+    /// render by `browse_panel::draw_panel_action`.
     fn new_submit_button() -> engine_render::Button {
         engine_render::Button::new(Rect::default(), crate::assets::FRAME_PANEL).label("Submit")
+    }
+
+    /// A fresh, idle "Hatch" button with no rect yet — positioned every
+    /// render by `browse_panel::draw_panel_action`.
+    fn new_hatch_button() -> engine_render::Button {
+        engine_render::Button::new(Rect::default(), crate::assets::FRAME_PANEL).label("Hatch")
     }
 }
 
@@ -442,23 +458,15 @@ impl Scene for Hatchery {
         self.draw_tray(frame.buffer_mut(), area);
 
         if let Some(f) = self.selected {
-            let (egg_dr, body, _tray) = detail_layout::detail_layout(area);
+            let layout = browse_layout::browse_layout(area);
             tray::draw_egg(
                 frame.buffer_mut(),
-                egg_dr,
+                layout.egg,
                 &self.eggs[f],
                 self.art_cache.get(f).and_then(|a| a.as_ref()),
                 self.elapsed,
             );
-            if let Some(rem) = lifecycle::remaining(&self.eggs[f], SystemTime::now()) {
-                focus::draw_countdown(frame.buffer_mut(), egg_dr, rem);
-            }
-            if let Some(editing) = self.editing_egg() {
-                self.draw_editing_paragraph(frame.buffer_mut(), body, editing);
-                self.draw_submit_button(frame.buffer_mut(), body);
-            } else if self.eggs[f].mad_lib.is_some() {
-                self.draw_defined_detail(frame.buffer_mut(), egg_dr, body, f);
-            }
+            self.draw_browse_panel(frame.buffer_mut(), layout.panel, f);
         }
 
         self.draw_definition_error(frame.buffer_mut(), area);
@@ -528,11 +536,25 @@ impl Scene for Hatchery {
                 });
             }
 
-            if matches!(self.mode, HatcheryMode::Editing { .. })
-                && self.submit_button.get_mut().handle_mouse(&me)
-            {
-                self.try_submit_edit();
-                return None;
+            if let Some(f) = self.selected {
+                if let Some(action) = self.panel_action(f) {
+                    let is_submit = matches!(action, browse_panel::PanelAction::Submit { .. });
+                    let clicked = if is_submit {
+                        self.submit_button.get_mut().handle_mouse(&me)
+                    } else {
+                        self.hatch_button.get_mut().handle_mouse(&me)
+                    };
+                    if clicked {
+                        match action {
+                            browse_panel::PanelAction::Submit { .. } => {
+                                self.try_submit_edit();
+                            }
+                            browse_panel::PanelAction::HatchReady => self.on_egg_tapped(f),
+                            browse_panel::PanelAction::HatchDisabled => {}
+                        }
+                        return None;
+                    }
+                }
             }
 
             let mut tapped = None;
@@ -820,4 +842,12 @@ mod tests {
     // live in `tests/detail_tests.rs`, kept out of this file for the same
     // reason as hatch_sequence_tests.
     mod detail_tests;
+    // Right-panel STATUS text and panel-region layout tests live in
+    // `tests/panel_tests.rs`, kept out of this file for the same reason as
+    // hatch_sequence_tests.
+    mod panel_tests;
+    // Right-panel action-button (Submit/Hatch) style, tooltip, and click
+    // tests live in `tests/panel_button_tests.rs`, kept out of this file for
+    // the same reason as hatch_sequence_tests.
+    mod panel_button_tests;
 }

@@ -12,10 +12,11 @@ use super::mad_lib::{self, Segment};
 use super::mad_lib_paragraph::{self, Caret, ParaRun};
 use super::selection::HatcheryMode;
 
-/// Width/height, in cells, of the inline submit button anchored at the
-/// detail body region's bottom-right corner while editing.
-const SUBMIT_W_CELLS: u16 = 12;
-const SUBMIT_H_CELLS: u16 = 3;
+/// Width/height, in cells, of the panel's action button (Submit while
+/// editing, Hatch otherwise), anchored at the reserved button slot's
+/// bottom-right corner.
+const ACTION_W_CELLS: u16 = 12;
+const ACTION_H_CELLS: u16 = 3;
 
 impl super::Hatchery {
     /// Paints the editing egg's mad-lib inline into `body`: `egg`'s
@@ -53,26 +54,27 @@ impl super::Hatchery {
         mad_lib_paragraph::render(buf, body, &runs, caret);
     }
 
-    /// The submit button's fixed-size rect, anchored to `body`'s
-    /// bottom-right corner and clamped to its bounds.
-    fn submit_button_rect(body: Rect) -> Rect {
-        let w = SUBMIT_W_CELLS.min(body.width);
-        let h = SUBMIT_H_CELLS.min(body.height);
+    /// The panel action button's fixed-size rect, anchored to `slot`'s
+    /// bottom-right corner and clamped to its bounds. Shared by the Submit
+    /// button (editing) and the Hatch button (Incubating/Ready) — see
+    /// `browse_panel::draw_panel_action`.
+    pub(crate) fn action_button_rect(slot: Rect) -> Rect {
+        let w = ACTION_W_CELLS.min(slot.width);
+        let h = ACTION_H_CELLS.min(slot.height);
         Rect {
-            x: body.x + body.width.saturating_sub(w),
-            y: body.y + body.height.saturating_sub(h),
+            x: slot.x + slot.width.saturating_sub(w),
+            y: slot.y + slot.height.saturating_sub(h),
             width: w,
             height: h,
         }
     }
 
-    /// Positions and draws the inline "Submit" affordance in `body`'s
-    /// bottom-right corner; its click is routed by `mod.rs::handle_input`.
-    pub(crate) fn draw_submit_button(&self, buf: &mut Buffer, body: Rect) {
-        let rect = Self::submit_button_rect(body);
-        let mut button = self.submit_button.borrow_mut();
-        button.set_rect(rect);
-        button.render(buf);
+    /// The submit gate: true iff an egg is under edit and every blank holds
+    /// non-empty (post-trim) text. The single rule shared by `try_submit_edit`
+    /// and the Submit button's grey/gold styling.
+    pub(crate) fn edit_ready_to_submit(&self) -> bool {
+        self.editing_egg().is_some()
+            && !self.blank_editors.iter().any(|e| e.borrow().text().trim().is_empty())
     }
 
     /// Composes the edited egg's blanks into its template's completed
@@ -81,11 +83,11 @@ impl super::Hatchery {
     /// actually submitted; a no-op returning `false` while browsing (no
     /// editing egg) or with any blank still empty or whitespace-only.
     pub(crate) fn try_submit_edit(&mut self) -> bool {
-        let Some(egg) = self.editing_egg() else { return false };
-        let texts: Vec<String> = self.blank_editors.iter().map(|e| e.borrow().text()).collect();
-        if texts.iter().any(|t| t.trim().is_empty()) {
+        if !self.edit_ready_to_submit() {
             return false;
         }
+        let egg = self.editing_egg().expect("edit_ready_to_submit implies editing_egg().is_some()");
+        let texts: Vec<String> = self.blank_editors.iter().map(|e| e.borrow().text()).collect();
         let sentence = mad_lib::completed_sentence(mad_lib::select_template(egg), &texts);
         self.begin_definition(sentence);
         true

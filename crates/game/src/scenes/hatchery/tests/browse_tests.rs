@@ -111,7 +111,8 @@ fn enter_on_undefined_egg_renders_editable_body() {
     let (w, h) = (60u16, 24u16);
     let buf = render_to_buffer(&scene, w, h);
     let area = Rect::new(0, 0, w, h);
-    let (_egg, body, _tray) = detail_layout::detail_layout(area);
+    let panel = browse_layout::browse_layout(area).panel;
+    let body = browse_panel::panel_regions(panel).body;
 
     let underline = mad_lib_paragraph::UNDERLINE_COLOR;
     let mut found = false;
@@ -128,7 +129,7 @@ fn enter_on_undefined_egg_renders_editable_body() {
     assert!(
         found,
         "opening on an undefined egg must paint its mad-lib's blank underline \
-         (exact color {underline:?}) into the detail body region"
+         (exact color {underline:?}) into the panel body region"
     );
 }
 

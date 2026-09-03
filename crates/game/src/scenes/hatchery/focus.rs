@@ -1,15 +1,10 @@
 //! Focus-view layout: lays out the centered focus view and the relocated
-//! tray strip, and formats/draws the incubating countdown. Pure functions;
-//! the scene owns `selected`/`mode`/`pending_hatch` state and keys this
-//! layout off `selected`.
+//! tray strip. Pure functions; the scene owns `selected`/`mode`/
+//! `pending_hatch` state and keys this layout off `selected`.
 
-use std::time::Duration;
-
-use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
 
-use engine_render::{DotRect, TextAlign};
+use engine_render::DotRect;
 
 use super::tray::{EGG_SLOT_H_DOTS, EGG_SLOT_W_DOTS};
 
@@ -47,53 +42,11 @@ pub(crate) fn focus_layout(area: Rect) -> (DotRect, Rect) {
     (focus, strip)
 }
 
-/// Formats a remaining incubation `Duration` as `HH:MM:SS`.
-pub(crate) fn format_remaining(d: Duration) -> String {
-    let s = d.as_secs();
-    format!("{:02}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
-}
-
-/// The floored terminal-cell row the incubation countdown occupies: the row
-/// directly below `egg_dr`, clamped to the last row of `buf`. Both the
-/// countdown draw and the read-only detail prose inset key off this so the
-/// prose never collides with the countdown row.
-pub(crate) fn countdown_row(egg_dr: DotRect, buf: &Buffer) -> u16 {
-    let cell = egg_dr.to_cell_rect();
-    (cell.y + cell.height).min(buf.area.height.saturating_sub(1))
-}
-
-/// Draws the `HH:MM:SS` readout centered in a 1-cell row just below the
-/// focused egg. Text, exempt from the braille dot pipeline.
-pub(crate) fn draw_countdown(buf: &mut Buffer, focus: DotRect, remaining: Duration) {
-    let cr = focus.to_cell_rect();
-    let row = Rect { x: cr.x, y: countdown_row(focus, buf), width: cr.width, height: 1 };
-    engine_render::label(
-        buf,
-        row,
-        &format_remaining(remaining),
-        TextAlign::Center,
-        Style::default().fg(Color::Rgb(0xff, 0xff, 0xff)),
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use super::super::tray::{EGG_SLOT_H_DOTS, EGG_SLOT_W_DOTS};
-
-    /// `23:59:59` formats exactly, with no rounding or truncation.
-    #[test]
-    fn format_remaining_formats_hours_minutes_seconds() {
-        let d = Duration::from_secs(23 * 3600 + 59 * 60 + 59);
-        assert_eq!(format_remaining(d), "23:59:59");
-    }
-
-    /// A zero duration formats as all zeros, not an empty or negative string.
-    #[test]
-    fn format_remaining_zero_is_all_zeros() {
-        assert_eq!(format_remaining(Duration::ZERO), "00:00:00");
-    }
 
     /// The focus rect is strictly larger than a tray slot on both axes, so
     /// the focused egg is visibly bigger than its tray render.
@@ -116,24 +69,5 @@ mod tests {
             focus_cells.y + focus_cells.height <= strip.y,
             "focus rect {focus_cells:?} must not overlap the tray strip {strip:?}"
         );
-    }
-
-    /// For an egg rect well inside the buffer, the countdown row is exactly
-    /// the row directly below the egg's floored cell rect (no clamp engaged).
-    #[test]
-    fn countdown_row_is_directly_below_the_egg_rect() {
-        let buf = Buffer::empty(Rect::new(0, 0, 40, 20));
-        let egg_dr = DotRect { x: 0, y: 0, w: 16, h: 16 };
-        assert_eq!(countdown_row(egg_dr, &buf), 4);
-    }
-
-    /// When the egg rect's bottom edge sits at or past the buffer's last
-    /// row, the countdown row clamps to that last row rather than running
-    /// off the buffer.
-    #[test]
-    fn countdown_row_clamps_to_the_buffers_last_row() {
-        let buf = Buffer::empty(Rect::new(0, 0, 40, 10));
-        let egg_dr = DotRect { x: 0, y: 32, w: 16, h: 16 };
-        assert_eq!(countdown_row(egg_dr, &buf), 9);
     }
 }

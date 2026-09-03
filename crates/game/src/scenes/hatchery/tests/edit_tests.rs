@@ -64,17 +64,18 @@ fn set_blank_text(scene: &Hatchery, i: usize, text: &str) {
     scene.blank_editors[i].borrow_mut().set_text(text);
 }
 
-/// Entering edit mode on an undefined egg paints its mad-lib into the
-/// reserved detail body region: even with every blank empty, the first
-/// blank's minimum-floor underline is a lit braille dot somewhere in that
-/// region, painted through the dot pipeline.
+/// Entering edit mode on an undefined egg paints its mad-lib into the right
+/// panel's body region: even with every blank empty, the first blank's
+/// minimum-floor underline is a lit braille dot somewhere in that region,
+/// painted through the dot pipeline.
 #[test]
-fn entering_edit_renders_underline_dots_in_detail_body() {
+fn entering_edit_renders_underline_dots_in_panel_body() {
     let scene = scene_editing_undefined_egg("render-body");
     let (w, h) = (60u16, 24u16);
     let buf = render_to_buffer(&scene, w, h);
     let area = Rect::new(0, 0, w, h);
-    let (_egg, body, _tray) = detail_layout::detail_layout(area);
+    let panel = browse_layout::browse_layout(area).panel;
+    let body = browse_panel::panel_regions(panel).body;
 
     // Match the underline's own exact gray, not just any lit dot, so a
     // tray/egg-sprite fringe bleeding one row into `body` cannot pass this
@@ -94,7 +95,7 @@ fn entering_edit_renders_underline_dots_in_detail_body() {
     assert!(
         found,
         "editing an undefined egg must paint its mad-lib's blank underline (exact color {underline:?}) \
-         into the detail body region"
+         into the panel body region"
     );
 }
 

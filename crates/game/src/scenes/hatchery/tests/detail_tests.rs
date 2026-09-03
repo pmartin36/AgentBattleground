@@ -1,8 +1,8 @@
 //! Read-only detail rendering for a selected, defined (`Incubating`/`Ready`)
 //! egg: its completed `mad_lib` sentence renders as plain wrapped prose in
-//! the detail body region, with no editable underline or caret, alongside
-//! the existing HH:MM:SS countdown for an `Incubating` egg on a row distinct
-//! from the prose.
+//! the right panel's body, with no editable underline or caret, alongside
+//! the panel's whole-hours/minutes remaining-time STATUS row for an
+//! `Incubating` egg, on a row distinct from the prose.
 
 use super::*;
 use ratatui::style::Modifier;
@@ -22,6 +22,23 @@ fn row_text(buf: &Buffer, y: u16, x0: u16, x1: u16) -> String {
 /// The first row within `[y0, y1)` whose text contains `needle`, or `None`.
 fn find_row_containing(buf: &Buffer, x0: u16, x1: u16, y0: u16, y1: u16, needle: &str) -> Option<u16> {
     (y0..y1).find(|&y| row_text(buf, y, x0, x1).contains(needle))
+}
+
+/// True iff `line` contains a `DD:DD:DD` digit-colon-digit-colon-digit
+/// pattern (an `HH:MM:SS` countdown), scanning every 8-character window.
+fn contains_hhmmss(line: &str) -> bool {
+    let chars: Vec<char> = line.chars().collect();
+    let is_digit_at = |i: usize| chars.get(i).is_some_and(|c| c.is_ascii_digit());
+    (0..chars.len().saturating_sub(7)).any(|i| {
+        is_digit_at(i)
+            && is_digit_at(i + 1)
+            && chars.get(i + 2) == Some(&':')
+            && is_digit_at(i + 3)
+            && is_digit_at(i + 4)
+            && chars.get(i + 5) == Some(&':')
+            && is_digit_at(i + 6)
+            && is_digit_at(i + 7)
+    })
 }
 
 /// True iff any cell in `area` decodes to a lit dot in the mad-lib
@@ -69,10 +86,10 @@ fn ready_egg_with_mad_lib(sentence: &str) -> Egg {
 }
 
 /// A selected `Incubating` egg with a completed `mad_lib` renders that
-/// sentence as read-only prose in the detail body, on a row distinct from
-/// the HH:MM:SS countdown the render path already draws for it.
+/// sentence as read-only prose in the panel body, on a row distinct from the
+/// panel's whole-hours/minutes remaining-time STATUS row.
 #[test]
-fn selected_incubating_defined_egg_renders_readonly_prose_below_countdown() {
+fn selected_incubating_defined_egg_renders_readonly_prose_and_whole_hm_status() {
     let dir = temp_store_dir("detail-incubating-prose");
     let now = SystemTime::now();
     let seed = PlayerData {
@@ -85,30 +102,22 @@ fn selected_incubating_defined_egg_renders_readonly_prose_below_countdown() {
 
     let (w, h) = (60u16, 30u16);
     let area = Rect::new(0, 0, w, h);
-    let (_egg_dr, body, _tray) = detail_layout::detail_layout(area);
-    // The countdown's exact seconds can tick over between setup and render,
-    // so both readings are accepted below.
-    let before = lifecycle::remaining(&scene.eggs[0], SystemTime::now()).map(focus::format_remaining);
+    let panel = browse_layout::browse_layout(area).panel;
+    let regions = browse_panel::panel_regions(panel);
     let buf = render_to_buffer(&scene, w, h);
-    let after = lifecycle::remaining(&scene.eggs[0], SystemTime::now()).map(focus::format_remaining);
 
-    let word_row = find_row_containing(&buf, body.left(), body.right(), body.top(), body.bottom(), "calm")
+    let word_row = find_row_containing(&buf, regions.body.left(), regions.body.right(), regions.body.top(), regions.body.bottom(), "calm")
         .expect(
             "a selected Incubating egg's completed mad_lib sentence must render as \
-             read-only prose in the detail body",
+             read-only prose in the panel body",
         );
 
-    let countdown_row = before
-        .as_deref()
-        .and_then(|s| find_row_containing(&buf, area.left(), area.right(), area.top(), area.bottom(), s))
-        .or_else(|| {
-            after
-                .as_deref()
-                .and_then(|s| find_row_containing(&buf, area.left(), area.right(), area.top(), area.bottom(), s))
-        })
-        .expect("the HH:MM:SS countdown must remain visible alongside the read-only prose");
+    let status_row = find_row_containing(&buf, regions.status.left(), regions.status.right(), regions.status.top(), regions.status.bottom(), "remaining")
+        .expect("the panel STATUS row must show a whole-hours/minutes remaining readout");
+    let status_line = row_text(&buf, status_row, regions.status.left(), regions.status.right());
+    assert!(!status_line.contains(':'), "STATUS row {status_line:?} must not be the HH:MM:SS form");
 
-    assert_ne!(word_row, countdown_row, "the read-only prose must not collide with the countdown row");
+    assert_ne!(word_row, status_row, "the read-only prose must not collide with the STATUS row");
 }
 
 /// The same read-only prose carries no editable-mode decoration: no
@@ -127,15 +136,16 @@ fn selected_incubating_defined_egg_prose_has_no_underline_or_caret() {
 
     let (w, h) = (60u16, 30u16);
     let area = Rect::new(0, 0, w, h);
-    let (_egg_dr, body, _tray) = detail_layout::detail_layout(area);
+    let panel = browse_layout::browse_layout(area).panel;
+    let body = browse_panel::panel_regions(panel).body;
     let buf = render_to_buffer(&scene, w, h);
 
     find_row_containing(&buf, body.left(), body.right(), body.top(), body.bottom(), "calm").expect(
         "a selected Incubating egg's completed mad_lib sentence must render as read-only prose \
-         in the detail body",
+         in the panel body",
     );
-    assert!(!area_has_underline_dot(&buf, body), "read-only prose must carry no underline dots in the detail body");
-    assert!(!area_has_reversed_cell(&buf, body), "read-only prose must carry no caret (REVERSED cell) in the detail body");
+    assert!(!area_has_underline_dot(&buf, body), "read-only prose must carry no underline dots in the panel body");
+    assert!(!area_has_reversed_cell(&buf, body), "read-only prose must carry no caret (REVERSED cell) in the panel body");
 }
 
 /// A selected `Ready` egg with a completed `mad_lib` renders the sentence
@@ -153,14 +163,23 @@ fn selected_ready_defined_egg_renders_prose_without_countdown() {
 
     let (w, h) = (60u16, 30u16);
     let area = Rect::new(0, 0, w, h);
-    let (_egg_dr, body, _tray) = detail_layout::detail_layout(area);
+    let panel = browse_layout::browse_layout(area).panel;
+    let body = browse_panel::panel_regions(panel).body;
     let buf = render_to_buffer(&scene, w, h);
 
     find_row_containing(&buf, body.left(), body.right(), body.top(), body.bottom(), "clever").expect(
         "a selected Ready egg's completed mad_lib sentence must render as read-only prose in the \
-         detail body",
+         panel body",
     );
     assert!(!area_has_underline_dot(&buf, body), "a Ready egg's read-only prose must carry no underline dots");
+
+    for y in area.top()..area.bottom() {
+        let line = row_text(&buf, y, area.left(), area.right());
+        assert!(
+            !contains_hhmmss(&line),
+            "a Ready egg's render must show no HH:MM:SS-style countdown anywhere, found {line:?}"
+        );
+    }
 }
 
 /// Activating a selected `Ready` egg (Enter on the hovered egg) records the
