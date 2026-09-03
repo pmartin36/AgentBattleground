@@ -8,7 +8,7 @@ Tracking the roster-style hatchery rework and its shared-primitive prerequisites
 
 ## Foundational builds (independent of each other; all block `79`)
 - [x] **76 — engine sub-cell dot placement + `draw_dot_border`.** Added `draw_dots_at` + `draw_dot_border` to the engine, migrated the roster border onto them, `draw_dot_box` deleted. Roster border tests pass unchanged (byte-identical); added direct sub-cell precision tests.
-- [ ] **77 — tooltip primitive.** Extract roster's tooltip shell to a shared game module + plain-text path; migrate the ability tooltip with no visible change.
+- [x] **77 — tooltip primitive.** Shared `scenes/tooltip` module (`layout`/`draw_frame`/`render_text`); roster ability tooltip migrated onto it, local `shell.rs` gone, all 40 tooltip tests pass unchanged.
 - [ ] **78 — shared stat-bar rendering.** Hoist roster's `stat_bar` + `draw_dot_cap_box` to a shared, stats-driven module; migrate roster.
 
 ## Checkpoint
