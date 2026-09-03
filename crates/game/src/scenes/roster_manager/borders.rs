@@ -12,65 +12,17 @@ impl RosterManager {
     /// heavy).
     const CHAMFER: usize = 1;
 
-    /// Lights the chamfered-corner perimeter of the inclusive dot-space box
-    /// `[left..=right] × [top..=bottom]` into `dots` — the shared primitive
-    /// behind BOTH `draw_dot_border` (a box spanning a whole cell rect) and
-    /// the stat bars' border box (a sub-region of the outline buffer).
-    /// The same "light one dot position across the whole run" technique as
-    /// `battle_viewer::draw_board_lines`, restricted to the 4 edges, minus the
-    /// outermost corner dots (`CHAMFER`) so the corners read as rounded.
-    /// Because every bordered element routes through here, the SAME
-    /// thickness/chamfer applies consistently and no caller can forget it.
-    pub(super) fn draw_dot_box(
-        dots: &mut DotBuffer,
-        left: usize,
-        top: usize,
-        right: usize,
-        bottom: usize,
-        color: engine_core::color::Rgba,
-    ) {
-        let thickness = Self::BORDER_THICKNESS;
-        let chamfer = Self::CHAMFER;
-        for row in top..=bottom {
-            for col in left..=right {
-                let d_left = col - left;
-                let d_right = right - col;
-                let d_top = row - top;
-                let d_bottom = bottom - row;
-
-                let in_border = d_left < thickness
-                    || d_right < thickness
-                    || d_top < thickness
-                    || d_bottom < thickness;
-                if !in_border {
-                    continue;
-                }
-
-                // Chamfer clip: a dot within `chamfer` of TWO adjacent edges
-                // (a corner zone) is dropped unless its Manhattan distance sum
-                // clears the threshold — a 45° diagonal cut off each corner.
-                let clipped = (d_left < chamfer && d_top < chamfer && d_left + d_top < chamfer)
-                    || (d_right < chamfer && d_top < chamfer && d_right + d_top < chamfer)
-                    || (d_left < chamfer && d_bottom < chamfer && d_left + d_bottom < chamfer)
-                    || (d_right < chamfer && d_bottom < chamfer && d_right + d_bottom < chamfer);
-                if clipped {
-                    continue;
-                }
-
-                dots.set(col, row, Dot::Lit(color));
-            }
-        }
-    }
-
-    /// Like `draw_dot_box`, but with an asymmetric edge thickness: left/right
-    /// sides stay `BORDER_THICKNESS` dots thick, while the top/bottom caps
-    /// are `v_thickness` dots thick — e.g. the stat bars' 2-dot hug caps,
-    /// which a uniform `draw_dot_box` thickness can't produce (it would need
-    /// either a 2-dot-thick border on every side, or a 1-dot cap that isn't
-    /// what was asked for). Same single-dot `CHAMFER` corner clip as
-    /// `draw_dot_box` — the clip only compares distance-from-edge on each
-    /// axis independently, so it reads identically rounded regardless of
-    /// this box's differing horizontal/vertical thickness.
+    /// Like `engine_render::draw_dot_border`'s underlying `rounded_rect`, but
+    /// with an asymmetric edge thickness: left/right sides stay
+    /// `BORDER_THICKNESS` dots thick, while the top/bottom caps are
+    /// `v_thickness` dots thick — e.g. the stat bars' 2-dot hug caps, which a
+    /// uniform border thickness can't produce (it would need either a
+    /// 2-dot-thick border on every side, or a 1-dot cap that isn't what was
+    /// asked for). Same single-dot `CHAMFER` corner clip as
+    /// `engine_render::draw_dot_border` — the clip only compares
+    /// distance-from-edge on each axis independently, so it reads
+    /// identically rounded regardless of this box's differing
+    /// horizontal/vertical thickness.
     pub(super) fn draw_dot_cap_box(
         dots: &mut DotBuffer,
         left: usize,
@@ -111,46 +63,17 @@ impl RosterManager {
     }
 
     /// Draws a chamfered-corner rectangular border filling `rect`'s perimeter
-    /// via the dot pipeline (b1-t4) — a full-buffer `draw_dot_box`.
-    /// Interiors are left `Transparent` by `draw_grid` (existing buffer
-    /// content underneath is preserved). Clips (no-ops) on a zero-size rect.
-    /// Shared by b1-t5 (details panel) and formerly the stat-bar outlines —
-    /// every bordered element gets the SAME thickness/chamfer via
-    /// `draw_dot_box`. `FRAME_PANEL` MUST NOT be used for this.
-    /// `rect`'s position and size are honored at DOT precision, not floored
-    /// to the nearest cell first — the same sub-cell placement technique
-    /// `render_sprite` uses: offset the raw dots into a buffer sized to
-    /// include the sub-cell remainder, convert once. Without this, a
-    /// caller could compute a dot-precise `DotRect` and still have the
-    /// visible border land on the wrong dot row, because this function
-    /// would silently floor it to the nearest cell — exactly the bug that
-    /// made the details panel's border 2 dots off from `stat_bar`'s.
+    /// via the dot pipeline — a thin delegation to
+    /// `engine_render::draw_dot_border`, which composes `rounded_rect` and
+    /// places it at DOT precision via `draw_dots_at`. Interiors are left
+    /// `Transparent` (existing buffer content underneath is preserved).
+    /// Clips (no-ops) on a zero-size rect. Used by every bordered element on
+    /// this screen that needs a uniform thickness (the details panel); the
+    /// asymmetric-thickness stat-bar outlines use `draw_dot_cap_box` instead.
+    /// `FRAME_PANEL` MUST NOT be used for this.
     pub(super) fn draw_dot_border(buf: &mut Buffer, rect: engine_render::DotRect, color: engine_core::color::Rgba) {
-        let (dot_cols, dot_rows) = (rect.w, rect.h);
-        if dot_cols <= 0 || dot_rows <= 0 {
-            return;
-        }
-        let cell_rect = rect.to_cell_rect();
-        let (dx, dy) = rect.cell_remainder();
-        let mut dots = DotBuffer::new((dot_cols + dx) as usize, (dot_rows + dy) as usize);
-        Self::draw_dot_box(
-            &mut dots,
-            dx as usize,
-            dy as usize,
-            (dx + dot_cols - 1) as usize,
-            (dy + dot_rows - 1) as usize,
-            color,
-        );
-        let grid = dots_to_grid(&dots);
-        let draw_area = Rect {
-            x: cell_rect.x,
-            y: cell_rect.y,
-            width: grid.cols() as u16,
-            height: grid.rows() as u16,
-        };
-        engine_render::draw_grid(buf, draw_area, &grid);
+        engine_render::draw_dot_border(buf, rect, Self::BORDER_THICKNESS, Self::CHAMFER, color);
     }
-
 }
 
 /// b1-t4: `draw_dot_border` — the shared procedural thin-border helper

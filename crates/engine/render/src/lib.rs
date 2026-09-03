@@ -45,7 +45,7 @@ pub use convert::convert;
 pub use debug_grid::{draw_debug_grid, GRID_SPACING_COLS, GRID_SPACING_ROWS};
 pub use dot_diff::{decode_braille_cell, diff_dots, DotDiff, DotMismatch};
 pub use flex::{flex, Align, Basis, Direction, DotRect, DotRectTween, FlexChild, FlexStyle, Justify};
-pub use dots::draw_dots;
+pub use dots::{draw_dots, draw_dots_at};
 pub use grid::{draw_grid, Cell, Grid};
 pub use screen_layout::{anchor, anchor_with_margin, stack, Anchor, RectTween, StackAxis};
 pub use shapes::{rasterize_shape, ShapeKind};
@@ -53,7 +53,7 @@ pub use text_editor::{
     Decoration, EditorEvent, MentionCandidate, MentionProvider, Sizing, TextEditor,
     TextEditorConfig, SELECTION_BG,
 };
-pub use ui_primitives::{circle, circle_outline, rect, ring, rounded_rect};
+pub use ui_primitives::{circle, circle_outline, draw_dot_border, rect, ring, rounded_rect};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;

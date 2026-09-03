@@ -9,6 +9,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use engine_core::color::Rgba;
 
+use crate::flex::DotRect;
 use crate::grid::{draw_grid, Grid};
 
 /// One sub-cell dot.
@@ -327,6 +328,37 @@ pub fn dots_to_grid(buf: &DotBuffer) -> Grid {
 /// or composited one) — routing it through here would re-convert it every call.
 pub fn draw_dots(buf: &mut Buffer, area: Rect, dots: &DotBuffer) {
     draw_grid(buf, area, &dots_to_grid(dots));
+}
+
+/// Places `dots` into `buf` honoring `dot_rect`'s position at DOT precision —
+/// not floored to the nearest cell first. No-op when `dot_rect.w <= 0 ||
+/// dot_rect.h <= 0`. `dot_rect`'s origin is split into a floored cell origin
+/// (`to_cell_rect`) plus a sub-cell remainder (`cell_remainder`); `dots` is
+/// re-laid into a buffer offset by that remainder (sized to include it),
+/// converted once (`dots_to_grid`), and blitted at the floored cell origin.
+/// Never panics on an oversized or negative-origin `dot_rect` — an
+/// out-of-range source read is clipped by `DotBuffer::set`'s silent OOB
+/// no-op, and `draw_grid` clips the destination blit.
+pub fn draw_dots_at(buf: &mut Buffer, dot_rect: DotRect, dots: &DotBuffer) {
+    if dot_rect.w <= 0 || dot_rect.h <= 0 {
+        return;
+    }
+    let cell_rect = dot_rect.to_cell_rect();
+    let (dx, dy) = dot_rect.cell_remainder();
+    let mut offset = DotBuffer::new((dot_rect.w + dx) as usize, (dot_rect.h + dy) as usize);
+    for row in 0..dots.rows() {
+        for col in 0..dots.cols() {
+            offset.set(col + dx as usize, row + dy as usize, dots.get(col, row));
+        }
+    }
+    let grid = dots_to_grid(&offset);
+    let area = Rect {
+        x: cell_rect.x,
+        y: cell_rect.y,
+        width: grid.cols() as u16,
+        height: grid.rows() as u16,
+    };
+    draw_grid(buf, area, &grid);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

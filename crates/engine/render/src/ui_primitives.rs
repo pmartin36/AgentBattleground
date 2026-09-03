@@ -4,8 +4,10 @@
 //! chamfered corners — and a caller-chosen interior fill, suited to
 //! screen-space UI rather than in-scene effects.
 
-use crate::dots::{Dot, DotBuffer};
+use crate::dots::{draw_dots_at, Dot, DotBuffer};
+use crate::flex::DotRect;
 use engine_core::color::Rgba;
+use ratatui::buffer::Buffer;
 
 /// Rasterize a rounded-rect panel into a fresh `width_dots × height_dots`
 /// [`DotBuffer`]: a `thickness`-dot border ring in `border`, its corners
@@ -82,6 +84,32 @@ pub fn rounded_rect(
     }
 
     buf
+}
+
+/// Draws a `rounded_rect` border ring directly into `buf`, placed via
+/// `draw_dots_at` so `dot_rect`'s position is honored at DOT precision — not
+/// floored to the nearest cell first. Interior stays `Dot::Transparent`, so
+/// pre-existing buffer content behind the ring is preserved. No-op on a
+/// zero/negative-size `dot_rect`.
+pub fn draw_dot_border(
+    buf: &mut Buffer,
+    dot_rect: DotRect,
+    thickness: usize,
+    corner_radius: usize,
+    color: Rgba,
+) {
+    if dot_rect.w <= 0 || dot_rect.h <= 0 {
+        return;
+    }
+    let dots = rounded_rect(
+        dot_rect.w as usize,
+        dot_rect.h as usize,
+        thickness,
+        corner_radius,
+        color,
+        Dot::Transparent,
+    );
+    draw_dots_at(buf, dot_rect, &dots);
 }
 
 /// A "railroad" frame border in `border`, hollow interior: a SINGLE-dot line
