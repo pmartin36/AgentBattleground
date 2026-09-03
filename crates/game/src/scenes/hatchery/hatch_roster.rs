@@ -32,7 +32,7 @@ pub(super) enum RosterAction {
 }
 
 impl RosterAction {
-    /// A fresh offer, mirroring the define-modal Done button's construction.
+    /// A fresh offer with both buttons idle.
     fn offer() -> Self {
         RosterAction::Offer {
             keep: RefCell::new(Button::new(Rect::default(), crate::assets::FRAME_PANEL).label("Keep")),
@@ -196,7 +196,8 @@ impl super::Hatchery {
             self.persist_eggs();
         }
         self.roster_action = None;
-        self.focused = None;
+        self.selected = None;
+        self.mode = super::selection::HatcheryMode::Browsing { hover: 0 };
     }
 
     /// Loads the on-disk roster; with an open slot, appends the hatchling

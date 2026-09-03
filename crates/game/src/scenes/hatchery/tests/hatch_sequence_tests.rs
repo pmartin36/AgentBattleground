@@ -298,8 +298,8 @@ fn name_dimmer_at_beat_start_than_after_beat_completes() {
 }
 
 /// While the sequence is active, a completed back-button click produces
-/// no `Transition`, and a tap on the focused egg changes neither focus
-/// nor the define modal.
+/// no `Transition`, and a tap on the selected egg changes neither the
+/// selection nor the edit mode.
 #[test]
 fn input_swallowed_mid_sequence() {
     let dir = temp_store_dir("hatch-input-swallowed");
@@ -323,8 +323,12 @@ fn input_swallowed_mid_sequence() {
 
     let egg_rect = focus::focus_layout(area).0.to_cell_rect();
     tap_at(&mut scene, egg_rect.x, egg_rect.y);
-    assert!(scene.focused.is_none(), "an egg tap mid-hatch-sequence must not change focus");
-    assert!(scene.define_modal.is_none(), "an egg tap mid-hatch-sequence must not open the define modal");
+    assert!(scene.selected.is_none(), "an egg tap mid-hatch-sequence must not change the selection");
+    assert!(
+        matches!(scene.mode, HatcheryMode::Browsing { .. }),
+        "an egg tap mid-hatch-sequence must not enter edit mode, got {:?}",
+        scene.mode
+    );
 }
 
 /// With no still or idle/attack clips ever resolving (a no-GPU

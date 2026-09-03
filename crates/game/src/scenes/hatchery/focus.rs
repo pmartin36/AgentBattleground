@@ -1,8 +1,7 @@
-//! Tap-to-focus interaction: classifies a completed tap on an egg by its
-//! current state, lays out the centered focus view and the relocated tray
-//! strip, and formats/draws the incubating countdown. Pure functions; the
-//! scene applies their result and owns `focused`/`define_modal`/
-//! `pending_hatch` state.
+//! Focus-view layout: lays out the centered focus view and the relocated
+//! tray strip, and formats/draws the incubating countdown. Pure functions;
+//! the scene owns `selected`/`mode`/`pending_hatch` state and keys this
+//! layout off `selected`.
 
 use std::time::Duration;
 
@@ -12,33 +11,10 @@ use ratatui::style::{Color, Style};
 
 use engine_render::{DotRect, TextAlign};
 
-use crate::player_data::EggState;
-
 use super::tray::{EGG_SLOT_H_DOTS, EGG_SLOT_W_DOTS};
 
 /// Height of the relocated tray strip while an egg is focused, in cells.
 const STRIP_H_CELLS: u16 = 10;
-
-/// How a completed tap on an egg resolves. `Focus` toggles/swaps the
-/// centered incubating view; `Define`/`Hatch` are the extension points a
-/// mad-lib definition flow and a hatch sequence attach their own action to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TapRoute {
-    Focus,
-    Define,
-    Hatch,
-}
-
-/// Classifies a tap by the tapped egg's state. Exhaustive match with no
-/// wildcard: a future `EggState` variant must fail to compile here rather
-/// than silently falling through to one of these three routes.
-pub(crate) fn route_tap(state: &EggState) -> TapRoute {
-    match state {
-        EggState::Undefined => TapRoute::Define,
-        EggState::Incubating { .. } => TapRoute::Focus,
-        EggState::Ready => TapRoute::Hatch,
-    }
-}
 
 /// Splits `area` for focus mode: the large centered egg rect (dots, in the
 /// region above the strip) and the bottom tray strip (cells) the remaining
@@ -99,28 +75,8 @@ pub(crate) fn draw_countdown(buf: &mut Buffer, focus: DotRect, remaining: Durati
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::SystemTime;
 
     use super::super::tray::{EGG_SLOT_H_DOTS, EGG_SLOT_W_DOTS};
-
-    /// A tap on an `Undefined` egg routes to `Define`.
-    #[test]
-    fn route_tap_undefined_routes_to_define() {
-        assert_eq!(route_tap(&EggState::Undefined), TapRoute::Define);
-    }
-
-    /// A tap on an `Incubating` egg routes to `Focus`.
-    #[test]
-    fn route_tap_incubating_routes_to_focus() {
-        let state = EggState::Incubating { started_at: SystemTime::now() };
-        assert_eq!(route_tap(&state), TapRoute::Focus);
-    }
-
-    /// A tap on a `Ready` egg routes to `Hatch`.
-    #[test]
-    fn route_tap_ready_routes_to_hatch() {
-        assert_eq!(route_tap(&EggState::Ready), TapRoute::Hatch);
-    }
 
     /// `23:59:59` formats exactly, with no rounding or truncation.
     #[test]

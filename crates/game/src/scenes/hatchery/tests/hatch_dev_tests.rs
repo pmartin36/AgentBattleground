@@ -4,12 +4,10 @@ use super::*;
 
 use super::hatch_sequence_tests as hsq;
 
-/// A completed tap on the single egg at tray slot 0, focusing it.
-fn focus_first_egg(scene: &mut Hatchery, w: u16, h: u16) {
-    let area = Rect::new(0, 0, w, h);
-    let _ = render_to_buffer(scene, w, h);
-    let rect = tray::tray_slots(tray::tray_band(area), scene.eggs.len())[0].to_cell_rect();
-    tap_at(scene, rect.x, rect.y);
+/// Selects the single egg at index 0, mirroring the browse-mode selection
+/// that replaces tap-to-focus.
+fn focus_first_egg(scene: &mut Hatchery, _w: u16, _h: u16) {
+    scene.select(0);
 }
 
 /// With an `Incubating` egg focused whose still/idle/attack are all
@@ -29,7 +27,7 @@ fn force_hatch_key_on_unresolved_egg_does_not_force_ready() {
     let mut scene = Hatchery::from_store_at(PlayerStore::with_dir(&dir), now);
     let (w, h) = (40u16, 20u16);
     focus_first_egg(&mut scene, w, h);
-    assert_eq!(scene.focused, Some(0), "fixture must have the egg focused before force-hatching it");
+    assert_eq!(scene.selected, Some(0), "fixture must have the egg selected before force-hatching it");
 
     scene.handle_input(key_event(hatch_dev::FORCE_HATCH_KEY));
 
@@ -125,11 +123,11 @@ fn force_hatch_launches_once_generation_completes_after_holding() {
     );
 }
 
-/// Pressing the force-hatch key with no egg focused is a no-op: no egg
+/// Pressing the force-hatch key with no egg selected is a no-op: no egg
 /// state changes and no hatch request is recorded.
 #[test]
-fn force_hatch_with_no_egg_focused_is_a_no_op() {
-    let dir = temp_store_dir("force-hatch-no-focus");
+fn force_hatch_with_no_egg_selected_is_a_no_op() {
+    let dir = temp_store_dir("force-hatch-no-selection");
     let now = SystemTime::now();
     let seed = PlayerData {
         roster: Vec::new(),
@@ -138,15 +136,15 @@ fn force_hatch_with_no_egg_focused_is_a_no_op() {
     PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
 
     let mut scene = Hatchery::from_store_at(PlayerStore::with_dir(&dir), now);
-    assert!(scene.focused.is_none(), "fixture must start with nothing focused");
+    assert!(scene.selected.is_none(), "fixture must start with nothing selected");
 
     scene.handle_input(key_event(hatch_dev::FORCE_HATCH_KEY));
 
     assert!(
         matches!(scene.eggs[0].state, EggState::Incubating { .. }),
-        "with no egg focused, force-hatch must not change any egg's state"
+        "with no egg selected, force-hatch must not change any egg's state"
     );
-    assert!(scene.pending_hatch.is_none(), "with no egg focused, force-hatch must not record a hatch request");
+    assert!(scene.pending_hatch.is_none(), "with no egg selected, force-hatch must not record a hatch request");
 }
 
 /// Pressing the force-create-egg key appends one `Undefined` egg to the

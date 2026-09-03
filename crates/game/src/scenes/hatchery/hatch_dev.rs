@@ -17,7 +17,7 @@ impl super::Hatchery {
     pub(super) fn handle_debug_hotkey(&mut self, code: KeyCode) -> bool {
         match code {
             FORCE_HATCH_KEY => {
-                self.force_hatch_focused();
+                self.force_hatch_selected();
                 true
             }
             FORCE_CREATE_EGG_KEY => {
@@ -28,13 +28,13 @@ impl super::Hatchery {
         }
     }
 
-    /// With an egg focused: records a hatch request so the next `update()`
+    /// With an egg selected: records a hatch request so the next `update()`
     /// tick launches the sequence once its assets are fully generated
     /// (never forces the egg `Ready` — that would stall the clip-generation
     /// loop, which only advances an `Incubating` egg). A no-op when no egg
-    /// is focused.
-    fn force_hatch_focused(&mut self) {
-        let Some(index) = self.focused else { return };
+    /// is selected.
+    fn force_hatch_selected(&mut self) {
+        let Some(index) = self.selected else { return };
         if self.eggs.get(index).is_none() {
             return;
         }

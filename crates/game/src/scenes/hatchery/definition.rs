@@ -95,9 +95,11 @@ enum PollOutcome {
 }
 
 impl super::Hatchery {
-    /// Entry point for the modal's `Submit(sentence)`: resolves the model
-    /// config, submits the parts-text job, and stores the in-flight pending
-    /// state. A no-op-with-error while a pipeline is already in flight.
+    /// Entry point for a completed sentence submission on the egg under
+    /// edit: resolves the model config, submits the parts-text job, and
+    /// stores the in-flight pending state. A no-op-with-error while a
+    /// pipeline is already in flight.
+    #[allow(dead_code)]
     pub(super) fn begin_definition(&mut self, sentence: String) {
         if self.definition.is_some() {
             // A second Done while one pipeline is already in flight: known,
@@ -105,7 +107,7 @@ impl super::Hatchery {
             return;
         }
 
-        let Some(egg) = self.defining_egg else { return };
+        let Some(egg) = self.editing_egg() else { return };
 
         self.definition_error = None;
 
@@ -225,7 +227,7 @@ impl super::Hatchery {
         self.definition = Some(PendingDefinition::AwaitingImage { egg, handle });
 
         self.start_incubation(egg, now);
-        self.close_define_modal();
+        self.exit_edit();
     }
 
     /// Renders the current definition error, if any, as a plain text line
@@ -376,8 +378,8 @@ ARCHETYPE: Ranged\n";
     }
 
     /// Constructs a hermetic `Hatchery` with one `Undefined` egg, the given
-    /// model config, and a text-gen factory, then opens its define modal for
-    /// egg 0. Returns the scene and the asset-gen call counter.
+    /// model config, and a text-gen factory, then enters edit mode for egg
+    /// 0. Returns the scene and the asset-gen call counter.
     fn scene_with_undefined_egg(
         tag: &str,
         model_config: Option<ResolvedModelConfig>,
@@ -395,7 +397,7 @@ ARCHETYPE: Ranged\n";
             model_config.ok_or(ConfigError::NotConfigured),
             text_gen_factory,
         );
-        scene.open_define_modal(0);
+        scene.enter_edit(0);
         (scene, calls)
     }
 
@@ -459,7 +461,7 @@ ARCHETYPE: Ranged\n";
 
     /// A completed Done with a present config and a well-formed parts
     /// completion drives the egg to `Incubating`, populates its hatchling
-    /// and mad_lib, closes the modal, and submits an image job.
+    /// and mad_lib, returns to Browsing, and submits an image job.
     #[test]
     fn done_success_incubates_with_hatchling_madlib_and_submits_image() {
         let sentence = "A small brave creature.".to_string();
@@ -479,8 +481,48 @@ ARCHETYPE: Ranged\n";
         );
         assert!(scene.eggs[0].hatchling.is_some(), "a successful Done must populate the hatchling");
         assert_eq!(scene.eggs[0].mad_lib, Some(sentence), "the egg's mad_lib must be the completed sentence");
-        assert!(scene.define_modal.is_none(), "a successful Done must close the modal");
+        assert!(
+            matches!(scene.mode, super::super::selection::HatcheryMode::Browsing { .. }),
+            "a successful Done must return to Browsing, got {:?}",
+            scene.mode
+        );
         assert!(calls.load(Ordering::SeqCst) >= 1, "a successful Done must submit an image job");
+    }
+
+    /// With two `Undefined` eggs, `begin_definition` after `enter_edit(1)`
+    /// defines egg 1 — not egg 0 — proving the pipeline sources the egg from
+    /// the editing state rather than a fixed index.
+    #[test]
+    fn begin_definition_sources_egg_from_editing_state() {
+        let sentence = "A small brave creature.".to_string();
+        let dir = temp_store_dir("editing-state-sourcing");
+        let seed = PlayerData { roster: Vec::new(), eggs: vec![undefined_egg(), undefined_egg()] };
+        PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut scene = super::super::Hatchery::from_store_with_gen(
+            PlayerStore::with_dir(&dir),
+            std::time::SystemTime::now(),
+            fake_asset_gen(calls),
+            Ok(present_model_config()),
+            text_gen_factory_yielding(WELL_FORMED_PARTS),
+        );
+        scene.enter_edit(1);
+
+        scene.begin_definition(sentence.clone());
+        pump(&mut scene, 200, |s| matches!(s.eggs[1].state, EggState::Incubating { .. }));
+
+        assert_eq!(scene.eggs[0].state, EggState::Undefined, "the egg not under edit must stay Undefined");
+        assert_eq!(
+            scene.eggs[1].mad_lib,
+            Some(sentence),
+            "the edited egg (index 1) must receive the completed sentence, not egg 0"
+        );
+        assert!(
+            matches!(scene.eggs[1].state, EggState::Incubating { .. }),
+            "the edited egg (index 1) must incubate, got {:?}",
+            scene.eggs[1].state
+        );
     }
 
     /// A text-generation failure surfaces an error and leaves the egg
@@ -670,7 +712,7 @@ ARCHETYPE: Ranged\n";
             Ok(present_model_config()),
             text_gen_factory_yielding(WELL_FORMED_PARTS),
         );
-        scene.open_define_modal(0);
+        scene.enter_edit(0);
 
         scene.begin_definition(sentence);
         pump(&mut scene, 400, |s| matches!(s.eggs[0].state, EggState::Incubating { .. }) && s.definition.is_none());
@@ -705,7 +747,7 @@ ARCHETYPE: Ranged\n";
             Ok(present_model_config()),
             text_gen_factory_yielding(WELL_FORMED_PARTS),
         );
-        scene.open_define_modal(0);
+        scene.enter_edit(0);
 
         scene.begin_definition(sentence);
         pump(&mut scene, 400, |s| s.eggs[0].egg_art.is_some());

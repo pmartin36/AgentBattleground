@@ -84,7 +84,7 @@ fn capturing_factory(captured: Arc<Mutex<Option<LocalInvocation>>>) -> super::Te
 
 /// Constructs a hermetic `Hatchery` with one `Undefined` egg, the
 /// registry-resolved default Local config, and a capturing `TextGenFactory`,
-/// then opens its define modal for egg 0.
+/// then enters edit mode for egg 0.
 fn scene_with_local_registry_config(tag: &str) -> (super::Hatchery, Arc<Mutex<Option<LocalInvocation>>>) {
     let dir = temp_store_dir(tag);
     let seed = PlayerData { roster: Vec::new(), eggs: vec![undefined_egg()] };
@@ -98,7 +98,7 @@ fn scene_with_local_registry_config(tag: &str) -> (super::Hatchery, Arc<Mutex<Op
         Result::<ResolvedModelConfig, ConfigError>::Ok(local_registry_config()),
         capturing_factory(captured.clone()),
     );
-    scene.open_define_modal(0);
+    scene.enter_edit(0);
     (scene, captured)
 }
 

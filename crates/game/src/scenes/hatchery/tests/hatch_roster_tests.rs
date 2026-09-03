@@ -293,7 +293,7 @@ fn discard_does_not_add_retires_egg_returns_to_tray() {
 
     assert!(scene.hatch.is_none(), "hatch sub-mode must end once discarded");
     assert!(scene.roster_action.is_none(), "the post-hatch action must clear on discard");
-    assert!(scene.focused.is_none(), "focus must clear on discard");
+    assert!(scene.selected.is_none(), "selection must clear on discard");
     assert!(scene.eggs.is_empty(), "the discarded egg must be retired from the tray");
 
     let reloaded = PlayerStore::with_dir(&dir).load(|| panic!("must not fall back to seed")).into_data();

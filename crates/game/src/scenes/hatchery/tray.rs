@@ -8,10 +8,13 @@
 
 use std::time::Duration;
 
+use engine_core::color::Rgba;
 use image::DynamicImage;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
+use engine_render::composite::{composite_dots, DotPlacement};
+use engine_render::dots::{Dot, DotBuffer};
 use engine_render::DotRect;
 
 use crate::player_data::{Egg, EggState};
@@ -73,14 +76,31 @@ pub(crate) fn tray_slots(area: Rect, count: usize) -> Vec<DotRect> {
         .collect()
 }
 
+/// Builds the raw egg-dots for a `w`×`h` render: `Undefined` always the
+/// bundled `EGG_UNKNOWN` sprite untinted (so its bright-yellow `?` survives
+/// per-cell color averaging); `Incubating`/`Ready` render `art` resized to
+/// the target and multiply-tinted by the egg's element color, falling back
+/// to an untinted `EGG_UNKNOWN` placeholder when `art` is `None`. The sole
+/// owner of egg-sprite construction, shared by [`draw_egg`] and
+/// [`draw_egg_with_highlight`] so neither re-derives the sprite/tint logic.
+fn egg_dots(egg: &Egg, w: u32, h: u32, art: Option<&DynamicImage>) -> DotBuffer {
+    match egg.state {
+        EggState::Undefined => engine_render::asset_cache::sprite_to_dots(crate::assets::EGG_UNKNOWN, w, h),
+        EggState::Incubating { .. } | EggState::Ready => match art {
+            Some(img) => {
+                let raw = engine_render::dots::sprite_to_dots(img, w, h);
+                engine_render::dots::tint(&raw, crate::scenes::palette::element_color(egg.element))
+            }
+            None => engine_render::asset_cache::sprite_to_dots(crate::assets::EGG_UNKNOWN, w, h),
+        },
+    }
+}
+
 /// Draws one egg into `target`. `art` is the egg's pre-decoded `egg_art`
-/// (`None` if the egg has none, or it failed to decode). `Undefined` always
-/// renders the bundled `EGG_UNKNOWN` sprite untinted (so its bright-yellow
-/// `?` survives per-cell color averaging); `Incubating`/`Ready` render `art`
-/// resized to the slot and multiply-tinted by the egg's element color,
-/// falling back to an untinted `EGG_UNKNOWN` placeholder when `art` is
-/// `None`. `Ready` eggs additionally bob vertically by
-/// [`wiggle_offset_y`] of `elapsed`; every other state is stationary.
+/// (`None` if the egg has none, or it failed to decode). See [`egg_dots`]
+/// for the per-state sprite/tint rules. `Ready` eggs additionally bob
+/// vertically by [`wiggle_offset_y`] of `elapsed`; every other state is
+/// stationary.
 pub(crate) fn draw_egg(
     buf: &mut Buffer,
     target: DotRect,
@@ -93,22 +113,84 @@ pub(crate) fn draw_egg(
         return;
     }
 
-    let dots = match egg.state {
-        EggState::Undefined => engine_render::asset_cache::sprite_to_dots(crate::assets::EGG_UNKNOWN, w, h),
-        EggState::Incubating { .. } | EggState::Ready => match art {
-            Some(img) => {
-                let raw = engine_render::dots::sprite_to_dots(img, w, h);
-                engine_render::dots::tint(&raw, crate::scenes::palette::element_color(egg.element))
-            }
-            None => engine_render::asset_cache::sprite_to_dots(crate::assets::EGG_UNKNOWN, w, h),
-        },
-    };
+    let dots = egg_dots(egg, w, h, art);
 
     let dy = if matches!(egg.state, EggState::Ready) { wiggle_offset_y(elapsed) } else { 0 };
     let placed = DotRect { x: target.x, y: target.y + dy, w: target.w, h: target.h };
     crate::scenes::post_battle::columns::blit_dots(buf, placed, &dots);
 }
 
+
+/// Visual treatment for a tray egg slot. `Idle` is the plain render;
+/// `Hovered`/`Selected` must each decode to a treatment distinguishable from
+/// `Idle` and from each other — see `draw_egg_with_highlight`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TrayHighlight {
+    Idle,
+    Hovered,
+    Selected,
+}
+
+/// Dot margin the highlight ring is outset beyond the egg's own rect.
+const HILITE_MARGIN_DOTS: i32 = 3;
+/// Chamfer radius of the highlight ring's corners, in dots.
+const HILITE_RADIUS: usize = 2;
+
+/// The ring color + thickness for `hl`. The ONE source of ring
+/// color/thickness; `Idle` never reaches here (see
+/// [`draw_egg_with_highlight`]'s early return).
+fn highlight_style(hl: TrayHighlight) -> (Rgba, usize) {
+    match hl {
+        TrayHighlight::Idle => (Rgba::rgb(0, 0, 0), 0),
+        TrayHighlight::Hovered => (Rgba::rgb(0xC8, 0xD0, 0xE0), 1),
+        TrayHighlight::Selected => (Rgba::rgb(0xFF, 0xC8, 0x40), 2),
+    }
+}
+
+/// Draws one tray egg with `hl`'s highlight treatment through the braille
+/// dot pipeline. `Idle` renders identically to [`draw_egg`]; `Hovered` and
+/// `Selected` each rasterize a [`highlight_style`]-colored ring
+/// ([`engine_render::rounded_rect`]) outset by [`HILITE_MARGIN_DOTS`],
+/// composite it under the egg's own dots into one buffer (the
+/// `post_battle/glow.rs` ring-under-content pattern, so ring and egg survive
+/// in any braille cell they share), and blit that single buffer once.
+/// Highlighted eggs do not bob — the ring marks position, and compositing
+/// against a moving egg would complicate the ring math for no visible gain.
+pub(crate) fn draw_egg_with_highlight(
+    buf: &mut Buffer,
+    target: DotRect,
+    egg: &Egg,
+    art: Option<&DynamicImage>,
+    elapsed: Duration,
+    hl: TrayHighlight,
+) {
+    if hl == TrayHighlight::Idle {
+        draw_egg(buf, target, egg, art, elapsed);
+        return;
+    }
+
+    let (w, h) = (target.w.max(0) as u32, target.h.max(0) as u32);
+    if w == 0 || h == 0 {
+        return;
+    }
+
+    let egg_buf = egg_dots(egg, w, h, art);
+    let m = HILITE_MARGIN_DOTS;
+    let (color, thickness) = highlight_style(hl);
+    let ring_w = (w as i32 + 2 * m).max(0) as usize;
+    let ring_h = (h as i32 + 2 * m).max(0) as usize;
+    let ring_buf = engine_render::rounded_rect(ring_w, ring_h, thickness, HILITE_RADIUS, color, Dot::Transparent);
+    let combined = composite_dots(
+        ring_w,
+        ring_h,
+        &[
+            DotPlacement { dots: &ring_buf, dot_x: 0, dot_y: 0, depth: 0 },
+            DotPlacement { dots: &egg_buf, dot_x: m, dot_y: m, depth: 1 },
+        ],
+    );
+    let outer = target.inset(-m, -m, -m, -m);
+    crate::scenes::post_battle::columns::blit_dots(buf, outer, &combined);
+}
 
 /// Vertical dot offset of a `Ready` egg's idle bob at `elapsed`:
 /// `round(WIGGLE_AMP_DOTS * sin(TAU * elapsed / WIGGLE_PERIOD))`. Zero at
@@ -274,4 +356,42 @@ mod tests {
         assert_eq!(incubating_a, incubating_b, "an Incubating egg's render must be stationary across elapsed");
     }
 
+    /// Renders `egg` with `hl` into a fresh buffer and serializes it, for
+    /// comparing highlight treatments dot-for-dot.
+    fn render_highlight(hl: TrayHighlight) -> String {
+        let mut buf = Buffer::empty(SLOT);
+        draw_egg_with_highlight(&mut buf, slot_dot_rect(), &incubating_egg(Element::Fire), None, Duration::ZERO, hl);
+        crate::scenes::test_util::serialize_braille_buffer(&buf)
+    }
+
+    /// A hovered tray egg must decode differently from an idle one.
+    #[test]
+    fn hovered_highlight_renders_differently_from_idle() {
+        assert_ne!(
+            render_highlight(TrayHighlight::Idle),
+            render_highlight(TrayHighlight::Hovered),
+            "a hovered tray egg must render differently from an idle one"
+        );
+    }
+
+    /// A selected tray egg must decode differently from an idle one.
+    #[test]
+    fn selected_highlight_renders_differently_from_idle() {
+        assert_ne!(
+            render_highlight(TrayHighlight::Idle),
+            render_highlight(TrayHighlight::Selected),
+            "a selected tray egg must render differently from an idle one"
+        );
+    }
+
+    /// Hovered and selected must decode differently from each other, so a
+    /// player can tell the two apart on the same tray.
+    #[test]
+    fn hovered_and_selected_highlights_render_differently_from_each_other() {
+        assert_ne!(
+            render_highlight(TrayHighlight::Hovered),
+            render_highlight(TrayHighlight::Selected),
+            "hovered and selected must render differently from each other"
+        );
+    }
 }
