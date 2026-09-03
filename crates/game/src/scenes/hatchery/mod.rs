@@ -3,6 +3,7 @@
 //! with a hover/selected/idle highlight, and a large selected-egg view above
 //! the tray (via `detail_layout`) that shows an `Incubating` egg's countdown.
 
+mod detail;
 mod detail_layout;
 mod edit;
 mod focus;
@@ -451,6 +452,8 @@ impl Scene for Hatchery {
             if let Some(editing) = self.editing_egg() {
                 self.draw_editing_paragraph(frame.buffer_mut(), body, editing);
                 self.draw_submit_button(frame.buffer_mut(), body);
+            } else if self.eggs[f].mad_lib.is_some() {
+                self.draw_defined_detail(frame.buffer_mut(), egg_dr, body, f);
             }
         }
 
@@ -809,4 +812,8 @@ mod tests {
     // `tests/edit_tests.rs`, kept out of this file for the same reason as
     // hatch_sequence_tests.
     mod edit_tests;
+    // Read-only defined-egg detail rendering + Ready-hatch activation tests
+    // live in `tests/detail_tests.rs`, kept out of this file for the same
+    // reason as hatch_sequence_tests.
+    mod detail_tests;
 }
