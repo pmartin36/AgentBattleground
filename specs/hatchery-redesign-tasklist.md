@@ -12,7 +12,7 @@ Tracking the roster-style hatchery rework and its shared-primitive prerequisites
 - [x] **78 — shared stat-bar rendering.** Shared `scenes/stat_bar` module (`draw_stat_bars` + `draw_dot_cap_box` + opacity fade); roster's `render_stat_bars` delegates, cap box moved out of roster, 21 stat-bar tests pass unchanged.
 
 ## Checkpoint
-- [ ] **Verify the roster is unchanged in-game** after the three migrations, before building on top. (Awaiting owner check: border, ability tooltip, stat bars.)
+- [x] **Verify the roster is unchanged in-game** after the three migrations. Owner checked border, ability tooltip, and stat bars: looks good.
 
 ## Hatchery
 - [ ] **79 — roster-style layout.** Egg left, STATUS/DESCRIPTION/button panel right, egg dock bottom (ring-on-hover, click-to-open). Hatch hand-off: egg to center, panel off, cede to `68`/`72`, stat bars fade in via `78` as the dock settles. Empty dock keeps the last-hatched creature shown.
