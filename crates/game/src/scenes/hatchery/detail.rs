@@ -12,6 +12,7 @@ use engine_render::DotRect;
 
 use crate::player_data::EggState;
 
+use super::focus;
 use super::mad_lib_paragraph::{self, ParaRun};
 
 impl super::Hatchery {
@@ -21,9 +22,7 @@ impl super::Hatchery {
         let Some(sentence) = self.eggs[egg].mad_lib.as_deref() else { return };
 
         let prose = if matches!(self.eggs[egg].state, EggState::Incubating { .. }) {
-            let cell = egg_dr.to_cell_rect();
-            let countdown_row = (cell.y + cell.height).min(buf.area.height.saturating_sub(1));
-            let y = body.y.max(countdown_row + 1);
+            let y = body.y.max(focus::countdown_row(egg_dr, buf) + 1);
             Rect { x: body.x, y, width: body.width, height: body.height.saturating_sub(y - body.y) }
         } else {
             body

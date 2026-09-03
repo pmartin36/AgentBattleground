@@ -26,6 +26,32 @@ fn one_egg_scene() -> Hatchery {
     Hatchery::from_store_at(PlayerStore::with_dir(&dir), now)
 }
 
+/// A single `Undefined` egg, unselected — the fresh-player starter-egg
+/// shape.
+fn undefined_egg_scene() -> Hatchery {
+    let dir = temp_store_dir("browse-undefined-egg");
+    let now = SystemTime::now();
+    let seed = PlayerData { roster: Vec::new(), eggs: vec![undefined_egg()] };
+    PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
+    Hatchery::from_store_at(PlayerStore::with_dir(&dir), now)
+}
+
+/// A single `Ready` egg, unselected.
+fn ready_egg_scene() -> Hatchery {
+    let dir = temp_store_dir("browse-ready-egg");
+    let now = SystemTime::now();
+    let egg = Egg {
+        element: crate::ability::Element::Fire,
+        state: EggState::Ready,
+        mad_lib: None,
+        egg_art: None,
+        hatchling: None,
+    };
+    let seed = PlayerData { roster: Vec::new(), eggs: vec![egg] };
+    PlayerStore::with_dir(&dir).save(&seed).expect("seed save should succeed");
+    Hatchery::from_store_at(PlayerStore::with_dir(&dir), now)
+}
+
 /// Opening the hatchery with no prior selection auto-selects the first egg.
 #[test]
 fn enter_auto_selects_first_egg_when_none_selected() {
@@ -50,6 +76,80 @@ fn single_egg_hover_and_selection_both_resolve_to_it() {
         matches!(scene.mode, HatcheryMode::Browsing { hover: 0 }),
         "the only egg must also be the hover target, got {:?}",
         scene.mode
+    );
+}
+
+/// Opening the hatchery with a single `Undefined` egg (the fresh-player
+/// starter shape) lands directly in edit mode for it: a selected but
+/// undefined egg's blanks must be editable, not blank.
+#[test]
+fn enter_on_undefined_egg_enters_edit_mode() {
+    let mut scene = undefined_egg_scene();
+
+    scene.enter(&mut EngineCtx, None);
+
+    assert_eq!(scene.selected, Some(0), "opening on an undefined egg must select it");
+    assert!(
+        matches!(scene.mode, HatcheryMode::Editing { active_blank: 0 }),
+        "opening on an undefined egg must enter edit mode, got {:?}",
+        scene.mode
+    );
+    assert!(
+        !scene.blank_editors.is_empty(),
+        "entering edit mode on open must build the blank editors"
+    );
+}
+
+/// The editable body painted by opening on an undefined egg is actually
+/// rendered into the reserved detail region, not left empty.
+#[test]
+fn enter_on_undefined_egg_renders_editable_body() {
+    let mut scene = undefined_egg_scene();
+
+    scene.enter(&mut EngineCtx, None);
+
+    let (w, h) = (60u16, 24u16);
+    let buf = render_to_buffer(&scene, w, h);
+    let area = Rect::new(0, 0, w, h);
+    let (_egg, body, _tray) = detail_layout::detail_layout(area);
+
+    let underline = mad_lib_paragraph::UNDERLINE_COLOR;
+    let mut found = false;
+    'scan: for y in body.top()..body.bottom() {
+        for x in body.left()..body.right() {
+            if let Some((mask, color)) = engine_render::decode_braille_cell(&buf, x, y) {
+                if mask != 0 && color.r == underline.r && color.g == underline.g && color.b == underline.b {
+                    found = true;
+                    break 'scan;
+                }
+            }
+        }
+    }
+    assert!(
+        found,
+        "opening on an undefined egg must paint its mad-lib's blank underline \
+         (exact color {underline:?}) into the detail body region"
+    );
+}
+
+/// Opening on a `Ready` egg selects it for the large read-only view but
+/// must never launch a hatch by itself — auto-open is not a tap.
+#[test]
+fn enter_on_ready_egg_selects_without_hatching() {
+    let mut scene = ready_egg_scene();
+
+    scene.enter(&mut EngineCtx, None);
+
+    assert_eq!(scene.selected, Some(0), "opening on a ready egg must still select it");
+    assert!(
+        matches!(scene.mode, HatcheryMode::Browsing { hover: 0 }),
+        "opening on a ready egg must stay in Browsing, got {:?}",
+        scene.mode
+    );
+    assert_eq!(
+        scene.take_hatch_request(),
+        None,
+        "opening the hatchery must never itself launch a hatch"
     );
 }
 

@@ -53,16 +53,20 @@ pub(crate) fn format_remaining(d: Duration) -> String {
     format!("{:02}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
 }
 
+/// The floored terminal-cell row the incubation countdown occupies: the row
+/// directly below `egg_dr`, clamped to the last row of `buf`. Both the
+/// countdown draw and the read-only detail prose inset key off this so the
+/// prose never collides with the countdown row.
+pub(crate) fn countdown_row(egg_dr: DotRect, buf: &Buffer) -> u16 {
+    let cell = egg_dr.to_cell_rect();
+    (cell.y + cell.height).min(buf.area.height.saturating_sub(1))
+}
+
 /// Draws the `HH:MM:SS` readout centered in a 1-cell row just below the
 /// focused egg. Text, exempt from the braille dot pipeline.
 pub(crate) fn draw_countdown(buf: &mut Buffer, focus: DotRect, remaining: Duration) {
     let cr = focus.to_cell_rect();
-    let row = Rect {
-        x: cr.x,
-        y: (cr.y + cr.height).min(buf.area.height.saturating_sub(1)),
-        width: cr.width,
-        height: 1,
-    };
+    let row = Rect { x: cr.x, y: countdown_row(focus, buf), width: cr.width, height: 1 };
     engine_render::label(
         buf,
         row,
@@ -112,5 +116,24 @@ mod tests {
             focus_cells.y + focus_cells.height <= strip.y,
             "focus rect {focus_cells:?} must not overlap the tray strip {strip:?}"
         );
+    }
+
+    /// For an egg rect well inside the buffer, the countdown row is exactly
+    /// the row directly below the egg's floored cell rect (no clamp engaged).
+    #[test]
+    fn countdown_row_is_directly_below_the_egg_rect() {
+        let buf = Buffer::empty(Rect::new(0, 0, 40, 20));
+        let egg_dr = DotRect { x: 0, y: 0, w: 16, h: 16 };
+        assert_eq!(countdown_row(egg_dr, &buf), 4);
+    }
+
+    /// When the egg rect's bottom edge sits at or past the buffer's last
+    /// row, the countdown row clamps to that last row rather than running
+    /// off the buffer.
+    #[test]
+    fn countdown_row_clamps_to_the_buffers_last_row() {
+        let buf = Buffer::empty(Rect::new(0, 0, 40, 10));
+        let egg_dr = DotRect { x: 0, y: 32, w: 16, h: 16 };
+        assert_eq!(countdown_row(egg_dr, &buf), 9);
     }
 }

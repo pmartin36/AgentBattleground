@@ -399,7 +399,11 @@ impl Scene for Hatchery {
 
     fn enter(&mut self, _ctx: &mut EngineCtx, _params: Option<JsonValue>) {
         if self.selected.is_none() && !self.eggs.is_empty() {
-            self.select(0);
+            match self.eggs[0].state {
+                crate::player_data::EggState::Undefined => self.enter_edit(0),
+                crate::player_data::EggState::Incubating { .. }
+                | crate::player_data::EggState::Ready => self.select(0),
+            }
         }
     }
 
