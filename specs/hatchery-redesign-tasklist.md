@@ -9,10 +9,10 @@ Tracking the roster-style hatchery rework and its shared-primitive prerequisites
 ## Foundational builds (independent of each other; all block `79`)
 - [x] **76 — engine sub-cell dot placement + `draw_dot_border`.** Added `draw_dots_at` + `draw_dot_border` to the engine, migrated the roster border onto them, `draw_dot_box` deleted. Roster border tests pass unchanged (byte-identical); added direct sub-cell precision tests.
 - [x] **77 — tooltip primitive.** Shared `scenes/tooltip` module (`layout`/`draw_frame`/`render_text`); roster ability tooltip migrated onto it, local `shell.rs` gone, all 40 tooltip tests pass unchanged.
-- [ ] **78 — shared stat-bar rendering.** Hoist roster's `stat_bar` + `draw_dot_cap_box` to a shared, stats-driven module; migrate roster.
+- [x] **78 — shared stat-bar rendering.** Shared `scenes/stat_bar` module (`draw_stat_bars` + `draw_dot_cap_box` + opacity fade); roster's `render_stat_bars` delegates, cap box moved out of roster, 21 stat-bar tests pass unchanged.
 
 ## Checkpoint
-- [ ] **Verify the roster is unchanged in-game** after the three migrations, before building on top.
+- [ ] **Verify the roster is unchanged in-game** after the three migrations, before building on top. (Awaiting owner check: border, ability tooltip, stat bars.)
 
 ## Hatchery
 - [ ] **79 — roster-style layout.** Egg left, STATUS/DESCRIPTION/button panel right, egg dock bottom (ring-on-hover, click-to-open). Hatch hand-off: egg to center, panel off, cede to `68`/`72`, stat bars fade in via `78` as the dock settles. Empty dock keeps the last-hatched creature shown.
