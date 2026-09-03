@@ -3,6 +3,8 @@
 # Hatch Reveal & Roster Placement
 
 > **Status: done.** Redesigns the hatch reveal and post-hatch placement into the roster detail screen's layout, with a choreographed reveal and full-generation gating. Supersedes the reveal effects, stats panel, and add-to-roster of `68-hatchery-hatch-sequence`; `68` keeps the wiggle/crack/break sequence, the clip-generation timing, and the dev hotkeys.
+>
+> **Superseded in part by `79-hatchery-roster-style-layout`:** the settled hatched view gains the creature's four stat bars (via `78`'s shared stat-bar renderer), fading in as the stats dock slides in. The reveal sequence, the stamina/abilities dock, and Keep/Discard below are unchanged.
 
 ## Purpose
 The hatch's payoff resolves into the same layout the player already knows from the roster: creature on the left, a stats/attack dock on the right, mirroring `48-roster-detail-panel-redesign`. And no hatch, on any path, may show a half-generated creature: every path, including the dev force-hatch, waits until the creature is fully generated.
