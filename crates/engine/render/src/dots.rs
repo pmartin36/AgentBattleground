@@ -1014,4 +1014,53 @@ mod tests {
             "draw_dots must equal draw_grid(dots_to_grid(..)) byte-for-byte"
         );
     }
+
+    /// `draw_dots_at` honors a sub-cell vertical offset instead of flooring it
+    /// to the nearest cell: the SAME 2×2 lit buffer drawn at dot-y 0 and at
+    /// dot-y 2 (both flooring to cell-row 0) must produce DIFFERENT braille in
+    /// that shared cell — the lit dots sit in the top dot-rows for y=0 and the
+    /// lower dot-rows for y=2. The floored `draw_dots` path would collapse both
+    /// to the same glyph; this is the precision `draw_dots_at` exists to
+    /// preserve (CLAUDE.md rule 5).
+    #[test]
+    fn draw_dots_at_preserves_sub_cell_y_offset() {
+        let mut dots = DotBuffer::new(2, 2);
+        for row in 0..2 {
+            for col in 0..2 {
+                dots.set(col, row, Dot::Lit(Rgba::rgb(255, 255, 255)));
+            }
+        }
+        let area = Rect::new(0, 0, 1, 1);
+
+        let mut at_top = Buffer::empty(area);
+        draw_dots_at(&mut at_top, DotRect { x: 0, y: 0, w: 2, h: 2 }, &dots);
+
+        let mut at_mid = Buffer::empty(area);
+        draw_dots_at(&mut at_mid, DotRect { x: 0, y: 2, w: 2, h: 2 }, &dots);
+
+        let (top_mask, _) = crate::decode_braille_cell(&at_top, 0, 0)
+            .expect("y=0 draw must light dots in cell (0,0)");
+        let (mid_mask, _) = crate::decode_braille_cell(&at_mid, 0, 0)
+            .expect("y=2 draw must light dots in the SAME cell (0,0), not floor away");
+
+        assert_ne!(
+            top_mask, mid_mask,
+            "a 2-dot (half-cell) vertical shift must change the lit dots within the shared cell \
+             (masks top={top_mask:#04x} mid={mid_mask:#04x}); equal masks mean the offset was floored"
+        );
+    }
+
+    /// A degenerate `dot_rect` (non-positive width or height) is a no-op, not a
+    /// panic, and leaves the buffer untouched.
+    #[test]
+    fn draw_dots_at_zero_size_is_noop() {
+        let mut dots = DotBuffer::new(2, 2);
+        dots.set(0, 0, Dot::Lit(Rgba::rgb(255, 255, 255)));
+        let area = Rect::new(0, 0, 2, 2);
+
+        let mut buf = Buffer::empty(area);
+        let before = buf.clone();
+        draw_dots_at(&mut buf, DotRect { x: 0, y: 0, w: 0, h: 2 }, &dots);
+        assert_eq!(buf, before, "zero-width dot_rect must leave the buffer unchanged");
+    }
 }
