@@ -3,6 +3,8 @@
 # Hatchery — Shell & Egg Lifecycle
 
 > **Status: done.** The Hatchery container and the egg state machine: the entry point from the Roster Manager, the egg tray, the three egg states and the incubation timer, and the tap-to-focus interaction. The former single Hatchery spec is split into three: this shell/lifecycle spec, `67-hatchery-definition-generation` (the mad-lib definition and creature generation), and `68-hatchery-hatch-sequence` (the animated hatch and add-to-roster).
+>
+> **Superseded in part by `75-hatchery-inline-define-and-selection`:** the tap-to-focus interaction and centered focus view are replaced there by a browse/edit two-tier model over an inline master-detail surface (a hover highlight moves across the tray, Enter/click selects, the selected egg shows large). The egg tray, the three states, and the incubation timer remain current.
 
 ## Purpose
 The frame every other hatchery piece plugs into: reach the Hatchery from the roster, see every owned egg, move an egg between the tray and a centered focus view, and carry each egg through its lifecycle from undefined to ready-to-hatch. What happens when an undefined egg is tapped is `67`; what happens when a ready egg is tapped is `68`.
