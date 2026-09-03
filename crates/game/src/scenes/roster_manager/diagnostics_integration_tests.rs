@@ -637,7 +637,11 @@ fn hovering_editor_badge_shows_clamped_card() {
     let mid_dot_row = layout.card.y + layout.card.h / 2;
     assert_eq!(
         lit_dot_color(&buf, 0, mid_dot_row).map(|c| (c.r, c.g, c.b)),
-        Some((super::tooltip::CARD_BORDER_COLOR.r, super::tooltip::CARD_BORDER_COLOR.g, super::tooltip::CARD_BORDER_COLOR.b)),
+        Some((
+            crate::scenes::tooltip::CARD_BORDER_COLOR.r,
+            crate::scenes::tooltip::CARD_BORDER_COLOR.g,
+            crate::scenes::tooltip::CARD_BORDER_COLOR.b,
+        )),
         "the card's left border must decode as lit at dot col 0 — clamped, not merely comparing rect fields"
     );
 

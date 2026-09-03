@@ -12,11 +12,12 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Style};
 
-use super::tooltip::shell::{draw_shell_frame, layout_shell, ShellLayout, ShellRow};
+use super::tooltip::TOOLTIP_WIDTH_CELLS;
 use super::tooltip::CARD_TEXT_COLOR;
 use super::RosterManager;
 use crate::diagnostics::Diagnostic;
 use crate::mention::Vocabulary;
+use crate::scenes::tooltip::{self, CardLayout, RowSpec};
 use engine_core::color::Rgba;
 use engine_render::{label, wrapped_text, Decoration, DotRect, TextAlign, TextEditor};
 
@@ -109,16 +110,16 @@ pub(super) fn count_header(count: usize) -> String {
     format!("{count} issue{}", if count == 1 { "" } else { "s" })
 }
 
-/// Pure row plan + geometry, delegated whole to `shell::layout_shell`.
+/// Pure row plan + geometry, delegated whole to `tooltip::layout`.
 /// `rows[0]` is the count header; `rows[1..]` is one rect per diagnostic, in
 /// `diagnostics` order. Total: `diagnostics.len() + 1`.
-pub(super) fn layout_warning_card(anchor: DotRect, diagnostics: &[Diagnostic]) -> ShellLayout {
+pub(super) fn layout_warning_card(anchor: DotRect, diagnostics: &[Diagnostic]) -> CardLayout {
     let mut rows = Vec::with_capacity(diagnostics.len() + 1);
-    rows.push(ShellRow { height_cells: HEADER_HEIGHT_CELLS, gap_above_cells: 0 });
+    rows.push(RowSpec { height_cells: HEADER_HEIGHT_CELLS, gap_above_cells: 0 });
     for _ in diagnostics {
-        rows.push(ShellRow { height_cells: ENTRY_MAX_LINES, gap_above_cells: ENTRY_GAP_CELLS });
+        rows.push(RowSpec { height_cells: ENTRY_MAX_LINES, gap_above_cells: ENTRY_GAP_CELLS });
     }
-    layout_shell(anchor, &rows)
+    tooltip::layout(anchor, &rows, TOOLTIP_WIDTH_CELLS)
 }
 
 /// Draws the frame + count header + one wrapped entry per diagnostic. Draws
@@ -129,7 +130,7 @@ pub(super) fn render_warning_card(buf: &mut Buffer, anchor: DotRect, diagnostics
         return;
     }
     let layout = layout_warning_card(anchor, diagnostics);
-    if !draw_shell_frame(buf, layout.card) {
+    if !tooltip::draw_frame(buf, layout.card) {
         return;
     }
     label(

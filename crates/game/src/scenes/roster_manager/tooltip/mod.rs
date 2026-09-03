@@ -2,14 +2,15 @@
 //! ([`layout_tooltip`]/[`present_rows`]) and the overlay render
 //! ([`render_tooltip`] + the per-row fillers), and pulls the pill capsule
 //! ([`pills`]), its color palette ([`palette`]), and the card chrome
-//! ([`shell`]: anchor math, edge clamping, frame) from sibling submodules.
+//! (`crate::scenes::tooltip`: anchor math, edge clamping, frame) from
+//! sibling/shared modules.
 #![allow(dead_code)]
 
 mod palette;
 mod pills;
-pub(super) mod shell;
 
 use crate::ability::{Ability, StatusKind};
+use crate::scenes::tooltip::{self, RowSpec};
 use engine_core::color::Rgba;
 use engine_render::{flex, label, wrapped_text, Align, Basis, Direction, DotRect, FlexChild, FlexStyle, Justify, TextAlign};
 use ratatui::buffer::Buffer;
@@ -18,7 +19,6 @@ use ratatui::style::{Color, Style};
 
 use palette::{ability_type_color, class_color, element_color};
 use pills::{pill, pill_width_dots, INTER_PILL_GAP_CELLS, PILL_HEIGHT_CELLS};
-use shell::{draw_shell_frame, layout_shell, ShellRow};
 
 /// Tooltip card width (spec:26). Placeholder — tunable. Wide enough that the
 /// full three-pill row (ability_type/element/class, each padded
@@ -27,31 +27,13 @@ use shell::{draw_shell_frame, layout_shell, ShellRow};
 /// its text width, leaving no un-overwritten margin for the tinted capsule
 /// to show through.
 pub(super) const TOOLTIP_WIDTH_CELLS: u16 = 36;
-/// Interior vertical (top/bottom) `.inset` padding applied to the card's
-/// content area (spec:26).
-pub(super) const INTERIOR_PADDING_CELLS: u16 = 1;
-/// Interior horizontal (left/right) padding — 2 cells so there's a blank
-/// margin cell between the card frame and every content row (1 cell clears the
-/// frame, the second is the visible margin).
-pub(super) const INTERIOR_PADDING_H_CELLS: u16 = 2;
 
 /// Max flavor-text lines the card reserves (spec:33 clips flavor to 2 rows).
 pub(super) const FLAVOR_MAX_LINES: u16 = 2;
 /// Spacer height (cells) inserted only before a present Flavor row, and only
 /// when at least one row precedes it.
 pub(super) const PRE_FLAVOR_GAP_CELLS: u16 = 1;
-/// Whole-cell gap the card is anchored off the hovered ability cell's
-/// top-left corner (card's bottom-right sits `ANCHOR_GAP_CELLS` cells
-/// above-left, no clamp). 0 = the card sits right against the hover point.
-pub(super) const ANCHOR_GAP_CELLS: u16 = 0;
 
-/// Card frame border color — amber, matches the `BattleMenu` overlay.
-pub(super) const CARD_BORDER_COLOR: Rgba = Rgba::rgb(0xff, 0xbf, 0x00);
-/// Card frame border ring thickness (dots).
-pub(super) const CARD_BORDER_THICKNESS_DOTS: usize = 1;
-/// Card frame corner radius (dots) — chamfer 1, the house default (see the
-/// chamfer-1 style memory).
-pub(super) const CARD_CORNER_RADIUS_DOTS: usize = 1;
 /// Card body text color — legible fg over the `Occlude`-filled interior
 /// (matches `details_panel`'s white). Used for field *values*.
 pub(super) const CARD_TEXT_COLOR: Rgba = Rgba::rgb(0xff, 0xff, 0xff);
@@ -118,9 +100,9 @@ fn row_height_cells(row: TooltipRow, ability: &Ability) -> u16 {
 }
 
 /// Computes the tooltip card's outer `DotRect` (fixed width, content-driven
-/// height) and each present row's rect via [`shell::layout_shell`], anchored
-/// so the card's bottom-right corner sits `ANCHOR_GAP_CELLS` cells above-left
-/// of `hovered_cell`'s top-left corner, clamped to the screen origin. A
+/// height) and each present row's rect via [`tooltip::layout`], anchored so
+/// the card's bottom-right corner sits `ANCHOR_GAP_CELLS` cells above-left of
+/// `hovered_cell`'s top-left corner, clamped to the screen origin. A
 /// `gap_above_cells` of `PRE_FLAVOR_GAP_CELLS` is attached to Flavor when
 /// Flavor is present and at least one row precedes it; the gap never appears
 /// in the returned `rows`.
@@ -130,9 +112,9 @@ pub(super) fn layout_tooltip(ability: &Ability, hovered_cell: DotRect) -> Toolti
     // applies when at least one row precedes it.
     let pre_flavor_gap = rows.len() > 1 && matches!(rows.last(), Some(TooltipRow::Flavor));
 
-    let shell_rows: Vec<ShellRow> = rows
+    let row_specs: Vec<RowSpec> = rows
         .iter()
-        .map(|&row| ShellRow {
+        .map(|&row| RowSpec {
             height_cells: row_height_cells(row, ability),
             gap_above_cells: if pre_flavor_gap && row == TooltipRow::Flavor {
                 PRE_FLAVOR_GAP_CELLS
@@ -142,7 +124,7 @@ pub(super) fn layout_tooltip(ability: &Ability, hovered_cell: DotRect) -> Toolti
         })
         .collect();
 
-    let layout = layout_shell(hovered_cell, &shell_rows);
+    let layout = tooltip::layout(hovered_cell, &row_specs, TOOLTIP_WIDTH_CELLS);
 
     let rows_out = rows.into_iter().zip(layout.rows).collect();
 
@@ -155,7 +137,7 @@ pub(super) fn layout_tooltip(ability: &Ability, hovered_cell: DotRect) -> Toolti
 /// does not panic.
 pub(super) fn render_tooltip(buf: &mut Buffer, ability: &Ability, hovered_cell: DotRect) {
     let layout = layout_tooltip(ability, hovered_cell);
-    if !draw_shell_frame(buf, layout.card) {
+    if !tooltip::draw_frame(buf, layout.card) {
         return;
     }
 
@@ -379,6 +361,7 @@ mod tests {
     use super::*;
     use crate::ability::{AbilityType, DamageClass, Element, StatusKind};
     use crate::scenes::test_util::{lit_dot_color, rect_text};
+    use crate::scenes::tooltip::{ANCHOR_GAP_CELLS, INTERIOR_PADDING_CELLS};
     use ratatui::layout::Rect;
 
     // ------------------------------------------------ present_rows / layout

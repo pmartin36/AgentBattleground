@@ -20,6 +20,7 @@ pub(crate) mod detail_panel;
 pub(crate) mod home_button;
 pub(crate) mod palette;
 pub(crate) mod title_logo;
+pub(crate) mod tooltip;
 
 #[cfg(test)]
 mod test_util;

@@ -12,7 +12,8 @@ use super::diagnostics_ui::{
     badge_rect, count_header, decorations_for, draw_badge, layout_warning_card,
     render_warning_card, span_to_line_col, BADGE_TEXT, WARNING_COLOR,
 };
-use super::tooltip::{ANCHOR_GAP_CELLS, TOOLTIP_WIDTH_CELLS};
+use super::tooltip::TOOLTIP_WIDTH_CELLS;
+use crate::scenes::tooltip::ANCHOR_GAP_CELLS;
 use crate::diagnostics::{Diagnostic, DiagnosticKind};
 use crate::scenes::test_util::{has_non_space, rect_text, region_cells, sample_fg};
 use engine_render::{DotRect, Sizing, TextEditor, TextEditorConfig};
